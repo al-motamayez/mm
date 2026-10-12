@@ -105,6 +105,17 @@ create policy "Users read own account or admins read all"
   to authenticated
   using (id = auth.uid() or public.is_active_factory_admin());
 
+drop policy if exists "Users create own pending account" on public.users;
+create policy "Users create own pending account"
+  on public.users
+  for insert
+  to authenticated
+  with check (
+    id = auth.uid()
+    and role is null
+    and status = 'pending'
+  );
+
 drop policy if exists "Admins activate accounts" on public.users;
 create policy "Admins activate accounts"
   on public.users
@@ -115,6 +126,7 @@ create policy "Admins activate accounts"
 
 revoke all on public.users from anon, authenticated;
 grant select, update on public.users to authenticated;
+grant insert (id, name, username, role, status) on public.users to authenticated;
 revoke all on function public.is_active_factory_admin() from public, anon, authenticated;
 grant execute on function public.is_active_factory_admin() to authenticated;
 revoke all on function public.create_pending_factory_user() from public, anon, authenticated;

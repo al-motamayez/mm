@@ -95,6 +95,27 @@ async function findAccountById(id) {
   return data;
 }
 
+async function createPendingAccount(user, fullName, username) {
+  let account = await findAccountById(user.id);
+  if (!account) {
+    const { error } = await supabaseClient.from("users").insert({
+      id: user.id,
+      name: fullName,
+      username,
+      role: null,
+      status: "pending"
+    });
+    if (error && error.code !== "23505") throw error;
+    account = await findAccountById(user.id);
+  }
+
+  if (!account
+    || account.username.toLocaleLowerCase() !== username.toLocaleLowerCase()
+    || (account.status !== "pending" && account.role !== "pending")) {
+    throw new Error("لم يتم حفظ طلب الحساب كطلب معلق في users.");
+  }
+}
+
 async function loginEmailFor(identifier) {
   const normalized = identifier.trim();
   if (normalized.includes("@")) return normalized.toLocaleLowerCase();
@@ -157,22 +178,19 @@ signupForm.addEventListener("submit", async (event) => {
     if (error) throw error;
     if (!data.user) throw new Error("لم يُنشأ الحساب. حاول مرة أخرى.");
     if (!data.session) {
-      showMessage("أنشأ Supabase Auth الحساب لكنه ينتظر تأكيد البريد. لن يظهر الطلب في لوحة الإدارة إلا إذا كان trigger إنشاء الطلبات مثبتًا على جدول users؛ عطّل Confirm email لحسابات اسم المستخدم أو أكّد الحساب ثم تحقق من وجود صف pending.");
+      showMessage("أنشأ Supabase Auth الحساب لكنه لم يُصدر جلسة؛ لا يمكن للمتصفح إضافة صف آمن إلى users حتى يكتمل تأكيد الحساب. عطّل Confirm email لحسابات اسم المستخدم أو أتمّ التأكيد ثم سجّل الدخول.");
       return;
     }
-    let account;
     try {
-      account = await findAccountById(data.user.id);
+      await createPendingAccount(data.user, fullName, username);
     } catch (profileError) {
       const { error: signOutError } = await supabaseClient.auth.signOut();
       if (signOutError) throw signOutError;
-      console.error("تعذر التحقق من طلب الحساب في users بعد التسجيل.", profileError);
-      throw new Error("تعذر التحقق من حفظ طلب الحساب في users. تحقق من صلاحيات القراءة وtrigger إنشاء الطلبات.");
-    }
-    if (!account || (account.status !== "pending" && account.role !== "pending")) {
-      const { error: signOutError } = await supabaseClient.auth.signOut();
-      if (signOutError) throw signOutError;
-      throw new Error("أُنشئ حساب المصادقة لكن لم يُنشأ طلب pending في users. تحقق من تثبيت trigger create_pending_factory_user وربطه بجدول users.");
+      console.error("تعذر إنشاء صف الطلب المعلق في users بعد التسجيل.", profileError);
+      if (profileError.code === "42703" || profileError.code === "42501") {
+        throw new Error("مخطط users أو صلاحيات RLS لا تسمح بإضافة صف الطلب. شغّل تحديث supabase/schema.sql مع سياسة إدراج الحساب المعلق.");
+      }
+      throw new Error(`تعذر إضافة طلب الحساب إلى users: ${profileError.message}`);
     }
     const { error: signOutError } = await supabaseClient.auth.signOut();
     if (signOutError) throw signOutError;
