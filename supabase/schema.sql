@@ -37,6 +37,11 @@ create table if not exists public.users (
   constraint users_username_format check (username ~ '^[A-Za-z0-9._-]{3,30}$')
 );
 
+alter table public.users add column if not exists phone text;
+alter table public.users drop constraint if exists users_status_check;
+alter table public.users add constraint users_status_check
+  check (status in ('pending', 'active', 'suspended'));
+
 -- Move profiles that can be linked safely to an existing Supabase Auth user.
 -- Unmatched profiles remain in the private archive without their old password.
 do $$
@@ -118,6 +123,7 @@ as $$
 declare
   user_username text;
   user_name text;
+  user_phone text;
 begin
   user_username := coalesce(
     nullif(new.raw_user_meta_data ->> 'username', ''),
@@ -128,14 +134,15 @@ begin
     nullif(new.raw_user_meta_data ->> 'name', ''),
     user_username
   );
+  user_phone := nullif(trim(new.raw_user_meta_data ->> 'phone'), '');
 
   if lower(user_username) = 'zero0'
     and lower(new.email) <> 'zero0@accounts.al-motamayez.invalid' then
     raise exception 'This username is reserved.';
   end if;
 
-  insert into public.users (id, name, username, role, status)
-  values (new.id, user_name, user_username, null, 'pending');
+  insert into public.users (id, name, username, phone, role, status)
+  values (new.id, user_name, user_username, user_phone, null, 'pending');
   return new;
 end;
 $$;
@@ -186,12 +193,12 @@ create policy "Admins activate accounts"
   on public.users
   for update
   to authenticated
-  using (public.is_active_factory_admin())
-  with check (public.is_active_factory_admin());
+  using (public.is_active_factory_admin() and role is distinct from 'admin')
+  with check (public.is_active_factory_admin() and role is distinct from 'admin');
 
 revoke all on public.users from anon, authenticated;
 grant select, update on public.users to authenticated;
-grant insert (id, name, username, role, status) on public.users to authenticated;
+grant insert (id, name, username, phone, role, status) on public.users to authenticated;
 revoke all on function public.is_active_factory_admin() from public, anon, authenticated;
 grant execute on function public.is_active_factory_admin() to authenticated;
 revoke all on function public.create_pending_factory_user() from public, anon, authenticated;

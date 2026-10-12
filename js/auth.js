@@ -95,13 +95,14 @@ async function findAccountById(id) {
   return data;
 }
 
-async function createPendingAccount(user, fullName, username) {
+async function createPendingAccount(user, fullName, username, phone) {
   let account = await findAccountById(user.id);
   if (!account) {
     const { error } = await supabaseClient.from("users").insert({
       id: user.id,
       name: fullName,
       username,
+      phone,
       role: null,
       status: "pending"
     });
@@ -145,6 +146,13 @@ async function routeAuthenticatedUser(user) {
   const username = usernameForAuthUser(user);
   if (!username) throw new Error("تعذر تحديد اسم المستخدم لحساب المصادقة.");
   const account = await findAccountByUsername(username);
+  if (account?.status === "suspended") {
+    const { error: signOutError } = await supabaseClient.auth.signOut();
+    if (signOutError) throw signOutError;
+    showAuthMode("login");
+    showMessage("حسابك متوقف مؤقتًا بواسطة الإدارة. تواصل مع الأدمن لإعادة تفعيله.");
+    return;
+  }
   if (!account || account.status !== "active" || !roleDestinations[account.role]) {
     const { error: signOutError } = await supabaseClient.auth.signOut();
     if (signOutError) throw signOutError;
@@ -163,10 +171,11 @@ document.querySelectorAll("[data-auth-mode]").forEach((button) => {
 signupForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const fullName = signupForm.elements.fullName.value.trim();
+  const phone = signupForm.elements.phone.value.trim();
   const username = signupForm.elements.username.value.trim();
   const password = signupForm.elements.password.value;
-  if (!fullName || !/^[a-zA-Z0-9._-]{3,30}$/.test(username) || !password.trim() || password.length < 8) {
-    showMessage("أدخل الاسم، واسم مستخدم من 3 إلى 30 حرفًا (إنجليزي أو أرقام أو . _ -)، وكلمة مرور من 8 أحرف على الأقل.");
+  if (!phone || !fullName || !/^[a-zA-Z0-9._-]{3,30}$/.test(username) || !password.trim() || password.length < 8) {
+    showMessage("أدخل رقم التليفون والاسم، واسم مستخدم من 3 إلى 30 حرفًا (إنجليزي أو أرقام أو . _ -)، وكلمة مرور من 8 أحرف على الأقل.");
     return;
   }
   if (username.toLocaleLowerCase() === "zero0") {
@@ -180,7 +189,7 @@ signupForm.addEventListener("submit", async (event) => {
     let { data, error } = await supabaseClient.auth.signUp({
       email,
       password,
-      options: { data: { full_name: fullName, username } }
+      options: { data: { full_name: fullName, username, phone } }
     });
     if (error && isExistingAuthAccountError(error)) {
       const recovery = await supabaseClient.auth.signInWithPassword({ email, password });
@@ -197,7 +206,7 @@ signupForm.addEventListener("submit", async (event) => {
       return;
     }
     try {
-      await createPendingAccount(data.user, fullName, username);
+      await createPendingAccount(data.user, fullName, username, phone);
     } catch (profileError) {
       const { error: signOutError } = await supabaseClient.auth.signOut();
       if (signOutError) throw signOutError;

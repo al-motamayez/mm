@@ -224,24 +224,36 @@ async function readDashboardData(session) {
 async function readUsers() {
   let { data, error } = await supabaseClient
     .from("users")
-    .select("id, name, username, role, status, created_at")
+    .select("id, name, username, phone, role, status, created_at")
     .order("created_at", { ascending: false });
   usersTableHasStatus = !error;
   if (error?.code === "42703") {
     ({ data, error } = await supabaseClient
       .from("users")
+      .select("id, name, username, role, status, created_at")
+      .order("created_at", { ascending: false }));
+    usersTableHasStatus = !error;
+  }
+  if (error?.code === "42703") {
+    ({ data, error } = await supabaseClient
+      .from("users")
       .select("id, name, username, role, created_at")
       .order("created_at", { ascending: false }));
+    usersTableHasStatus = false;
   }
   if (error) throw error;
   return data
-    .filter((account) => usersTableHasStatus ? account.status === "active" : account.role !== "pending")
+    .filter((account) => usersTableHasStatus
+      ? ["active", "suspended"].includes(account.status)
+      : account.role !== "pending")
     .map((account) => ({
       id: account.id,
       name: account.name,
       username: account.username,
+      phone: account.phone || "",
       role: roleNames[account.role] || account.role,
-      department: account.username
+      roleKey: account.role,
+      status: account.status || "active"
     }));
 }
 
@@ -249,16 +261,25 @@ async function readAccounts(session) {
   if (session.role !== "admin") return [];
   let { data, error } = await supabaseClient
     .from("users")
-    .select("id, name, username, role, status, created_at")
+    .select("id, name, username, phone, role, status, created_at")
     .or("status.eq.pending,role.eq.pending")
     .order("created_at", { ascending: false });
   usersTableHasStatus = !error;
   if (error?.code === "42703") {
     ({ data, error } = await supabaseClient
       .from("users")
+      .select("id, name, username, role, status, created_at")
+      .or("status.eq.pending,role.eq.pending")
+      .order("created_at", { ascending: false }));
+    usersTableHasStatus = !error;
+  }
+  if (error?.code === "42703") {
+    ({ data, error } = await supabaseClient
+      .from("users")
       .select("id, name, username, role, created_at")
       .eq("role", "pending")
       .order("created_at", { ascending: false }));
+    usersTableHasStatus = false;
   }
   if (error) throw error;
   return data.map((account) => ({
@@ -331,12 +352,18 @@ function paymentRows(payments) {
 }
 
 function userRows(users) {
-  return users.map((item) => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.username)}</td><td>${escapeHtml(item.role)}</td><td>${escapeHtml(item.department)}</td></tr>`);
+  return users.map((item) => {
+    const suspended = item.status === "suspended";
+    const actions = item.roleKey === "admin"
+      ? "حساب إدارة محمي"
+      : `<button class="row-action" type="button" data-action="toggle-user-status" data-account-id="${escapeHtml(item.id)}" data-next-status="${suspended ? "active" : "suspended"}">${suspended ? "إعادة تفعيل" : "توقيف / تعطيل"}</button> <button class="row-action" type="button" data-action="delete-user" data-account-id="${escapeHtml(item.id)}">حذف الحساب</button>`;
+    return `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.username)}</td><td>${escapeHtml(item.phone || "—")}</td><td>${escapeHtml(item.role)}</td><td>${suspended ? "متوقف" : "نشط"}</td><td>${actions}</td></tr>`;
+  });
 }
 
 function pendingAccountRows(accounts) {
   const pending = accounts.filter((account) => account.status === "pending");
-  return pending.map((account) => `<tr><td>${escapeHtml(account.name)}</td><td>${escapeHtml(account.username)}</td><td>${new Intl.DateTimeFormat("ar-EG").format(new Date(account.created_at))}</td><td><select aria-label="الدور الجديد" data-pending-role="${escapeHtml(account.id)}"><option value="">اختر الدور</option><option value="client">عميل</option><option value="worker">عامل</option><option value="cutting">مشرف قص</option><option value="sewing">مشرف خياطة</option></select></td><td><button class="row-action" type="button" data-action="activate-account" data-account-id="${escapeHtml(account.id)}">تفعيل الحساب</button></td></tr>`);
+  return pending.map((account) => `<tr><td>${escapeHtml(account.name)}</td><td>${escapeHtml(account.username)}</td><td>${escapeHtml(account.phone || "—")}</td><td>${new Intl.DateTimeFormat("ar-EG").format(new Date(account.created_at))}</td><td><select aria-label="الدور الجديد" data-pending-role="${escapeHtml(account.id)}"><option value="">اختر الدور</option><option value="client">عميل</option><option value="worker">عامل</option><option value="cutting">مشرف قص</option><option value="sewing">مشرف خياطة</option></select></td><td><button class="row-action" type="button" data-action="activate-account" data-account-id="${escapeHtml(account.id)}">تفعيل الحساب</button></td></tr>`);
 }
 
 function adminView(data, accounts) {
@@ -350,8 +377,8 @@ function adminView(data, accounts) {
     ${panel("كتالوج الموديلات", table(["الموديل","الوصف","السعر"], catalogModelRows(data.catalogModels)))}
     ${panel("سجل الدفعات المالية", table(["العميل","المبلغ","التاريخ","طريقة الدفع","إجراء"], paymentRows(data.payments)))}
     ${panel("طلبات وأذونات الانصراف", table(["الموظف","التاريخ","السبب","الحالة","إجراء"], data.leaves.map((item, index) => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.date)}</td><td>${escapeHtml(item.reason)}</td><td>${statusTag(item.status)}</td><td>${item.status === "قيد المراجعة" ? `<button class="row-action" data-action="approve-leave" data-index="${index}" type="button">اعتماد</button> <button class="row-action" data-action="deny-leave" data-index="${index}" type="button">رفض</button>` : "—"}</td></tr>`)))}
-    ${panel("طلبات الحسابات الجديدة", table(["الاسم الكامل","اسم المستخدم","تاريخ الطلب","تحديد الدور","إجراء"], pendingAccountRows(accounts)))}
-    ${panel("المستخدمون", table(["الاسم","اسم المستخدم","الدور الوظيفي","اسم الحساب"], userRows(data.users)))}`;
+    ${panel("طلبات الحسابات الجديدة", table(["الاسم الكامل","اسم المستخدم","رقم التليفون","تاريخ الطلب","تحديد الدور","إجراء"], pendingAccountRows(accounts)))}
+    ${panel("المستخدمون", table(["الاسم","اسم المستخدم","رقم التليفون","الدور الوظيفي","الحالة","إجراء"], userRows(data.users)))}`;
 }
 
 function cuttingView(data) {
@@ -528,6 +555,48 @@ function bindActions(session) {
         return;
       }
       refreshDashboard(session).catch((error) => window.alert(`تعذر تحديث اللوحة: ${error.message}`));
+      return;
+    }
+    if (button.dataset.action === "toggle-user-status") {
+      const nextStatus = button.dataset.nextStatus;
+      if (!usersTableHasStatus || !["active", "suspended"].includes(nextStatus)) {
+        window.alert("يتطلب تغيير الحالة تحديث users لتضمين حالة suspended. شغّل supabase/schema.sql.");
+        return;
+      }
+      button.disabled = true;
+      const { data, error } = await supabaseClient
+        .from("users")
+        .update({ status: nextStatus, updated_at: new Date().toISOString() })
+        .eq("id", button.dataset.accountId)
+        .in("status", ["active", "suspended"])
+        .select("id")
+        .maybeSingle();
+      if (error) {
+        button.disabled = false;
+        window.alert(`تعذر تغيير حالة الحساب: ${error.message}`);
+        return;
+      }
+      if (!data) {
+        button.disabled = false;
+        window.alert("لم يتغير الحساب. حدّث الصفحة وحاول مجددًا.");
+        return;
+      }
+      refreshDashboard(session).catch((refreshError) => window.alert(`تغيرت حالة الحساب، لكن تعذر تحديث اللوحة: ${refreshError.message}`));
+      return;
+    }
+    if (button.dataset.action === "delete-user") {
+      const account = dashboardData.users.find((user) => user.id === button.dataset.accountId);
+      if (!account || !window.confirm(`هل تريد حذف حساب ${account.name} نهائيًا؟ لا يمكن التراجع عن هذا الإجراء.`)) return;
+      button.disabled = true;
+      const { error } = await supabaseClient.functions.invoke("delete-factory-user", {
+        body: { userId: account.id }
+      });
+      if (error) {
+        button.disabled = false;
+        window.alert(`تعذر حذف الحساب: ${error.message}`);
+        return;
+      }
+      refreshDashboard(session).catch((refreshError) => window.alert(`حُذف الحساب، لكن تعذر تحديث اللوحة: ${refreshError.message}`));
       return;
     }
     const index = Number(button.dataset.index);
