@@ -20,12 +20,9 @@ const roleDestinations = {
 
 const loginForm = document.querySelector("#login-form");
 const signupForm = document.querySelector("#signup-form");
-const setupForm = document.querySelector("#setup-form");
 const message = document.querySelector("#auth-message");
-const tabs = document.querySelector("#auth-tabs");
 const loginPanel = document.querySelector("#login-panel");
 const signupPanel = document.querySelector("#signup-panel");
-const setupPanel = document.querySelector("#setup-panel");
 
 function readAccounts() {
   const accounts = JSON.parse(localStorage.getItem(ACCOUNTS_KEY) || "[]");
@@ -72,65 +69,18 @@ function showMessage(text, isError = true) {
 function showAuthMode(mode) {
   loginPanel.hidden = mode !== "login";
   signupPanel.hidden = mode !== "signup";
-  tabs.hidden = mode === "setup";
-  setupPanel.hidden = mode !== "setup";
+  document.querySelectorAll("[data-auth-mode]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.authMode === mode);
+  });
   showMessage("");
 }
 
 function initializeAuth() {
-  const accounts = readAccounts();
-  if (accounts.length === 0) {
-    document.querySelector("#setup-username").value = "ZERO0";
-    showAuthMode("setup");
-  } else {
-    showAuthMode("login");
-  }
+  showAuthMode("login");
 }
 
 document.querySelectorAll("[data-auth-mode]").forEach((button) => {
   button.addEventListener("click", () => showAuthMode(button.dataset.authMode));
-});
-
-setupForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const fullName = setupForm.elements.fullName.value.trim();
-  const password = setupForm.elements.password.value;
-  if (!fullName || !password.trim() || password.length < 8) {
-    showMessage("أدخل الاسم الكامل وكلمة مرور من 8 أحرف على الأقل.");
-    return;
-  }
-  try {
-    const accounts = readAccounts();
-    if (accounts.length !== 0) {
-      showAuthMode("login");
-      showMessage("تم إعداد حساب الأدمن مسبقًا. سجّل الدخول للمتابعة.");
-      return;
-    }
-    const credentials = await hashPassword(password);
-    const account = {
-      id: createAccountId(),
-      fullName,
-      username: "ZERO0",
-      usernameKey: normalizedUsername("ZERO0"),
-      passwordSalt: credentials.salt,
-      passwordHash: credentials.hash,
-      passwordIterations: credentials.iterations,
-      role: "admin",
-      status: "active",
-      createdAt: new Date().toISOString()
-    };
-    saveAccounts([account]);
-    localStorage.setItem(SESSION_KEY, JSON.stringify({
-      accountId: account.id,
-      role: account.role,
-      username: account.username,
-      fullName: account.fullName,
-      roleName: roleNames.admin
-    }));
-    window.location.href = roleDestinations.admin;
-  } catch (error) {
-    showMessage(error.message || "تعذر إعداد حساب الأدمن.");
-  }
 });
 
 signupForm.addEventListener("submit", async (event) => {
