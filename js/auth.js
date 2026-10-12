@@ -1,6 +1,8 @@
-const ACCOUNTS_KEY = "factory-accounts-v1";
+const ACCOUNTS_KEY = "factory-local-accounts-v2";
 const SESSION_KEY = "factory-session";
-const PASSWORD_ITERATIONS = 210000;
+const PASSWORD_ITERATIONS = 310000;
+const ADMIN_SALT = "al-motamayez-default-admin-v1";
+const ADMIN_PASSWORD_HASH = "caad0c2163b93a3a9e25ebd02159897f36448f96e0c1f9cf9e4fc3cf1c4ebf33";
 
 const roleNames = {
   admin: "مدير النظام",
@@ -24,30 +26,16 @@ const message = document.querySelector("#auth-message");
 const loginPanel = document.querySelector("#login-panel");
 const signupPanel = document.querySelector("#signup-panel");
 
-function readAccounts() {
-  const accounts = JSON.parse(localStorage.getItem(ACCOUNTS_KEY) || "[]");
-  if (!Array.isArray(accounts)) throw new Error("تعذر قراءة بيانات الحسابات.");
-  return accounts;
-}
-
-function saveAccounts(accounts) {
-  localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(accounts));
-}
-
 function normalizedUsername(value) {
   return value.trim().toLocaleLowerCase();
 }
 
-function createAccountId() {
+function createId() {
   return crypto.randomUUID();
 }
 
 async function hashPassword(password, salt, iterations = PASSWORD_ITERATIONS) {
-  if (!crypto.subtle) throw new Error("المتصفح لا يدعم حماية كلمة المرور. افتح الموقع عبر اتصال محلي آمن.");
-  if (!salt) {
-    const bytes = crypto.getRandomValues(new Uint8Array(16));
-    salt = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-  }
+  if (!crypto.subtle) throw new Error("المتصفح لا يدعم حماية كلمات المرور.");
   const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
   const digest = await crypto.subtle.deriveBits({
     name: "PBKDF2",
@@ -55,8 +43,32 @@ async function hashPassword(password, salt, iterations = PASSWORD_ITERATIONS) {
     iterations,
     hash: "SHA-256"
   }, key, 256);
-  const hash = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
-  return { salt, hash, iterations };
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function readAccounts() {
+  const accounts = JSON.parse(localStorage.getItem(ACCOUNTS_KEY) || "[]");
+  if (!Array.isArray(accounts)) throw new Error("بيانات الحسابات المحلية غير صالحة.");
+  if (!accounts.some((account) => account.usernameKey === "zero0")) {
+    accounts.unshift({
+      id: "default-admin-zero0",
+      full_name: "ZERO0",
+      username: "ZERO0",
+      usernameKey: "zero0",
+      passwordSalt: ADMIN_SALT,
+      passwordHash: ADMIN_PASSWORD_HASH,
+      passwordIterations: PASSWORD_ITERATIONS,
+      role: "admin",
+      status: "active",
+      created_at: "2026-01-01T00:00:00.000Z"
+    });
+    localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(accounts));
+  }
+  return accounts;
+}
+
+function saveAccounts(accounts) {
+  localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(accounts));
 }
 
 function showMessage(text, isError = true) {
@@ -75,8 +87,15 @@ function showAuthMode(mode) {
   showMessage("");
 }
 
-function initializeAuth() {
-  showAuthMode("login");
+function startSession(account) {
+  sessionStorage.setItem(SESSION_KEY, JSON.stringify({
+    accountId: account.id,
+    role: account.role,
+    username: account.username,
+    fullName: account.full_name,
+    roleName: roleNames[account.role]
+  }));
+  window.location.assign(roleDestinations[account.role]);
 }
 
 document.querySelectorAll("[data-auth-mode]").forEach((button) => {
@@ -96,66 +115,55 @@ signupForm.addEventListener("submit", async (event) => {
     const accounts = readAccounts();
     const usernameKey = normalizedUsername(username);
     if (accounts.some((account) => account.usernameKey === usernameKey)) {
-      showMessage("اسم المستخدم أو الهاتف مسجل بالفعل.");
+      showMessage("اسم المستخدم مسجل بالفعل.");
       return;
     }
-    const credentials = await hashPassword(password);
+    const passwordSalt = createId();
     accounts.push({
-      id: createAccountId(),
-      fullName,
+      id: createId(),
+      full_name: fullName,
       username,
       usernameKey,
-      passwordSalt: credentials.salt,
-      passwordHash: credentials.hash,
-      passwordIterations: credentials.iterations,
+      passwordSalt,
+      passwordHash: await hashPassword(password, passwordSalt),
+      passwordIterations: PASSWORD_ITERATIONS,
       role: null,
       status: "pending",
-      createdAt: new Date().toISOString()
+      created_at: new Date().toISOString()
     });
     saveAccounts(accounts);
     signupForm.reset();
     showAuthMode("login");
-    showMessage("تم استلام طلبك. حسابك قيد التفعيل من قبل الإدارة.", false);
+    showMessage("تم إرسال طلب الحساب إلى الأدمن للمراجعة والتفعيل.", false);
   } catch (error) {
-    showMessage(error.message || "تعذر إنشاء الحساب.");
+    showMessage(`تعذر إنشاء الحساب: ${error.message}`);
   }
 });
 
 loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  const username = loginForm.elements.username.value.trim();
+  const usernameKey = normalizedUsername(loginForm.elements.username.value);
   const password = loginForm.elements.password.value;
   try {
     const accounts = readAccounts();
-    const account = accounts.find((item) => item.usernameKey === normalizedUsername(username));
-    if (!account) {
-      showMessage("اسم المستخدم أو كلمة المرور غير صحيحة.");
-      return;
-    }
-    const credentials = await hashPassword(password, account.passwordSalt, account.passwordIterations);
-    if (credentials.hash !== account.passwordHash) {
+    const account = accounts.find((item) => item.usernameKey === usernameKey);
+    if (!account || await hashPassword(password, account.passwordSalt, account.passwordIterations) !== account.passwordHash) {
       showMessage("اسم المستخدم أو كلمة المرور غير صحيحة.");
       return;
     }
     if (account.status !== "active" || !roleDestinations[account.role]) {
-      showMessage("حسابك قيد التفعيل من قبل الإدارة.");
+      showMessage("حسابك معلق إلى أن يفعّله الأدمن ويحدد دورك.");
       return;
     }
-    localStorage.setItem(SESSION_KEY, JSON.stringify({
-      accountId: account.id,
-      role: account.role,
-      username: account.username,
-      fullName: account.fullName,
-      roleName: roleNames[account.role]
-    }));
-    window.location.href = roleDestinations[account.role];
+    startSession(account);
   } catch (error) {
-    showMessage(error.message || "تعذر تسجيل الدخول.");
+    showMessage(`تعذر تسجيل الدخول: ${error.message}`);
   }
 });
 
 try {
-  initializeAuth();
+  readAccounts();
+  showAuthMode("login");
 } catch (error) {
-  showMessage(error.message || "تعذر تحميل الحسابات.");
+  showMessage(`تعذر تحميل الحسابات: ${error.message}`);
 }

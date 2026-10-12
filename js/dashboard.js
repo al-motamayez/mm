@@ -1,7 +1,6 @@
 const STORAGE_KEY = "factory-data-v1";
 const SESSION_KEY = "factory-session";
-const ACCOUNTS_KEY = "factory-accounts-v1";
-const PASSWORD_ITERATIONS = 210000;
+const ACCOUNTS_KEY = "factory-local-accounts-v2";
 const rolePages = {
   admin: "admin.html",
   cutting: "cutting.html",
@@ -36,22 +35,27 @@ const roleInfo = {
 };
 
 function readSession() {
-  const session = JSON.parse(localStorage.getItem(SESSION_KEY) || "null");
+  const savedSession = JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null");
   const accounts = JSON.parse(localStorage.getItem(ACCOUNTS_KEY) || "[]");
-  const account = Array.isArray(accounts) ? accounts.find((item) => item.id === session?.accountId) : null;
-  if (!session || !account || account.status !== "active" || account.role !== session.role || !rolePages[session.role]) {
+  const account = Array.isArray(accounts) ? accounts.find((item) => item.id === savedSession?.accountId) : null;
+  if (!savedSession || !account || account.status !== "active" || account.role !== savedSession.role || !rolePages[account.role]) {
     window.location.replace("../login.html");
     return null;
   }
-  session.username = account.username;
-  session.fullName = account.fullName;
-  session.roleName = roleNames[account.role];
   const currentPage = window.location.pathname.split("/").pop();
   const pageRole = document.body.dataset.dashboardRole;
-  if (currentPage !== rolePages[session.role] || (pageRole && pageRole !== session.role)) {
-    window.location.replace(rolePages[session.role]);
+  if (currentPage !== rolePages[account.role] || (pageRole && pageRole !== account.role)) {
+    window.location.replace(rolePages[account.role]);
     return null;
   }
+  const session = {
+    accountId: account.id,
+    role: account.role,
+    username: account.username,
+    fullName: account.full_name,
+    roleName: roleNames[account.role]
+  };
+  sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
   return session;
 }
 
@@ -72,35 +76,11 @@ function saveData(data) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
 }
 
-function readAccounts() {
+function readAccounts(session) {
+  if (session.role !== "admin") return [];
   const accounts = JSON.parse(localStorage.getItem(ACCOUNTS_KEY) || "[]");
-  if (!Array.isArray(accounts)) throw new Error("بيانات الحسابات غير صالحة.");
-  return accounts;
-}
-
-function saveAccounts(accounts) {
-  localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(accounts));
-}
-
-function usernameKey(value) {
-  return value.trim().toLocaleLowerCase();
-}
-
-async function hashPassword(password, salt, iterations = PASSWORD_ITERATIONS) {
-  if (!crypto.subtle) throw new Error("المتصفح لا يدعم حماية كلمة المرور.");
-  if (!salt) {
-    const bytes = crypto.getRandomValues(new Uint8Array(16));
-    salt = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-  }
-  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
-  const digest = await crypto.subtle.deriveBits({
-    name: "PBKDF2",
-    salt: new TextEncoder().encode(salt),
-    iterations,
-    hash: "SHA-256"
-  }, key, 256);
-  const hash = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
-  return { salt, hash, iterations };
+  if (!Array.isArray(accounts)) throw new Error("بيانات الحسابات المحلية غير صالحة.");
+  return accounts.sort((left, right) => new Date(right.created_at) - new Date(left.created_at));
 }
 
 function escapeHtml(value) {
@@ -151,11 +131,7 @@ function userRows(users) {
 
 function pendingAccountRows(accounts) {
   const pending = accounts.filter((account) => account.status === "pending");
-  return pending.map((account) => `<tr><td>${escapeHtml(account.fullName)}</td><td>${escapeHtml(account.username)}</td><td>${new Intl.DateTimeFormat("ar-EG").format(new Date(account.createdAt))}</td><td><select aria-label="الدور الجديد" data-pending-role="${escapeHtml(account.id)}"><option value="">اختر الدور</option><option value="client">عميل</option><option value="worker">عامل</option><option value="cutting">مشرف قص</option><option value="sewing">مشرف خياطة</option></select></td><td><button class="row-action" type="button" data-action="activate-account" data-account-id="${escapeHtml(account.id)}">تفعيل الحساب</button></td></tr>`);
-}
-
-function administratorRows(accounts) {
-  return accounts.filter((account) => account.role === "admin" && account.status === "active").map((account) => `<tr><td>${escapeHtml(account.fullName)}</td><td><form class="account-edit-form form-grid" data-account-id="${escapeHtml(account.id)}"><div class="field"><label>اسم المستخدم</label><input name="username" value="${escapeHtml(account.username)}" required></div><div class="field"><label>كلمة مرور جديدة</label><input name="password" type="password" minlength="8" autocomplete="new-password" placeholder="اتركها فارغة دون تغيير"></div><button class="row-action" type="submit">حفظ الحساب</button></form></td></tr>`);
+  return pending.map((account) => `<tr><td>${escapeHtml(account.full_name)}</td><td>${escapeHtml(account.username)}</td><td>${new Intl.DateTimeFormat("ar-EG").format(new Date(account.created_at))}</td><td><select aria-label="الدور الجديد" data-pending-role="${escapeHtml(account.id)}"><option value="">اختر الدور</option><option value="client">عميل</option><option value="worker">عامل</option><option value="cutting">مشرف قص</option><option value="sewing">مشرف خياطة</option></select></td><td><button class="row-action" type="button" data-action="activate-account" data-account-id="${escapeHtml(account.id)}">تفعيل الحساب</button></td></tr>`);
 }
 
 function adminView(data, accounts) {
@@ -169,8 +145,6 @@ function adminView(data, accounts) {
     ${panel("سجل الدفعات المالية", table(["العميل","المبلغ","التاريخ","طريقة الدفع","إجراء"], paymentRows(data.payments)))}
     ${panel("طلبات وأذونات الانصراف", table(["الموظف","التاريخ","السبب","الحالة","إجراء"], data.leaves.map((item, index) => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.date)}</td><td>${escapeHtml(item.reason)}</td><td>${statusTag(item.status)}</td><td>${item.status === "قيد المراجعة" ? `<button class="row-action" data-action="approve-leave" data-index="${index}" type="button">اعتماد</button> <button class="row-action" data-action="deny-leave" data-index="${index}" type="button">رفض</button>` : "—"}</td></tr>`)))}
     ${panel("طلبات الحسابات الجديدة", table(["الاسم الكامل","اسم المستخدم / الهاتف","تاريخ الطلب","تحديد الدور","إجراء"], pendingAccountRows(accounts)))}
-    ${panel("إضافة أدمن جديد", `<div class="panel-body"><form id="admin-account-form" class="form-grid"><div class="field"><label for="admin-full-name">الاسم الكامل</label><input id="admin-full-name" name="fullName" required></div><div class="field"><label for="admin-username">اسم المستخدم</label><input id="admin-username" name="username" required></div><div class="field"><label for="admin-password">كلمة المرور</label><input id="admin-password" name="password" type="password" minlength="8" autocomplete="new-password" required></div><button class="button button-primary" type="submit">إنشاء أدمن مفعل</button></form></div>`)}
-    ${panel("حسابات الأدمن", table(["الاسم الكامل","تعديل اسم المستخدم أو كلمة المرور"], administratorRows(accounts)))}
     ${panel("المستخدمون", table(["الاسم","الدور الوظيفي","القسم","إجراء"], userRows(data.users)))}`;
 }
 
@@ -213,9 +187,14 @@ function render(session, data, accounts) {
   bindActions(session);
 }
 
+async function refreshDashboard(session, data = readData()) {
+  const accounts = await readAccounts(session);
+  render(session, data, accounts);
+}
+
 function bindActions(session) {
   document.querySelector("#logout").addEventListener("click", () => {
-    localStorage.removeItem(SESSION_KEY);
+    sessionStorage.removeItem(SESSION_KEY);
     window.location.replace("../login.html");
   });
 
@@ -257,7 +236,7 @@ function bindActions(session) {
     if (editIndex) data.models[Number(editIndex)] = model;
     else data.models.unshift(model);
     saveData(data);
-    render(session, data, readAccounts());
+    refreshDashboard(session, data).catch((error) => window.alert(`تعذر تحديث اللوحة: ${error.message}`));
   });
   document.querySelector("#payment-form").addEventListener("submit", (event) => {
     event.preventDefault();
@@ -275,7 +254,7 @@ function bindActions(session) {
       data.payments[Number(editIndex)] = payment;
     } else data.payments.unshift(payment);
     saveData(data);
-    render(session, data, readAccounts());
+    refreshDashboard(session, data).catch((error) => window.alert(`تعذر تحديث اللوحة: ${error.message}`));
   });
   document.querySelector("#user-form").addEventListener("submit", (event) => {
     event.preventDefault();
@@ -290,98 +269,26 @@ function bindActions(session) {
     if (editIndex) data.users[Number(editIndex)] = user;
     else data.users.unshift(user);
     saveData(data);
-    render(session, data, readAccounts());
+    refreshDashboard(session, data).catch((error) => window.alert(`تعذر تحديث اللوحة: ${error.message}`));
   });
-  document.querySelector("#admin-account-form").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const formData = new FormData(event.currentTarget);
-    const fullName = String(formData.get("fullName")).trim();
-    const username = String(formData.get("username")).trim();
-    const password = String(formData.get("password"));
-    if (!fullName || !username || !password.trim() || password.length < 8) {
-      window.alert("أكمل بيانات الأدمن واختر كلمة مرور من 8 أحرف على الأقل.");
-      return;
-    }
-    const accounts = readAccounts();
-    const key = usernameKey(username);
-    if (accounts.some((account) => account.usernameKey === key)) {
-      window.alert("اسم المستخدم مسجل بالفعل.");
-      return;
-    }
-    try {
-      const credentials = await hashPassword(password);
-      accounts.push({
-        id: crypto.randomUUID(),
-        fullName,
-        username,
-        usernameKey: key,
-        passwordSalt: credentials.salt,
-        passwordHash: credentials.hash,
-        passwordIterations: credentials.iterations,
-        role: "admin",
-        status: "active",
-        createdAt: new Date().toISOString()
-      });
-      saveAccounts(accounts);
-      render(session, readData(), accounts);
-    } catch (error) {
-      window.alert(`تعذر إنشاء حساب الأدمن: ${error.message}`);
-    }
-  });
-  document.querySelectorAll(".account-edit-form").forEach((form) => form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const target = event.currentTarget;
-    const formData = new FormData(target);
-    const username = String(formData.get("username")).trim();
-    const password = String(formData.get("password"));
-    if (!username || (password && (!password.trim() || password.length < 8))) {
-      window.alert("أدخل اسم مستخدم صالحًا، أو كلمة مرور جديدة من 8 أحرف على الأقل.");
-      return;
-    }
-    const accounts = readAccounts();
-    const account = accounts.find((item) => item.id === target.dataset.accountId);
-    if (!account) {
-      window.alert("تعذر العثور على حساب الأدمن.");
-      return;
-    }
-    const key = usernameKey(username);
-    if (accounts.some((item) => item.id !== account.id && item.usernameKey === key)) {
-      window.alert("اسم المستخدم مسجل بالفعل.");
-      return;
-    }
-    try {
-      account.username = username;
-      account.usernameKey = key;
-      if (password) {
-        const credentials = await hashPassword(password);
-        account.passwordSalt = credentials.salt;
-        account.passwordHash = credentials.hash;
-        account.passwordIterations = credentials.iterations;
-      }
-      saveAccounts(accounts);
-      if (session.accountId === account.id) {
-        session.username = account.username;
-        localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-      }
-      render(session, readData(), accounts);
-    } catch (error) {
-      window.alert(`تعذر تعديل حساب الأدمن: ${error.message}`);
-    }
-  }));
   document.querySelectorAll("[data-action]").forEach((button) => button.addEventListener("click", () => {
     if (button.dataset.action === "activate-account") {
-      const accounts = readAccounts();
-      const account = accounts.find((item) => item.id === button.dataset.accountId && item.status === "pending");
       const roleSelect = [...document.querySelectorAll("[data-pending-role]")].find((item) => item.dataset.pendingRole === button.dataset.accountId);
-      if (!account || !roleSelect || !roleNames[roleSelect.value] || roleSelect.value === "admin") {
+      if (!roleSelect || !["client", "worker", "cutting", "sewing"].includes(roleSelect.value)) {
         window.alert("اختر دورًا صالحًا قبل تفعيل الحساب.");
+        return;
+      }
+      const accounts = JSON.parse(localStorage.getItem(ACCOUNTS_KEY) || "[]");
+      const account = accounts.find((item) => item.id === button.dataset.accountId && item.status === "pending");
+      if (!account) {
+        window.alert("لم يعد طلب الحساب معلقًا. حدّث الصفحة وحاول مجددًا.");
         return;
       }
       account.role = roleSelect.value;
       account.status = "active";
-      account.activatedAt = new Date().toISOString();
-      saveAccounts(accounts);
-      render(session, readData(), accounts);
+      account.activated_at = new Date().toISOString();
+      localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(accounts));
+      refreshDashboard(session).catch((error) => window.alert(`تعذر تحديث اللوحة: ${error.message}`));
       return;
     }
     const data = readData();
@@ -390,16 +297,16 @@ function bindActions(session) {
     if (button.dataset.action === "approve-leave") data.leaves[index].status = "تم الاعتماد";
     if (button.dataset.action === "deny-leave") data.leaves[index].status = "مرفوض";
     saveData(data);
-    render(session, data, readAccounts());
+    refreshDashboard(session, data).catch((error) => window.alert(`تعذر تحديث اللوحة: ${error.message}`));
   }));
 }
 
-const session = readSession();
-if (session) {
-  try {
-    render(session, readData(), readAccounts());
-  } catch (error) {
-    document.querySelector("#app").innerHTML = `<main class="main-content"><div class="notice">تعذر تحميل بيانات المصنع: ${escapeHtml(error.message)}. امسح بيانات هذا الموقع من المتصفح ثم أعد المحاولة.</div></main>`;
-    console.error("تعذر تحميل بيانات لوحة المصنع.", error);
-  }
+async function initializeDashboard() {
+  const session = readSession();
+  if (session) await refreshDashboard(session);
 }
+
+initializeDashboard().catch((error) => {
+  document.querySelector("#app").innerHTML = `<main class="main-content"><div class="notice">تعذر تحميل بيانات المصنع: ${escapeHtml(error.message)}.</div></main>`;
+  console.error("تعذر تحميل بيانات لوحة المصنع.", error);
+});
