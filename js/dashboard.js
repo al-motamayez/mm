@@ -1,5 +1,7 @@
 const STORAGE_KEY = "factory-data-v1";
 const supabaseClient = window.supabaseClient;
+const ADMIN_USERNAME = "ZERO0";
+const ADMIN_AUTH_EMAIL = "mohamed01007033454@gmail.com";
 let dashboardData;
 let usersTableHasStatus = false;
 let localDataWarning = "";
@@ -49,7 +51,9 @@ async function readSession() {
     window.location.replace("../login.html");
     return null;
   }
-  const username = user.user_metadata?.username || user.email?.split("@")[0];
+  const authEmail = user.email?.toLocaleLowerCase();
+  const username = user.user_metadata?.username
+    || (authEmail === ADMIN_AUTH_EMAIL ? ADMIN_USERNAME : authEmail?.split("@")[0]);
   if (!username) throw new Error("تعذر تحديد اسم المستخدم لحساب المصادقة.");
   const account = await findAccountByUsername(username);
   if (!account || account.status !== "active" || !rolePages[account.role]) {

@@ -1,5 +1,7 @@
 const supabaseClient = window.supabaseClient;
 const AUTH_EMAIL_DOMAIN = "accounts.al-motamayez.invalid";
+const ADMIN_USERNAME = "ZERO0";
+const ADMIN_AUTH_EMAIL = "mohamed01007033454@gmail.com";
 
 const roleDestinations = {
   admin: "dashboards/admin.html",
@@ -20,6 +22,21 @@ let signupDisabledReason = "";
 
 function usernameEmail(username) {
   return `${username.trim().toLocaleLowerCase()}@${AUTH_EMAIL_DOMAIN}`;
+}
+
+function authEmailForLogin(identifier) {
+  const normalized = identifier.trim().toLocaleLowerCase();
+  if (normalized === ADMIN_USERNAME.toLocaleLowerCase()) return ADMIN_AUTH_EMAIL;
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) return normalized;
+  return usernameEmail(normalized);
+}
+
+function usernameForAuthUser(user) {
+  const metadataUsername = user.user_metadata?.username;
+  if (metadataUsername) return metadataUsername;
+  const email = user.email?.toLocaleLowerCase();
+  if (email === ADMIN_AUTH_EMAIL) return ADMIN_USERNAME;
+  return email?.split("@")[0];
 }
 
 function showMessage(text, isError = true) {
@@ -60,7 +77,7 @@ async function findAccountByUsername(username) {
 }
 
 async function routeAuthenticatedUser(user) {
-  const username = user.user_metadata?.username || user.email?.split("@")[0];
+  const username = usernameForAuthUser(user);
   if (!username) throw new Error("تعذر تحديد اسم المستخدم لحساب المصادقة.");
   const account = await findAccountByUsername(username);
   if (!account || account.status !== "active" || !roleDestinations[account.role]) {
@@ -121,20 +138,27 @@ loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const username = loginForm.elements.username.value.trim();
   const password = loginForm.elements.password.value;
-  if (!/^[a-zA-Z0-9._-]{3,30}$/.test(username) || !password) {
+  const validUsername = /^[a-zA-Z0-9._-]{3,30}$/.test(username);
+  const validEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(username);
+  if ((!validUsername && !validEmail) || !password) {
     showMessage("أدخل اسم مستخدم صالحًا وكلمة المرور.");
     return;
   }
 
   try {
     const { data, error } = await supabaseClient.auth.signInWithPassword({
-      email: usernameEmail(username),
+      email: authEmailForLogin(username),
       password
     });
     if (error) {
       let account;
       try {
-        account = await findAccountByUsername(username);
+        const accountUsername = validEmail && username.toLocaleLowerCase() === ADMIN_AUTH_EMAIL
+          ? ADMIN_USERNAME
+          : validEmail
+            ? username.split("@")[0]
+            : username;
+        account = await findAccountByUsername(accountUsername);
       } catch (profileError) {
         console.error("تعذر التحقق من وجود سجل الحساب في users بعد فشل المصادقة.", profileError);
         showMessage("تعذر التحقق من سجل الحساب في قاعدة البيانات. تحقق من اتصال Supabase وصلاحيات قراءة جدول users.");
