@@ -1,10 +1,8 @@
-const STORAGE_KEY = "factory-data-v1";
 const supabaseClient = window.supabaseClient;
 const ADMIN_USERNAME = "ZERO0";
 const ADMIN_AUTH_EMAIL = "mohamed01007033454@gmail.com";
 let dashboardData;
 let usersTableHasStatus = false;
-let localDataWarning = "";
 const rolePages = {
   admin: "admin.html",
   cutting: "cutting.html",
@@ -18,16 +16,6 @@ const roleNames = {
   sewing: "مشرف الخياطة",
   worker: "عامل / عاملة",
   client: "عميل"
-};
-
-const seedData = {
-  models: [],
-  payments: [],
-  users: [],
-  leaves: [],
-  cutting: [],
-  sewing: [],
-  tasks: []
 };
 
 const roleInfo = {
@@ -91,49 +79,46 @@ function emptyDashboardData() {
   };
 }
 
-function readLocalData() {
-  let saved;
-  try {
-    saved = localStorage.getItem(STORAGE_KEY);
-  } catch (error) {
-    if (error.name !== "SecurityError") throw error;
-    localDataWarning = "تعذر الوصول إلى بيانات المتصفح الإضافية؛ ستظل بيانات الحسابات والطلبات والموديلات المعروضة من Supabase.";
-    return emptyDashboardData();
-  }
-  if (!saved) {
-    return emptyDashboardData();
-  }
-  let data;
-  try {
-    data = JSON.parse(saved);
-  } catch (error) {
-    if (!(error instanceof SyntaxError)) throw error;
-    localDataWarning = "بيانات المتصفح الإضافية تالفة؛ تم تحميل الحسابات والطلبات والموديلات من Supabase دونها.";
-    return emptyDashboardData();
-  }
-  if (!data || typeof data !== "object" || Array.isArray(data)) {
-    localDataWarning = "تنسيق البيانات المحلية الإضافية غير صالح؛ تم تحميل بيانات Supabase دونها.";
-    return emptyDashboardData();
-  }
-  for (const key of Object.keys(seedData)) {
-    if (!Array.isArray(data[key])) {
-      localDataWarning = "تنسيق بعض البيانات المحلية الإضافية غير صالح؛ تم تحميل بيانات Supabase دونها.";
-      return emptyDashboardData();
-    }
-  }
-  return data;
+async function readFlexibleRecords(collection) {
+  const { data, error } = await supabaseClient
+    .from("factory_records")
+    .select("id, owner_id, payload, created_at")
+    .eq("collection", collection)
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return data.map((record) => ({
+    ...record.payload,
+    created_at: record.payload.created_at || record.created_at,
+    _recordId: record.id,
+    _ownerId: record.owner_id
+  }));
 }
 
-function saveLocalData(data) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+async function saveFlexibleRecord(collection, payload, recordId = null, ownerId = null) {
+  const cleanPayload = { ...payload };
+  delete cleanPayload._recordId;
+  delete cleanPayload._ownerId;
+  const { error } = await supabaseClient
+    .from("factory_records")
+    .upsert({
+      id: recordId || crypto.randomUUID(),
+      collection,
+      owner_id: ownerId,
+      payload: cleanPayload
+    }, { onConflict: "id" });
+  if (error) throw error;
 }
 
 async function readDashboardData(session) {
   const data = emptyDashboardData();
-  const localData = readLocalData();
-  data.payments = localData.payments;
-  data.leaves = localData.leaves;
-  data.tasks = localData.tasks;
+  const [payments, leaves, tasks] = await Promise.all([
+    readFlexibleRecords("payments"),
+    readFlexibleRecords("leaves"),
+    readFlexibleRecords("tasks")
+  ]);
+  data.payments = payments;
+  data.leaves = leaves;
+  data.tasks = tasks;
   let ordersQuery = supabaseClient
     .from("orders")
     .select("id, client_id, client_name, model_id, quantity, status, created_at")
@@ -397,7 +382,6 @@ function render(session, data, accounts) {
   document.querySelector("#app").innerHTML = `
     <aside class="sidebar"><a class="brand" href="../login.html"><img class="brand-logo" src="../assets/al-motamayez-logo.png" alt="AL-MOTAMAYEZ logo"><span class="brand-copy"><strong>AL-MOTAMAYEZ</strong></span></a><nav>${navigation}</nav><div class="sidebar-bottom"><div class="profile-chip"><span class="avatar">${username.slice(0, 1)}</span><div class="profile-details"><strong>${username}</strong><span>${escapeHtml(session.roleName)}</span></div></div><button class="logout-button" id="logout" type="button">↪ تسجيل الخروج</button></div></aside>
     <main class="main-content"><header class="topbar"><div class="topbar-title"><h1>${info.title}</h1><p>${info.description}</p></div><div class="header-brand"><img class="header-logo" src="../assets/al-motamayez-logo.png" alt="AL-MOTAMAYEZ logo"><div class="brand-copy"><strong>AL-MOTAMAYEZ</strong></div><span class="date-label">${new Intl.DateTimeFormat("ar-EG", { dateStyle: "full" }).format(new Date())}</span></div></header>
-    ${localDataWarning ? `<div class="notice">${escapeHtml(localDataWarning)}</div>` : ""}
     ${session.role === "admin" ? adminView(data, accounts) : session.role === "cutting" ? cuttingView(data) : session.role === "sewing" ? sewingView(data) : session.role === "worker" ? workerView(data, session) : clientView(data, session)}
     <footer class="page-footer">AL-MOTAMAYEZ</footer></main>`;
   bindActions(session);
@@ -427,7 +411,7 @@ function bindActions(session) {
   };
   document.querySelectorAll("[data-edit-kind]").forEach((button) => button.addEventListener("click", () => {
     const config = editConfigs[button.dataset.editKind];
-    const item = (config.collection === "models" ? dashboardData : readLocalData())[config.collection][Number(button.dataset.index)];
+    const item = dashboardData[config.collection][Number(button.dataset.index)];
     const form = document.querySelector(`#${config.form}`);
     form.elements.editIndex.value = button.dataset.index;
     for (const field of config.fields) form.elements[field].value = item[field];
@@ -478,10 +462,11 @@ function bindActions(session) {
       submitButton.disabled = false;
     }
   });
-  document.querySelector("#payment-form").addEventListener("submit", (event) => {
+  document.querySelector("#payment-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const formData = new FormData(event.currentTarget);
-    const data = readLocalData();
+    const form = event.currentTarget;
+    const submitButton = form.querySelector('[type="submit"]');
     const payment = {
       client: String(formData.get("client")).trim(),
       amount: Number(formData.get("amount")),
@@ -489,12 +474,28 @@ function bindActions(session) {
       method: String(formData.get("method"))
     };
     const editIndex = String(formData.get("editIndex"));
-    if (editIndex) {
-      payment.date = data.payments[Number(editIndex)].date;
-      data.payments[Number(editIndex)] = payment;
-    } else data.payments.unshift(payment);
-    saveLocalData(data);
-    refreshDashboard(session).catch((error) => window.alert(`تعذر تحديث اللوحة: ${error.message}`));
+    const existingPayment = editIndex ? dashboardData.payments[Number(editIndex)] : null;
+    if (existingPayment) payment.date = existingPayment.date;
+    submitButton.disabled = true;
+    try {
+      const { data: client, error } = await supabaseClient
+        .from("users")
+        .select("id")
+        .ilike("username", payment.client)
+        .maybeSingle();
+      if (error) throw error;
+      if (!client) throw new Error("لا يوجد حساب مستخدم بهذا الاسم لربط الدفعة به.");
+      await saveFlexibleRecord("payments", payment, existingPayment?._recordId, client.id);
+      form.reset();
+      form.elements.editIndex.value = "";
+      form.querySelector('[data-cancel-edit]').hidden = true;
+      submitButton.textContent = "تسجيل الدفعة";
+      await refreshDashboard(session);
+    } catch (error) {
+      window.alert(`تعذر حفظ الدفعة أونلاين: ${error.message}`);
+    } finally {
+      submitButton.disabled = false;
+    }
   });
   document.querySelectorAll("[data-action]").forEach((button) => button.addEventListener("click", async () => {
     if (button.dataset.action === "activate-account") {
@@ -529,7 +530,6 @@ function bindActions(session) {
       refreshDashboard(session).catch((error) => window.alert(`تعذر تحديث اللوحة: ${error.message}`));
       return;
     }
-    const data = readLocalData();
     const index = Number(button.dataset.index);
     if (button.dataset.action === "delete-model") {
       const order = dashboardData.models[index];
@@ -559,11 +559,23 @@ function bindActions(session) {
           }
         }
       }
+      refreshDashboard(session).catch((error) => window.alert(`حُذف أمر التشغيل، لكن تعذر تحديث اللوحة: ${error.message}`));
+      return;
     }
-    if (button.dataset.action === "approve-leave") data.leaves[index].status = "تم الاعتماد";
-    if (button.dataset.action === "deny-leave") data.leaves[index].status = "مرفوض";
-    saveLocalData(data);
-    refreshDashboard(session).catch((error) => window.alert(`تعذر تحديث اللوحة: ${error.message}`));
+    if (button.dataset.action === "approve-leave" || button.dataset.action === "deny-leave") {
+      const leave = dashboardData.leaves[index];
+      if (!leave?._recordId) {
+        window.alert("تعذر العثور على طلب الانصراف. حدّث الصفحة وحاول مجددًا.");
+        return;
+      }
+      leave.status = button.dataset.action === "approve-leave" ? "تم الاعتماد" : "مرفوض";
+      try {
+        await saveFlexibleRecord("leaves", leave, leave._recordId, leave._ownerId);
+        await refreshDashboard(session);
+      } catch (error) {
+        window.alert(`تعذر تحديث طلب الانصراف أونلاين: ${error.message}`);
+      }
+    }
   }));
 }
 

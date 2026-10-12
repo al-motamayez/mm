@@ -1,3 +1,8 @@
+-- One-time Supabase setup for the factory application.
+-- Run this complete file in the Supabase SQL Editor; do not disable RLS.
+-- A legacy public.users.password column is removed; non-secret profile fields
+-- are retained in a private archive and matched Auth profiles are migrated.
+
 do $$
 begin
   if to_regclass('public.users') is not null
@@ -8,7 +13,14 @@ begin
         and table_name = 'users'
         and column_name = 'password'
     ) then
-    raise exception 'The existing public.users table contains plaintext passwords. Back up any needed non-password data, remove the insecure table, then run this schema.';
+    if to_regclass('public.users_legacy_profiles') is not null then
+      raise exception 'Both public.users with a plaintext password and public.users_legacy_profiles exist. Review the existing archive before retrying setup.';
+    end if;
+
+    execute 'alter table public.users rename to users_legacy_profiles';
+    execute 'alter table public.users_legacy_profiles drop column password';
+    execute 'alter table public.users_legacy_profiles enable row level security';
+    execute 'revoke all on table public.users_legacy_profiles from public, anon, authenticated';
   end if;
 end;
 $$;
@@ -24,6 +36,59 @@ create table if not exists public.users (
   constraint users_name_not_blank check (length(trim(name)) > 0),
   constraint users_username_format check (username ~ '^[A-Za-z0-9._-]{3,30}$')
 );
+
+-- Move profiles that can be linked safely to an existing Supabase Auth user.
+-- Unmatched profiles remain in the private archive without their old password.
+do $$
+begin
+  if to_regclass('public.users_legacy_profiles') is not null then
+    execute $migration$
+      insert into public.users (id, name, username, role, status, created_at)
+      select distinct on (lower(trim(legacy.username)))
+        auth_user.id,
+        coalesce(nullif(trim(legacy.name), ''), trim(legacy.username)),
+        trim(legacy.username),
+        case lower(trim(legacy.role))
+          when 'admin' then 'admin'
+          when 'client' then 'client'
+          when 'worker' then 'worker'
+          when 'cutting' then 'cutting'
+          when 'sewing' then 'sewing'
+          else null
+        end,
+        case
+          when lower(trim(legacy.role)) in ('admin', 'client', 'worker', 'cutting', 'sewing') then 'active'
+          else 'pending'
+        end,
+        coalesce(legacy.created_at, now())
+      from public.users_legacy_profiles as legacy
+      join lateral (
+        select candidate.id
+        from auth.users as candidate
+        where lower(candidate.email) =
+          case
+            when lower(trim(legacy.username)) = 'zero0' then 'mohamed01007033454@gmail.com'
+            else lower(trim(legacy.username)) || '@accounts.al-motamayez.invalid'
+          end
+          or (
+            lower(trim(legacy.username)) = 'zero0'
+            and lower(candidate.email) = 'zero0@accounts.al-motamayez.invalid'
+          )
+        order by case
+          when lower(candidate.email) = 'mohamed01007033454@gmail.com' then 0
+          else 1
+        end
+        limit 1
+      ) as auth_user on true
+      where trim(legacy.username) ~ '^[A-Za-z0-9._-]{3,30}$'
+      order by lower(trim(legacy.username)),
+        case when lower(trim(legacy.role)) = 'admin' then 0 else 1 end,
+        legacy.created_at nulls last
+      on conflict do nothing
+    $migration$;
+  end if;
+end;
+$$;
 
 create unique index if not exists users_username_lower_unique
   on public.users (lower(username));
@@ -369,9 +434,26 @@ as $$
   );
 $$;
 
+-- Flexible application records keep evolving optional fields in JSONB so
+-- ordinary UI field additions do not require new SQL columns.
+create table if not exists public.factory_records (
+  id uuid primary key default gen_random_uuid(),
+  collection text not null check (length(trim(collection)) > 0),
+  owner_id uuid references auth.users (id) on delete set null,
+  payload jsonb not null default '{}'::jsonb check (jsonb_typeof(payload) = 'object'),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists factory_records_collection_created_idx
+  on public.factory_records (collection, created_at desc);
+create index if not exists factory_records_owner_collection_idx
+  on public.factory_records (owner_id, collection);
+
 alter table public.models enable row level security;
 alter table public.orders enable row level security;
 alter table public.production_stages enable row level security;
+alter table public.factory_records enable row level security;
 
 drop policy if exists "Authenticated users read models" on public.models;
 create policy "Authenticated users read models"
@@ -429,10 +511,29 @@ create policy "Supervisors update their production stages"
     or (stage_name = 'sewing' and public.has_active_factory_role(array['sewing']))
   );
 
-revoke all on public.models, public.orders, public.production_stages from anon, authenticated;
+drop policy if exists "Admins manage factory records" on public.factory_records;
+create policy "Admins manage factory records"
+  on public.factory_records for all to authenticated
+  using (public.is_active_factory_admin())
+  with check (public.is_active_factory_admin());
+
+drop policy if exists "Users read their own factory records" on public.factory_records;
+create policy "Users read their own factory records"
+  on public.factory_records for select to authenticated
+  using (
+    owner_id = auth.uid()
+    and (
+      (collection = 'payments' and public.has_active_factory_role(array['client']))
+      or (collection = 'leaves' and public.has_active_factory_role(array['worker', 'cutting', 'sewing']))
+      or (collection = 'tasks' and public.has_active_factory_role(array['worker']))
+    )
+  );
+
+revoke all on public.models, public.orders, public.production_stages, public.factory_records from anon, authenticated;
 grant select, delete on public.models to authenticated;
 grant select, delete on public.orders to authenticated;
 grant select on public.production_stages to authenticated;
+grant select, insert, update, delete on public.factory_records to authenticated;
 grant update (completed_quantity, status, updated_at) on public.production_stages to authenticated;
 revoke all on function public.has_active_factory_role(text[]) from public, anon, authenticated;
 grant execute on function public.has_active_factory_role(text[]) to authenticated;
@@ -452,6 +553,9 @@ set name = 'ZERO0',
     updated_at = now()
 from auth.users as auth_user
 where account.id = auth_user.id
-  and lower(auth_user.email) = 'zero0@accounts.al-motamayez.invalid';
+  and lower(auth_user.email) in (
+    'mohamed01007033454@gmail.com',
+    'zero0@accounts.al-motamayez.invalid'
+  );
 
 notify pgrst, 'reload schema';
