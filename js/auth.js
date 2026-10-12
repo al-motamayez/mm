@@ -1,5 +1,4 @@
 const supabaseClient = window.supabaseClient;
-const SESSION_KEY = "factory-session";
 const AUTH_EMAIL_DOMAIN = "accounts.al-motamayez.invalid";
 
 const roleDestinations = {
@@ -67,18 +66,11 @@ async function routeAuthenticatedUser(user) {
   if (!account || account.status !== "active" || !roleDestinations[account.role]) {
     const { error: signOutError } = await supabaseClient.auth.signOut();
     if (signOutError) throw signOutError;
-    sessionStorage.removeItem(SESSION_KEY);
     showAuthMode("login");
     showMessage(account ? "حسابك معلق إلى أن يفعّله الأدمن ويحدد دورك." : "بيانات حسابك غير موجودة في جدول users. تواصل مع الإدارة.");
     return;
   }
 
-  sessionStorage.setItem(SESSION_KEY, JSON.stringify({
-    accountId: user.id,
-    role: account.role,
-    username: account.username,
-    fullName: account.name
-  }));
   window.location.assign(roleDestinations[account.role]);
 }
 

@@ -1,5 +1,4 @@
 const STORAGE_KEY = "factory-data-v1";
-const SESSION_KEY = "factory-session";
 const supabaseClient = window.supabaseClient;
 let dashboardData;
 let usersTableHasStatus = false;
@@ -38,10 +37,15 @@ const roleInfo = {
 };
 
 async function readSession() {
+  const { data: { session: authSession }, error: sessionError } = await supabaseClient.auth.getSession();
+  if (sessionError) throw sessionError;
+  if (!authSession) {
+    window.location.replace("../login.html");
+    return null;
+  }
   const { data: { user }, error: authError } = await supabaseClient.auth.getUser();
   if (authError) throw authError;
   if (!user) {
-    sessionStorage.removeItem(SESSION_KEY);
     window.location.replace("../login.html");
     return null;
   }
@@ -51,7 +55,6 @@ async function readSession() {
   if (!account || account.status !== "active" || !rolePages[account.role]) {
     const { error: signOutError } = await supabaseClient.auth.signOut();
     if (signOutError) throw signOutError;
-    sessionStorage.removeItem(SESSION_KEY);
     window.location.replace("../login.html");
     return null;
   }
@@ -69,8 +72,19 @@ async function readSession() {
     fullName: account.name,
     roleName: roleNames[account.role]
   };
-  sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
   return session;
+}
+
+function emptyDashboardData() {
+  return {
+    models: [],
+    payments: [],
+    users: [],
+    leaves: [],
+    cutting: [],
+    sewing: [],
+    tasks: []
+  };
 }
 
 function readLocalData() {
@@ -80,10 +94,10 @@ function readLocalData() {
   } catch (error) {
     if (error.name !== "SecurityError") throw error;
     localDataWarning = "تعذر الوصول إلى بيانات المتصفح الإضافية؛ ستظل بيانات الحسابات والطلبات والموديلات المعروضة من Supabase.";
-    return structuredClone(seedData);
+    return emptyDashboardData();
   }
   if (!saved) {
-    return structuredClone(seedData);
+    return emptyDashboardData();
   }
   let data;
   try {
@@ -91,12 +105,16 @@ function readLocalData() {
   } catch (error) {
     if (!(error instanceof SyntaxError)) throw error;
     localDataWarning = "بيانات المتصفح الإضافية تالفة؛ تم تحميل الحسابات والطلبات والموديلات من Supabase دونها.";
-    return structuredClone(seedData);
+    return emptyDashboardData();
+  }
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    localDataWarning = "تنسيق البيانات المحلية الإضافية غير صالح؛ تم تحميل بيانات Supabase دونها.";
+    return emptyDashboardData();
   }
   for (const key of Object.keys(seedData)) {
     if (!Array.isArray(data[key])) {
       localDataWarning = "تنسيق بعض البيانات المحلية الإضافية غير صالح؛ تم تحميل بيانات Supabase دونها.";
-      return structuredClone(seedData);
+      return emptyDashboardData();
     }
   }
   return data;
@@ -107,7 +125,11 @@ function saveLocalData(data) {
 }
 
 async function readDashboardData(session) {
-  const data = readLocalData();
+  const data = emptyDashboardData();
+  const localData = readLocalData();
+  data.payments = localData.payments;
+  data.leaves = localData.leaves;
+  data.tasks = localData.tasks;
   let ordersQuery = supabaseClient
     .from("orders")
     .select("id, client_id, client_name, model_id, quantity, status, created_at")
@@ -388,7 +410,6 @@ function bindActions(session) {
       window.alert(`تعذر تسجيل الخروج: ${error.message}`);
       return;
     }
-    sessionStorage.removeItem(SESSION_KEY);
     window.location.replace("../login.html");
   });
 
