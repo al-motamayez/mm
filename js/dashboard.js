@@ -588,12 +588,20 @@ function bindActions(session) {
       const account = dashboardData.users.find((user) => user.id === button.dataset.accountId);
       if (!account || !window.confirm(`هل تريد حذف حساب ${account.name} نهائيًا؟ لا يمكن التراجع عن هذا الإجراء.`)) return;
       button.disabled = true;
-      const { error } = await supabaseClient.functions.invoke("delete-factory-user", {
-        body: { userId: account.id }
-      });
+      const { data, error } = await supabaseClient
+        .from("users")
+        .delete()
+        .eq("id", account.id)
+        .select("id")
+        .maybeSingle();
       if (error) {
         button.disabled = false;
         window.alert(`تعذر حذف الحساب: ${error.message}`);
+        return;
+      }
+      if (!data) {
+        button.disabled = false;
+        window.alert("لم يُحذف الحساب. قد لا تملك صلاحية الحذف أو ربما حُذف بالفعل.");
         return;
       }
       refreshDashboard(session).catch((refreshError) => window.alert(`حُذف الحساب، لكن تعذر تحديث اللوحة: ${refreshError.message}`));

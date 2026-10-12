@@ -196,8 +196,15 @@ create policy "Admins activate accounts"
   using (public.is_active_factory_admin() and role is distinct from 'admin')
   with check (public.is_active_factory_admin() and role is distinct from 'admin');
 
+drop policy if exists "Admins delete non-admin accounts" on public.users;
+create policy "Admins delete non-admin accounts"
+  on public.users
+  for delete
+  to authenticated
+  using (public.is_active_factory_admin() and role is distinct from 'admin');
+
 revoke all on public.users from anon, authenticated;
-grant select, update on public.users to authenticated;
+grant select, update, delete on public.users to authenticated;
 grant insert (id, name, username, phone, role, status) on public.users to authenticated;
 revoke all on function public.is_active_factory_admin() from public, anon, authenticated;
 grant execute on function public.is_active_factory_admin() to authenticated;
