@@ -41,8 +41,8 @@ function showAuthMode(mode) {
 
 async function routeAuthenticatedUser(user) {
   const { data, error } = await supabaseClient
-    .from("profiles")
-    .select("id, full_name, username, role, status")
+    .from("users")
+    .select("id, name, username, role, status")
     .eq("id", user.id)
     .single();
   if (error) throw error;
@@ -59,7 +59,7 @@ async function routeAuthenticatedUser(user) {
     accountId: data.id,
     role: data.role,
     username: data.username,
-    fullName: data.full_name
+    fullName: data.name
   }));
   window.location.assign(roleDestinations[data.role]);
 }
