@@ -77,6 +77,24 @@ async function findAccountByUsername(username) {
   } : null;
 }
 
+async function findAccountById(id) {
+  let { data, error } = await supabaseClient
+    .from("users")
+    .select("id, name, username, role, status")
+    .eq("id", id)
+    .maybeSingle();
+  if (error?.code === "42703") {
+    ({ data, error } = await supabaseClient
+      .from("users")
+      .select("id, name, username, role")
+      .eq("id", id)
+      .maybeSingle());
+    if (!error && data) data.status = data.role === "pending" ? "pending" : "active";
+  }
+  if (error) throw error;
+  return data;
+}
+
 async function loginEmailFor(identifier) {
   const normalized = identifier.trim();
   if (normalized.includes("@")) return normalized.toLocaleLowerCase();
@@ -139,8 +157,22 @@ signupForm.addEventListener("submit", async (event) => {
     if (error) throw error;
     if (!data.user) throw new Error("لم يُنشأ الحساب. حاول مرة أخرى.");
     if (!data.session) {
-      showMessage("الحساب أُنشئ، لكن إعداد المشروع يطلب تأكيد بريد غير متاح لحساب اسم المستخدم. عطّل Confirm email في Supabase Auth ثم أعد المحاولة بحساب آخر.", true);
+      showMessage("أنشأ Supabase Auth الحساب لكنه ينتظر تأكيد البريد. لن يظهر الطلب في لوحة الإدارة إلا إذا كان trigger إنشاء الطلبات مثبتًا على جدول users؛ عطّل Confirm email لحسابات اسم المستخدم أو أكّد الحساب ثم تحقق من وجود صف pending.");
       return;
+    }
+    let account;
+    try {
+      account = await findAccountById(data.user.id);
+    } catch (profileError) {
+      const { error: signOutError } = await supabaseClient.auth.signOut();
+      if (signOutError) throw signOutError;
+      console.error("تعذر التحقق من طلب الحساب في users بعد التسجيل.", profileError);
+      throw new Error("تعذر التحقق من حفظ طلب الحساب في users. تحقق من صلاحيات القراءة وtrigger إنشاء الطلبات.");
+    }
+    if (!account || (account.status !== "pending" && account.role !== "pending")) {
+      const { error: signOutError } = await supabaseClient.auth.signOut();
+      if (signOutError) throw signOutError;
+      throw new Error("أُنشئ حساب المصادقة لكن لم يُنشأ طلب pending في users. تحقق من تثبيت trigger create_pending_factory_user وربطه بجدول users.");
     }
     const { error: signOutError } = await supabaseClient.auth.signOut();
     if (signOutError) throw signOutError;

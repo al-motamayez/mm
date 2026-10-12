@@ -265,7 +265,7 @@ async function readAccounts(session) {
   let { data, error } = await supabaseClient
     .from("users")
     .select("id, name, username, role, status, created_at")
-    .eq("status", "pending")
+    .or("status.eq.pending,role.eq.pending")
     .order("created_at", { ascending: false });
   usersTableHasStatus = !error;
   if (error?.code === "42703") {
@@ -276,7 +276,10 @@ async function readAccounts(session) {
       .order("created_at", { ascending: false }));
   }
   if (error) throw error;
-  return data.map((account) => ({ ...account, status: usersTableHasStatus ? account.status : "pending" }));
+  return data.map((account) => ({
+    ...account,
+    status: account.status === "pending" || account.role === "pending" ? "pending" : account.status
+  }));
 }
 
 async function findAccountByUsername(username) {
@@ -507,7 +510,9 @@ function bindActions(session) {
           ? { role: roleSelect.value, status: "active", updated_at: new Date().toISOString() }
           : { role: roleSelect.value })
         .eq("id", button.dataset.accountId);
-      accountUpdate = accountUpdate.eq(usersTableHasStatus ? "status" : "role", "pending");
+      accountUpdate = usersTableHasStatus
+        ? accountUpdate.or("status.eq.pending,role.eq.pending")
+        : accountUpdate.eq("role", "pending");
       const { data, error } = await accountUpdate
         .select("id")
         .maybeSingle();
