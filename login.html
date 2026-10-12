@@ -15,20 +15,45 @@
       <p class="intro-copy">منظومة موحدة لإدارة التصنيع والطلبات والإنتاج، بخطوات دقيقة وجودة تليق بعملائنا.</p>
     </section>
     <section class="login-card">
-      <div class="card-heading"><h2>تسجيل الدخول</h2><p>اختر نوع الحساب وأدخل اسم المستخدم للمتابعة.</p></div>
-      <form id="login-form" class="form-stack">
-        <label for="role">نوع الحساب</label>
-        <select id="role" name="role" required>
-          <option value="admin">مدير النظام</option>
-          <option value="cutting">مشرف القص</option>
-          <option value="sewing">مشرف الخياطة</option>
-          <option value="worker">عامل / عاملة</option>
-          <option value="client">عميل</option>
-        </select>
-        <label for="username">اسم المستخدم أو العميل</label>
-        <input id="username" name="username" autocomplete="username" placeholder="اسم المستخدم" required>
-        <button class="button button-primary button-full" type="submit">دخول إلى حسابي <span aria-hidden="true">←</span></button>
-      </form>
+      <div class="card-heading"><h2>الدخول إلى النظام</h2><p>أدخل اسم المستخدم وكلمة المرور، أو أرسل طلب إنشاء حساب.</p></div>
+      <div class="auth-tabs" id="auth-tabs">
+        <button class="auth-tab active" type="button" data-auth-mode="login">تسجيل الدخول</button>
+        <button class="auth-tab" type="button" data-auth-mode="signup">إنشاء حساب</button>
+      </div>
+      <p id="auth-message" class="auth-message" role="status" aria-live="polite" hidden></p>
+      <section id="setup-panel" hidden>
+        <div class="card-heading"><h3>إعداد حساب الأدمن الرئيسي</h3><p>أنشئ الحساب الأول باسم المستخدم ZERO0 وحدد كلمة مروره.</p></div>
+        <form id="setup-form" class="form-stack">
+          <label for="setup-full-name">الاسم الكامل</label>
+          <input id="setup-full-name" name="fullName" autocomplete="name" required>
+          <label for="setup-username">اسم المستخدم</label>
+          <input id="setup-username" name="username" readonly>
+          <label for="setup-password">كلمة المرور</label>
+          <input id="setup-password" name="password" type="password" autocomplete="new-password" minlength="8" required>
+          <button class="button button-primary button-full" type="submit">إنشاء حساب الأدمن</button>
+        </form>
+      </section>
+      <section id="login-panel">
+        <form id="login-form" class="form-stack">
+          <label for="login-username">اسم المستخدم أو الهاتف</label>
+          <input id="login-username" name="username" autocomplete="username" required>
+          <label for="login-password">كلمة المرور</label>
+          <input id="login-password" name="password" type="password" autocomplete="current-password" required>
+          <button class="button button-primary button-full" type="submit">دخول إلى حسابي <span aria-hidden="true">←</span></button>
+        </form>
+      </section>
+      <section id="signup-panel" hidden>
+        <form id="signup-form" class="form-stack">
+          <label for="signup-full-name">الاسم الكامل</label>
+          <input id="signup-full-name" name="fullName" autocomplete="name" required>
+          <label for="signup-username">اسم المستخدم أو الهاتف</label>
+          <input id="signup-username" name="username" autocomplete="username" required>
+          <label for="signup-password">كلمة المرور</label>
+          <input id="signup-password" name="password" type="password" autocomplete="new-password" minlength="8" required>
+          <button class="button button-primary button-full" type="submit">إرسال طلب إنشاء الحساب</button>
+        </form>
+      </section>
+      <p class="auth-security-note">تُحفظ كلمات المرور بصيغة مشفّرة محليًا. يلزم خادم آمن لتأمين الحسابات والصلاحيات في بيئة الإنتاج.</p>
     </section>
   </main>
   <script src="js/auth.js"></script>
