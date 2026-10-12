@@ -24,13 +24,6 @@ function usernameEmail(username) {
   return `${username.trim().toLocaleLowerCase()}@${AUTH_EMAIL_DOMAIN}`;
 }
 
-function authEmailForLogin(identifier) {
-  const normalized = identifier.trim().toLocaleLowerCase();
-  if (normalized === ADMIN_USERNAME.toLocaleLowerCase()) return ADMIN_AUTH_EMAIL;
-  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) return normalized;
-  return usernameEmail(normalized);
-}
-
 function usernameForAuthUser(user) {
   const metadataUsername = user.user_metadata?.username;
   if (metadataUsername) return metadataUsername;
@@ -58,11 +51,19 @@ function showAuthMode(mode) {
 async function findAccountByUsername(username) {
   const current = await supabaseClient
     .from("users")
-    .select("id, name, username, role, status")
+    .select("id, name, username, email, role, status")
     .ilike("username", username)
     .maybeSingle();
   if (!current.error) return current.data;
   if (current.error.code !== "42703") throw current.error;
+
+  const withoutEmail = await supabaseClient
+    .from("users")
+    .select("id, name, username, role, status")
+    .ilike("username", username)
+    .maybeSingle();
+  if (!withoutEmail.error) return withoutEmail.data;
+  if (withoutEmail.error.code !== "42703") throw withoutEmail.error;
 
   const legacy = await supabaseClient
     .from("users")
@@ -74,6 +75,25 @@ async function findAccountByUsername(username) {
     ...legacy.data,
     status: legacy.data.role === "pending" ? "pending" : "active"
   } : null;
+}
+
+async function loginEmailFor(identifier) {
+  const normalized = identifier.trim();
+  if (normalized.includes("@")) return normalized.toLocaleLowerCase();
+
+  try {
+    const account = await findAccountByUsername(normalized);
+    if (account?.email) return account.email.toLocaleLowerCase();
+  } catch (error) {
+    if (!["42703", "42501", "PGRST301"].includes(error.code)) {
+      console.error("تعذر البحث عن البريد المرتبط باسم المستخدم.", error);
+      throw new Error("تعذر البحث عن الحساب في users. تحقق من اتصال Supabase وصلاحيات القراءة.");
+    }
+  }
+
+  return normalized.toLocaleLowerCase() === ADMIN_USERNAME.toLocaleLowerCase()
+    ? ADMIN_AUTH_EMAIL
+    : usernameEmail(normalized);
 }
 
 async function routeAuthenticatedUser(user) {
@@ -128,7 +148,11 @@ signupForm.addEventListener("submit", async (event) => {
     showAuthMode("login");
     showMessage("تم إرسال طلب الحساب إلى الأدمن للمراجعة والتفعيل.", false);
   } catch (error) {
-    showMessage(`تعذر إنشاء الحساب: ${error.message}`);
+    if (error.status >= 500 || /database error saving new user/i.test(error.message)) {
+      showMessage("تعذر إنشاء الحساب لأن قاعدة البيانات لم تُنشئ ملف المستخدم. شغّل supabase/schema.sql بعد ترحيل جدول users القديم وإزالة عمود كلمة المرور النصية.");
+    } else {
+      showMessage(`تعذر إنشاء الحساب: ${error.message}`);
+    }
   } finally {
     signupButton.disabled = false;
   }
@@ -146,8 +170,9 @@ loginForm.addEventListener("submit", async (event) => {
   }
 
   try {
+    const email = await loginEmailFor(username);
     const { data, error } = await supabaseClient.auth.signInWithPassword({
-      email: authEmailForLogin(username),
+      email,
       password
     });
     if (error) {
@@ -188,15 +213,6 @@ async function initializeAuth() {
   });
   if (!response.ok) throw new Error(`تعذر قراءة إعدادات المصادقة (${response.status}).`);
   const settings = await response.json();
-  const { error: schemaError } = await supabaseClient
-    .from("users")
-    .select("id, name, username, role, status")
-    .limit(0);
-  if (schemaError) {
-    signupDisabledReason = "قاعدة البيانات لا تزال على مخطط users القديم. يلزم ربط الحسابات بـSupabase Auth وإضافة status قبل التسجيل الآمن.";
-    showMessage(signupDisabledReason);
-    return;
-  }
   if (!settings.mailer_autoconfirm) {
     signupDisabledReason = "إنشاء الحساب باسم المستخدم فقط يتطلب تعطيل Confirm email من Supabase Auth؛ لا يمكن إرسال رمز التأكيد إلى اسم مستخدم.";
     showMessage(signupDisabledReason);
