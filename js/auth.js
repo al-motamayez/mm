@@ -1,16 +1,6 @@
-const ACCOUNTS_KEY = "factory-local-accounts-v2";
+const supabaseClient = window.supabaseClient;
 const SESSION_KEY = "factory-session";
-const PASSWORD_ITERATIONS = 310000;
-const ADMIN_SALT = "al-motamayez-default-admin-v1";
-const ADMIN_PASSWORD_HASH = "caad0c2163b93a3a9e25ebd02159897f36448f96e0c1f9cf9e4fc3cf1c4ebf33";
-
-const roleNames = {
-  admin: "مدير النظام",
-  cutting: "مشرف القص",
-  sewing: "مشرف الخياطة",
-  worker: "عامل / عاملة",
-  client: "عميل"
-};
+const AUTH_EMAIL_DOMAIN = "accounts.al-motamayez.invalid";
 
 const roleDestinations = {
   admin: "dashboards/admin.html",
@@ -25,50 +15,12 @@ const signupForm = document.querySelector("#signup-form");
 const message = document.querySelector("#auth-message");
 const loginPanel = document.querySelector("#login-panel");
 const signupPanel = document.querySelector("#signup-panel");
+const signupButton = signupForm.querySelector('[type="submit"]');
+signupButton.disabled = true;
+let signupDisabledReason = "";
 
-function normalizedUsername(value) {
-  return value.trim().toLocaleLowerCase();
-}
-
-function createId() {
-  return crypto.randomUUID();
-}
-
-async function hashPassword(password, salt, iterations = PASSWORD_ITERATIONS) {
-  if (!crypto.subtle) throw new Error("المتصفح لا يدعم حماية كلمات المرور.");
-  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
-  const digest = await crypto.subtle.deriveBits({
-    name: "PBKDF2",
-    salt: new TextEncoder().encode(salt),
-    iterations,
-    hash: "SHA-256"
-  }, key, 256);
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-function readAccounts() {
-  const accounts = JSON.parse(localStorage.getItem(ACCOUNTS_KEY) || "[]");
-  if (!Array.isArray(accounts)) throw new Error("بيانات الحسابات المحلية غير صالحة.");
-  if (!accounts.some((account) => account.usernameKey === "zero0")) {
-    accounts.unshift({
-      id: "default-admin-zero0",
-      full_name: "ZERO0",
-      username: "ZERO0",
-      usernameKey: "zero0",
-      passwordSalt: ADMIN_SALT,
-      passwordHash: ADMIN_PASSWORD_HASH,
-      passwordIterations: PASSWORD_ITERATIONS,
-      role: "admin",
-      status: "active",
-      created_at: "2026-01-01T00:00:00.000Z"
-    });
-    localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(accounts));
-  }
-  return accounts;
-}
-
-function saveAccounts(accounts) {
-  localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(accounts));
+function usernameEmail(username) {
+  return `${username.trim().toLocaleLowerCase()}@${AUTH_EMAIL_DOMAIN}`;
 }
 
 function showMessage(text, isError = true) {
@@ -84,18 +36,32 @@ function showAuthMode(mode) {
   document.querySelectorAll("[data-auth-mode]").forEach((button) => {
     button.classList.toggle("active", button.dataset.authMode === mode);
   });
-  showMessage("");
+  showMessage(mode === "signup" ? signupDisabledReason : "");
 }
 
-function startSession(account) {
+async function routeAuthenticatedUser(user) {
+  const { data, error } = await supabaseClient
+    .from("profiles")
+    .select("id, full_name, username, role, status")
+    .eq("id", user.id)
+    .single();
+  if (error) throw error;
+  if (data.status !== "active" || !roleDestinations[data.role]) {
+    const { error: signOutError } = await supabaseClient.auth.signOut();
+    if (signOutError) throw signOutError;
+    sessionStorage.removeItem(SESSION_KEY);
+    showAuthMode("login");
+    showMessage("حسابك معلق إلى أن يفعّله الأدمن ويحدد دورك.");
+    return;
+  }
+
   sessionStorage.setItem(SESSION_KEY, JSON.stringify({
-    accountId: account.id,
-    role: account.role,
-    username: account.username,
-    fullName: account.full_name,
-    roleName: roleNames[account.role]
+    accountId: data.id,
+    role: data.role,
+    username: data.username,
+    fullName: data.full_name
   }));
-  window.location.assign(roleDestinations[account.role]);
+  window.location.assign(roleDestinations[data.role]);
 }
 
 document.querySelectorAll("[data-auth-mode]").forEach((button) => {
@@ -107,63 +73,84 @@ signupForm.addEventListener("submit", async (event) => {
   const fullName = signupForm.elements.fullName.value.trim();
   const username = signupForm.elements.username.value.trim();
   const password = signupForm.elements.password.value;
-  if (!fullName || !username || !password.trim() || password.length < 8) {
-    showMessage("أكمل البيانات واختر كلمة مرور من 8 أحرف على الأقل.");
+  if (!fullName || !/^[a-zA-Z0-9._-]{3,30}$/.test(username) || !password.trim() || password.length < 8) {
+    showMessage("أدخل الاسم، واسم مستخدم من 3 إلى 30 حرفًا (إنجليزي أو أرقام أو . _ -)، وكلمة مرور من 8 أحرف على الأقل.");
     return;
   }
+  if (username.toLocaleLowerCase() === "zero0") {
+    showMessage("اسم المستخدم ZERO0 محجوز لحساب الإدارة.");
+    return;
+  }
+
+  signupButton.disabled = true;
   try {
-    const accounts = readAccounts();
-    const usernameKey = normalizedUsername(username);
-    if (accounts.some((account) => account.usernameKey === usernameKey)) {
-      showMessage("اسم المستخدم مسجل بالفعل.");
+    const { data, error } = await supabaseClient.auth.signUp({
+      email: usernameEmail(username),
+      password,
+      options: { data: { full_name: fullName, username } }
+    });
+    if (error) throw error;
+    if (!data.user) throw new Error("لم يُنشأ الحساب. حاول مرة أخرى.");
+    if (!data.session) {
+      showMessage("الحساب أُنشئ، لكن إعداد المشروع يطلب تأكيد بريد غير متاح لحساب اسم المستخدم. عطّل Confirm email في Supabase Auth ثم أعد المحاولة بحساب آخر.", true);
       return;
     }
-    const passwordSalt = createId();
-    accounts.push({
-      id: createId(),
-      full_name: fullName,
-      username,
-      usernameKey,
-      passwordSalt,
-      passwordHash: await hashPassword(password, passwordSalt),
-      passwordIterations: PASSWORD_ITERATIONS,
-      role: null,
-      status: "pending",
-      created_at: new Date().toISOString()
-    });
-    saveAccounts(accounts);
+    const { error: signOutError } = await supabaseClient.auth.signOut();
+    if (signOutError) throw signOutError;
     signupForm.reset();
     showAuthMode("login");
     showMessage("تم إرسال طلب الحساب إلى الأدمن للمراجعة والتفعيل.", false);
   } catch (error) {
     showMessage(`تعذر إنشاء الحساب: ${error.message}`);
+  } finally {
+    signupButton.disabled = false;
   }
 });
 
 loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  const usernameKey = normalizedUsername(loginForm.elements.username.value);
+  const username = loginForm.elements.username.value.trim();
   const password = loginForm.elements.password.value;
+  if (!/^[a-zA-Z0-9._-]{3,30}$/.test(username) || !password) {
+    showMessage("أدخل اسم مستخدم صالحًا وكلمة المرور.");
+    return;
+  }
+
   try {
-    const accounts = readAccounts();
-    const account = accounts.find((item) => item.usernameKey === usernameKey);
-    if (!account || await hashPassword(password, account.passwordSalt, account.passwordIterations) !== account.passwordHash) {
+    const { data, error } = await supabaseClient.auth.signInWithPassword({
+      email: usernameEmail(username),
+      password
+    });
+    if (error) {
       showMessage("اسم المستخدم أو كلمة المرور غير صحيحة.");
       return;
     }
-    if (account.status !== "active" || !roleDestinations[account.role]) {
-      showMessage("حسابك معلق إلى أن يفعّله الأدمن ويحدد دورك.");
+    if (!data.user) {
+      showMessage("تعذر التحقق من بيانات الحساب.");
       return;
     }
-    startSession(account);
-  } catch (error) {
-    showMessage(`تعذر تسجيل الدخول: ${error.message}`);
+    await routeAuthenticatedUser(data.user);
+  } catch (profileError) {
+    showMessage(`تعذر إتمام تسجيل الدخول: ${profileError.message}`);
   }
 });
 
-try {
-  readAccounts();
+async function initializeAuth() {
   showAuthMode("login");
-} catch (error) {
-  showMessage(`تعذر تحميل الحسابات: ${error.message}`);
+  const response = await fetch(`${supabaseClient.supabaseUrl}/auth/v1/settings`, {
+    headers: { apikey: supabaseClient.supabaseKey }
+  });
+  if (!response.ok) throw new Error(`تعذر قراءة إعدادات المصادقة (${response.status}).`);
+  const settings = await response.json();
+  if (!settings.mailer_autoconfirm) {
+    signupDisabledReason = "إنشاء الحساب باسم المستخدم فقط يتطلب تعطيل Confirm email من Supabase Auth؛ لا يمكن إرسال رمز التأكيد إلى اسم مستخدم.";
+    showMessage(signupDisabledReason);
+    return;
+  }
+  signupButton.disabled = false;
 }
+
+initializeAuth().catch((error) => {
+  signupDisabledReason = `تعذر تهيئة الاتصال بـ Supabase: ${error.message}`;
+  showMessage(signupDisabledReason);
+});

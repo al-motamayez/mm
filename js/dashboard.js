@@ -1,6 +1,6 @@
 const STORAGE_KEY = "factory-data-v1";
 const SESSION_KEY = "factory-session";
-const ACCOUNTS_KEY = "factory-local-accounts-v2";
+const supabaseClient = window.supabaseClient;
 const rolePages = {
   admin: "admin.html",
   cutting: "cutting.html",
@@ -34,11 +34,24 @@ const roleInfo = {
   client: { title: "بوابة العميل", description: "موديلاتك وطلباتك والمدفوعات الخاصة بحسابك.", icon: "◇" }
 };
 
-function readSession() {
-  const savedSession = JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null");
-  const accounts = JSON.parse(localStorage.getItem(ACCOUNTS_KEY) || "[]");
-  const account = Array.isArray(accounts) ? accounts.find((item) => item.id === savedSession?.accountId) : null;
-  if (!savedSession || !account || account.status !== "active" || account.role !== savedSession.role || !rolePages[account.role]) {
+async function readSession() {
+  const { data: { user }, error: authError } = await supabaseClient.auth.getUser();
+  if (authError) throw authError;
+  if (!user) {
+    sessionStorage.removeItem(SESSION_KEY);
+    window.location.replace("../login.html");
+    return null;
+  }
+  const { data: account, error } = await supabaseClient
+    .from("profiles")
+    .select("id, full_name, username, role, status")
+    .eq("id", user.id)
+    .single();
+  if (error) throw error;
+  if (account.status !== "active" || !rolePages[account.role]) {
+    const { error: signOutError } = await supabaseClient.auth.signOut();
+    if (signOutError) throw signOutError;
+    sessionStorage.removeItem(SESSION_KEY);
     window.location.replace("../login.html");
     return null;
   }
@@ -76,11 +89,15 @@ function saveData(data) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
 }
 
-function readAccounts(session) {
+async function readAccounts(session) {
   if (session.role !== "admin") return [];
-  const accounts = JSON.parse(localStorage.getItem(ACCOUNTS_KEY) || "[]");
-  if (!Array.isArray(accounts)) throw new Error("بيانات الحسابات المحلية غير صالحة.");
-  return accounts.sort((left, right) => new Date(right.created_at) - new Date(left.created_at));
+  const { data, error } = await supabaseClient
+    .from("profiles")
+    .select("id, full_name, username, status, created_at")
+    .eq("status", "pending")
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return data;
 }
 
 function escapeHtml(value) {
@@ -193,7 +210,12 @@ async function refreshDashboard(session, data = readData()) {
 }
 
 function bindActions(session) {
-  document.querySelector("#logout").addEventListener("click", () => {
+  document.querySelector("#logout").addEventListener("click", async () => {
+    const { error } = await supabaseClient.auth.signOut();
+    if (error) {
+      window.alert(`تعذر تسجيل الخروج: ${error.message}`);
+      return;
+    }
     sessionStorage.removeItem(SESSION_KEY);
     window.location.replace("../login.html");
   });
@@ -271,23 +293,31 @@ function bindActions(session) {
     saveData(data);
     refreshDashboard(session, data).catch((error) => window.alert(`تعذر تحديث اللوحة: ${error.message}`));
   });
-  document.querySelectorAll("[data-action]").forEach((button) => button.addEventListener("click", () => {
+  document.querySelectorAll("[data-action]").forEach((button) => button.addEventListener("click", async () => {
     if (button.dataset.action === "activate-account") {
       const roleSelect = [...document.querySelectorAll("[data-pending-role]")].find((item) => item.dataset.pendingRole === button.dataset.accountId);
       if (!roleSelect || !["client", "worker", "cutting", "sewing"].includes(roleSelect.value)) {
         window.alert("اختر دورًا صالحًا قبل تفعيل الحساب.");
         return;
       }
-      const accounts = JSON.parse(localStorage.getItem(ACCOUNTS_KEY) || "[]");
-      const account = accounts.find((item) => item.id === button.dataset.accountId && item.status === "pending");
-      if (!account) {
+      button.disabled = true;
+      const { data, error } = await supabaseClient
+        .from("profiles")
+        .update({ role: roleSelect.value, status: "active", updated_at: new Date().toISOString() })
+        .eq("id", button.dataset.accountId)
+        .eq("status", "pending")
+        .select("id")
+        .maybeSingle();
+      if (error) {
+        button.disabled = false;
+        window.alert(`تعذر تفعيل الحساب: ${error.message}`);
+        return;
+      }
+      if (!data) {
+        button.disabled = false;
         window.alert("لم يعد طلب الحساب معلقًا. حدّث الصفحة وحاول مجددًا.");
         return;
       }
-      account.role = roleSelect.value;
-      account.status = "active";
-      account.activated_at = new Date().toISOString();
-      localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(accounts));
       refreshDashboard(session).catch((error) => window.alert(`تعذر تحديث اللوحة: ${error.message}`));
       return;
     }
@@ -302,7 +332,7 @@ function bindActions(session) {
 }
 
 async function initializeDashboard() {
-  const session = readSession();
+  const session = await readSession();
   if (session) await refreshDashboard(session);
 }
 
