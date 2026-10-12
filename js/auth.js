@@ -39,29 +39,47 @@ function showAuthMode(mode) {
   showMessage(mode === "signup" ? signupDisabledReason : "");
 }
 
-async function routeAuthenticatedUser(user) {
-  const { data, error } = await supabaseClient
+async function findAccountByUsername(username) {
+  const current = await supabaseClient
     .from("users")
     .select("id, name, username, role, status")
-    .eq("id", user.id)
-    .single();
-  if (error) throw error;
-  if (data.status !== "active" || !roleDestinations[data.role]) {
+    .ilike("username", username)
+    .maybeSingle();
+  if (!current.error) return current.data;
+  if (current.error.code !== "42703") throw current.error;
+
+  const legacy = await supabaseClient
+    .from("users")
+    .select("id, name, username, role, created_at")
+    .ilike("username", username)
+    .maybeSingle();
+  if (legacy.error) throw legacy.error;
+  return legacy.data ? {
+    ...legacy.data,
+    status: legacy.data.role === "pending" ? "pending" : "active"
+  } : null;
+}
+
+async function routeAuthenticatedUser(user) {
+  const username = user.user_metadata?.username || user.email?.split("@")[0];
+  if (!username) throw new Error("تعذر تحديد اسم المستخدم لحساب المصادقة.");
+  const account = await findAccountByUsername(username);
+  if (!account || account.status !== "active" || !roleDestinations[account.role]) {
     const { error: signOutError } = await supabaseClient.auth.signOut();
     if (signOutError) throw signOutError;
     sessionStorage.removeItem(SESSION_KEY);
     showAuthMode("login");
-    showMessage("حسابك معلق إلى أن يفعّله الأدمن ويحدد دورك.");
+    showMessage(account ? "حسابك معلق إلى أن يفعّله الأدمن ويحدد دورك." : "بيانات حسابك غير موجودة في جدول users. تواصل مع الإدارة.");
     return;
   }
 
   sessionStorage.setItem(SESSION_KEY, JSON.stringify({
-    accountId: data.id,
-    role: data.role,
-    username: data.username,
-    fullName: data.name
+    accountId: user.id,
+    role: account.role,
+    username: account.username,
+    fullName: account.name
   }));
-  window.location.assign(roleDestinations[data.role]);
+  window.location.assign(roleDestinations[account.role]);
 }
 
 document.querySelectorAll("[data-auth-mode]").forEach((button) => {
@@ -142,6 +160,15 @@ async function initializeAuth() {
   });
   if (!response.ok) throw new Error(`تعذر قراءة إعدادات المصادقة (${response.status}).`);
   const settings = await response.json();
+  const { error: schemaError } = await supabaseClient
+    .from("users")
+    .select("id, name, username, role, status")
+    .limit(0);
+  if (schemaError) {
+    signupDisabledReason = "قاعدة البيانات لا تزال على مخطط users القديم. يلزم ربط الحسابات بـSupabase Auth وإضافة status قبل التسجيل الآمن.";
+    showMessage(signupDisabledReason);
+    return;
+  }
   if (!settings.mailer_autoconfirm) {
     signupDisabledReason = "إنشاء الحساب باسم المستخدم فقط يتطلب تعطيل Confirm email من Supabase Auth؛ لا يمكن إرسال رمز التأكيد إلى اسم مستخدم.";
     showMessage(signupDisabledReason);

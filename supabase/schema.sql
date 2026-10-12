@@ -113,9 +113,9 @@ create policy "Admins activate accounts"
   using (public.is_active_factory_admin())
   with check (public.is_active_factory_admin());
 
-revoke all on public.users from anon;
+revoke all on public.users from anon, authenticated;
 grant select, update on public.users to authenticated;
-revoke all on function public.is_active_factory_admin() from public, anon;
+revoke all on function public.is_active_factory_admin() from public, anon, authenticated;
 grant execute on function public.is_active_factory_admin() to authenticated;
 revoke all on function public.create_pending_factory_user() from public, anon, authenticated;
 
@@ -228,12 +228,27 @@ create trigger create_factory_order_stages
   after insert on public.orders
   for each row execute procedure public.create_factory_order_stages();
 
+insert into public.production_stages (order_id, stage_name, target_quantity)
+select factory_order.id, stage.stage_name, factory_order.quantity
+from public.orders as factory_order
+cross join (values ('cutting'), ('sewing'), ('finishing'), ('delivery')) as stage(stage_name)
+where not exists (
+  select 1
+  from public.production_stages as existing_stage
+  where existing_stage.order_id = factory_order.id
+    and existing_stage.stage_name = stage.stage_name
+);
+
+drop function if exists public.save_factory_order(uuid, text, text, integer, text);
+
 create or replace function public.save_factory_order(
   requested_order_id uuid,
   requested_model_name text,
   requested_client_name text,
   requested_quantity integer,
-  requested_status text
+  requested_status text,
+  requested_fabric text,
+  requested_line_name text
 )
 returns uuid
 language plpgsql
@@ -262,6 +277,10 @@ begin
     and status = 'active'
   limit 1;
 
+  if matched_client_id is null then
+    raise exception 'No active client account matches the supplied username.';
+  end if;
+
   if requested_order_id is null then
     insert into public.models (name)
     values (trim(requested_model_name))
@@ -270,6 +289,10 @@ begin
     insert into public.orders (client_id, client_name, model_id, quantity, status)
     values (matched_client_id, trim(requested_client_name), saved_model_id, requested_quantity, trim(requested_status))
     returning id into saved_order_id;
+    update public.production_stages
+    set fabric = nullif(trim(requested_fabric), ''),
+        line_name = nullif(trim(requested_line_name), '')
+    where order_id = saved_order_id;
   else
     select model_id into saved_model_id
     from public.orders
@@ -282,7 +305,9 @@ begin
     set name = trim(requested_model_name)
     where id = saved_model_id;
     update public.production_stages
-    set target_quantity = requested_quantity
+    set target_quantity = requested_quantity,
+        fabric = nullif(trim(requested_fabric), ''),
+        line_name = nullif(trim(requested_line_name), '')
     where order_id = requested_order_id;
     update public.orders
     set client_id = matched_client_id,
@@ -294,6 +319,25 @@ begin
   end if;
 
   return saved_order_id;
+end;
+$$;
+
+do $$
+declare
+  existing_policy record;
+begin
+  for existing_policy in
+    select tablename, policyname
+    from pg_policies
+    where schemaname = 'public'
+      and tablename in ('users', 'models', 'orders', 'production_stages')
+  loop
+    execute format(
+      'drop policy if exists %I on public.%I',
+      existing_policy.policyname,
+      existing_policy.tablename
+    );
+  end loop;
 end;
 $$;
 
@@ -373,14 +417,16 @@ create policy "Supervisors update their production stages"
     or (stage_name = 'sewing' and public.has_active_factory_role(array['sewing']))
   );
 
-revoke all on public.models, public.orders, public.production_stages from anon;
-grant select, insert, update, delete on public.models, public.orders to authenticated;
-grant select, update on public.production_stages to authenticated;
-revoke all on function public.has_active_factory_role(text[]) from public, anon;
+revoke all on public.models, public.orders, public.production_stages from anon, authenticated;
+grant select, delete on public.models to authenticated;
+grant select, delete on public.orders to authenticated;
+grant select on public.production_stages to authenticated;
+grant update (completed_quantity, status, updated_at) on public.production_stages to authenticated;
+revoke all on function public.has_active_factory_role(text[]) from public, anon, authenticated;
 grant execute on function public.has_active_factory_role(text[]) to authenticated;
 revoke all on function public.create_factory_order_stages() from public, anon, authenticated;
-revoke all on function public.save_factory_order(uuid, text, text, integer, text) from public, anon;
-grant execute on function public.save_factory_order(uuid, text, text, integer, text) to authenticated;
+revoke all on function public.save_factory_order(uuid, text, text, integer, text, text, text) from public, anon, authenticated;
+grant execute on function public.save_factory_order(uuid, text, text, integer, text, text, text) to authenticated;
 
 -- Run this schema first, then create this Auth user with email auto-confirmed,
 -- and run this schema again to promote the generated account row:
@@ -395,3 +441,5 @@ set name = 'ZERO0',
 from auth.users as auth_user
 where account.id = auth_user.id
   and lower(auth_user.email) = 'zero0@accounts.al-motamayez.invalid';
+
+notify pgrst, 'reload schema';

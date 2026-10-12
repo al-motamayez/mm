@@ -2,6 +2,8 @@ const STORAGE_KEY = "factory-data-v1";
 const SESSION_KEY = "factory-session";
 const supabaseClient = window.supabaseClient;
 let dashboardData;
+let usersTableHasStatus = false;
+let localDataWarning = "";
 const rolePages = {
   admin: "admin.html",
   cutting: "cutting.html",
@@ -43,13 +45,10 @@ async function readSession() {
     window.location.replace("../login.html");
     return null;
   }
-  const { data: account, error } = await supabaseClient
-    .from("users")
-    .select("id, name, username, role, status")
-    .eq("id", user.id)
-    .single();
-  if (error) throw error;
-  if (account.status !== "active" || !rolePages[account.role]) {
+  const username = user.user_metadata?.username || user.email?.split("@")[0];
+  if (!username) throw new Error("تعذر تحديد اسم المستخدم لحساب المصادقة.");
+  const account = await findAccountByUsername(username);
+  if (!account || account.status !== "active" || !rolePages[account.role]) {
     const { error: signOutError } = await supabaseClient.auth.signOut();
     if (signOutError) throw signOutError;
     sessionStorage.removeItem(SESSION_KEY);
@@ -63,7 +62,8 @@ async function readSession() {
     return null;
   }
   const session = {
-    accountId: account.id,
+    accountId: user.id,
+    accountRowId: account.id,
     role: account.role,
     username: account.username,
     fullName: account.name,
@@ -74,14 +74,30 @@ async function readSession() {
 }
 
 function readLocalData() {
-  const saved = localStorage.getItem(STORAGE_KEY);
-  if (!saved) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(seedData));
+  let saved;
+  try {
+    saved = localStorage.getItem(STORAGE_KEY);
+  } catch (error) {
+    if (error.name !== "SecurityError") throw error;
+    localDataWarning = "تعذر الوصول إلى بيانات المتصفح الإضافية؛ ستظل بيانات الحسابات والطلبات والموديلات المعروضة من Supabase.";
     return structuredClone(seedData);
   }
-  const data = JSON.parse(saved);
+  if (!saved) {
+    return structuredClone(seedData);
+  }
+  let data;
+  try {
+    data = JSON.parse(saved);
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
+    localDataWarning = "بيانات المتصفح الإضافية تالفة؛ تم تحميل الحسابات والطلبات والموديلات من Supabase دونها.";
+    return structuredClone(seedData);
+  }
   for (const key of Object.keys(seedData)) {
-    if (!Array.isArray(data[key])) throw new Error(`بيانات المصنع غير صالحة: ${key}`);
+    if (!Array.isArray(data[key])) {
+      localDataWarning = "تنسيق بعض البيانات المحلية الإضافية غير صالح؛ تم تحميل بيانات Supabase دونها.";
+      return structuredClone(seedData);
+    }
   }
   return data;
 }
@@ -92,67 +108,168 @@ function saveLocalData(data) {
 
 async function readDashboardData(session) {
   const data = readLocalData();
-  const { data: orders, error: ordersError } = await supabaseClient
+  let ordersQuery = supabaseClient
     .from("orders")
-    .select("id, client_id, client_name, model_id, quantity, status, created_at, models(name)")
+    .select("id, client_id, client_name, model_id, quantity, status, created_at")
     .order("created_at", { ascending: false });
+  if (session.role === "client") ordersQuery = ordersQuery.eq("client_id", session.accountId);
+  let { data: orders, error: ordersError } = await ordersQuery;
+  if (ordersError?.code === "42703") {
+    ordersQuery = supabaseClient
+      .from("orders")
+      .select("id, client_name, model_id, quantity, status, created_at")
+      .order("created_at", { ascending: false });
+    if (session.role === "client") ordersQuery = ordersQuery.eq("client_name", session.username);
+    ({ data: orders, error: ordersError } = await ordersQuery);
+  }
   if (ordersError) throw ordersError;
 
-  const { data: stages, error: stagesError } = await supabaseClient
-    .from("production_stages")
-    .select("id, order_id, stage_name, worker_name, fabric, line_name, target_quantity, completed_quantity, status, updated_at, orders(id, client_id, client_name, quantity, status, models(name))");
-  if (stagesError) throw stagesError;
+  let stages = [];
+  if (session.role !== "client" || orders.length) {
+    let stagesQuery = supabaseClient
+      .from("production_stages")
+      .select("id, order_id, stage_name, worker_name, fabric, line_name, target_quantity, completed_quantity, status, updated_at");
+    if (session.role === "client") {
+      stagesQuery = stagesQuery.in("order_id", orders.map((order) => order.id));
+    } else if (session.role === "cutting") {
+      stagesQuery = stagesQuery.in("stage_name", ["cutting", "قص", "تقطيع"]);
+    } else if (session.role === "sewing") {
+      stagesQuery = stagesQuery.in("stage_name", ["sewing", "خياطة"]);
+    }
+    let { data, error } = await stagesQuery;
+    if (error?.code === "42703") {
+      stagesQuery = supabaseClient
+        .from("production_stages")
+        .select("id, order_id, stage_name, worker_name, status, updated_at");
+      if (session.role === "client") {
+        stagesQuery = stagesQuery.in("order_id", orders.map((order) => order.id));
+      } else if (session.role === "cutting") {
+        stagesQuery = stagesQuery.in("stage_name", ["cutting", "قص", "تقطيع"]);
+      } else if (session.role === "sewing") {
+        stagesQuery = stagesQuery.in("stage_name", ["sewing", "خياطة"]);
+      }
+      ({ data, error } = await stagesQuery);
+    }
+    if (error) throw error;
+    stages = data;
+  }
 
-  data.models = orders.map((order) => ({
-    id: order.id,
-    model_id: order.model_id,
-    name: order.models?.name || "موديل محذوف",
-    client: order.client_name,
-    client_id: order.client_id,
-    quantity: order.quantity,
-    status: order.status,
-    created_at: order.created_at
-  }));
+  const { data: models, error: modelsError } = await supabaseClient
+    .from("models")
+    .select("id, name, description, price, created_at")
+    .order("created_at", { ascending: false });
+  if (modelsError) throw modelsError;
+
+  const modelNames = new Map(models.map((model) => [model.id, model.name]));
+  const ordersById = new Map(orders.map((order) => [order.id, order]));
+  data.models = orders.map((order) => {
+    const orderStages = stages.filter((stage) => stage.order_id === order.id);
+    const cuttingStage = orderStages.find((stage) => ["cutting", "قص", "تقطيع"].includes(stage.stage_name));
+    const sewingStage = orderStages.find((stage) => ["sewing", "خياطة"].includes(stage.stage_name));
+    return {
+      id: order.id,
+      model_id: order.model_id,
+      name: modelNames.get(order.model_id) || "موديل محذوف",
+      client: order.client_name,
+      quantity: order.quantity,
+      status: order.status,
+      fabric: cuttingStage?.fabric || "",
+      line: sewingStage?.line_name || "",
+      created_at: order.created_at
+    };
+  });
+  data.catalogModels = models;
+  const stageNames = new Map([
+    ["cutting", "cutting"], ["قص", "cutting"], ["تقطيع", "cutting"],
+    ["sewing", "sewing"], ["خياطة", "sewing"]
+  ]);
   data.cutting = stages
-    .filter((stage) => stage.stage_name === "cutting")
+    .filter((stage) => stageNames.get(stage.stage_name) === "cutting")
     .map((stage) => ({
       id: stage.id,
       order: stage.order_id,
-      model: stage.orders?.models?.name || "موديل محذوف",
+      model: modelNames.get(ordersById.get(stage.order_id)?.model_id) || "موديل محذوف",
       fabric: stage.fabric || "—",
-      total: stage.target_quantity || stage.orders?.quantity || 0,
-      cut: stage.completed_quantity,
+      total: stage.target_quantity || ordersById.get(stage.order_id)?.quantity || 0,
+      cut: stage.completed_quantity || 0,
       status: stage.status
     }));
   data.sewing = stages
-    .filter((stage) => stage.stage_name === "sewing")
+    .filter((stage) => stageNames.get(stage.stage_name) === "sewing")
     .map((stage) => ({
       id: stage.id,
       line: stage.line_name || "—",
-      model: stage.orders?.models?.name || "موديل محذوف",
+      model: modelNames.get(ordersById.get(stage.order_id)?.model_id) || "موديل محذوف",
       supervisor: stage.worker_name || "—",
-      target: stage.target_quantity || stage.orders?.quantity || 0,
-      produced: stage.completed_quantity,
+      target: stage.target_quantity || ordersById.get(stage.order_id)?.quantity || 0,
+      produced: stage.completed_quantity || 0,
       status: stage.status
     }));
 
-  if (session.role === "client") {
-    data.models = data.models.filter((order) => order.client_id === session.accountId);
-  }
+  data.users = session.role === "admin" ? await readUsers() : [];
   return data;
+}
+
+async function readUsers() {
+  let { data, error } = await supabaseClient
+    .from("users")
+    .select("id, name, username, role, status, created_at")
+    .order("created_at", { ascending: false });
+  usersTableHasStatus = !error;
+  if (error?.code === "42703") {
+    ({ data, error } = await supabaseClient
+      .from("users")
+      .select("id, name, username, role, created_at")
+      .order("created_at", { ascending: false }));
+  }
+  if (error) throw error;
+  return data
+    .filter((account) => usersTableHasStatus ? account.status === "active" : account.role !== "pending")
+    .map((account) => ({
+      id: account.id,
+      name: account.name,
+      username: account.username,
+      role: roleNames[account.role] || account.role,
+      department: account.username
+    }));
 }
 
 async function readAccounts(session) {
   if (session.role !== "admin") return [];
-  const { data, error } = await supabaseClient
+  let { data, error } = await supabaseClient
     .from("users")
-    .select("id, name, username, status, created_at")
+    .select("id, name, username, role, status, created_at")
     .eq("status", "pending")
     .order("created_at", { ascending: false });
+  usersTableHasStatus = !error;
+  if (error?.code === "42703") {
+    ({ data, error } = await supabaseClient
+      .from("users")
+      .select("id, name, username, role, created_at")
+      .eq("role", "pending")
+      .order("created_at", { ascending: false }));
+  }
+  if (error) throw error;
+  return data.map((account) => ({ ...account, status: usersTableHasStatus ? account.status : "pending" }));
+}
+
+async function findAccountByUsername(username) {
+  let { data, error } = await supabaseClient
+    .from("users")
+    .select("id, name, username, role, status")
+    .ilike("username", username)
+    .maybeSingle();
+  if (error?.code === "42703") {
+    ({ data, error } = await supabaseClient
+      .from("users")
+      .select("id, name, username, role, created_at")
+      .ilike("username", username)
+      .maybeSingle());
+    if (!error && data) data.status = data.role === "pending" ? "pending" : "active";
+  }
   if (error) throw error;
   return data;
 }
-
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (character) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
@@ -191,12 +308,16 @@ function modelRows(models, withActions = false) {
   return models.map((item, index) => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.client)}</td><td>${new Intl.NumberFormat("ar-EG").format(item.quantity)}</td><td>${statusTag(item.status)}</td>${withActions ? `<td><button class="row-action" type="button" data-edit-kind="models" data-index="${index}">تعديل</button> <button class="row-action" type="button" data-action="delete-model" data-index="${index}">حذف</button></td>` : ""}</tr>`);
 }
 
+function catalogModelRows(models) {
+  return models.map((model) => `<tr><td>${escapeHtml(model.name)}</td><td>${escapeHtml(model.description || "—")}</td><td>${money(Number(model.price || 0))}</td></tr>`);
+}
+
 function paymentRows(payments) {
   return payments.map((item, index) => `<tr><td>${escapeHtml(item.client)}</td><td>${money(item.amount)}</td><td>${escapeHtml(item.date)}</td><td>${escapeHtml(item.method)}</td><td><button class="row-action" type="button" data-edit-kind="payments" data-index="${index}">تعديل</button></td></tr>`);
 }
 
 function userRows(users) {
-  return users.map((item, index) => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.role)}</td><td>${escapeHtml(item.department)}</td><td><button class="row-action" type="button" data-edit-kind="users" data-index="${index}">تعديل</button></td></tr>`);
+  return users.map((item) => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.username)}</td><td>${escapeHtml(item.role)}</td><td>${escapeHtml(item.department)}</td></tr>`);
 }
 
 function pendingAccountRows(accounts) {
@@ -209,28 +330,23 @@ function adminView(data, accounts) {
   const paid = data.payments.reduce((sum, item) => sum + Number(item.amount), 0);
   return `
     <div class="stats-grid">${stat("الموديلات الحالية", data.models.length, "ضمن أوامر التشغيل")}${stat("إجمالي القطع", new Intl.NumberFormat("ar-EG").format(totalUnits), "قطعة")}${stat("المدفوعات المسجلة", money(paid), "إجمالي الدفعات")}${stat("طلبات الانصراف", data.leaves.filter((item) => item.status === "قيد المراجعة").length, "بانتظار المراجعة")}</div>
-    ${panel("إضافة موديل / أمر تشغيل", `<div class="panel-body"><form id="model-form" class="form-grid"><input type="hidden" name="editIndex" value=""><div class="field"><label for="model-name">اسم الموديل</label><input id="model-name" name="name" required></div><div class="field"><label for="model-client">اسم مستخدم العميل</label><input id="model-client" name="client" autocomplete="off" required><small>استخدم اسم حساب العميل لربط الطلب بلوحته.</small></div><div class="field"><label for="model-quantity">الكمية</label><input id="model-quantity" name="quantity" type="number" min="1" required></div><div class="field"><label for="model-status">الحالة</label><select id="model-status" name="status"><option>قيد الإنتاج</option><option>مرحلة الخياطة</option><option>جاهز للتسليم</option></select></div><button class="button button-primary" type="submit">إضافة الموديل</button><button class="row-action" type="button" data-cancel-edit hidden>إلغاء التعديل</button></form></div>`)}
+    ${panel("إضافة موديل / أمر تشغيل", `<div class="panel-body"><form id="model-form" class="form-grid"><input type="hidden" name="editIndex" value=""><div class="field"><label for="model-name">اسم الموديل</label><input id="model-name" name="name" required></div><div class="field"><label for="model-client">اسم مستخدم العميل</label><input id="model-client" name="client" autocomplete="off" required><small>استخدم اسم حساب العميل لربط الطلب بلوحته.</small></div><div class="field"><label for="model-quantity">الكمية</label><input id="model-quantity" name="quantity" type="number" min="1" required></div><div class="field"><label for="model-status">الحالة</label><select id="model-status" name="status"><option>جديد</option><option>قيد التنفيذ</option><option>تم الانتهاء</option></select></div><button class="button button-primary" type="submit">إضافة الموديل</button><button class="row-action" type="button" data-cancel-edit hidden>إلغاء التعديل</button></form></div>`)}
     ${panel("الموديلات وأوامر التشغيل", table(["الموديل","العميل","الكمية","الحالة","إجراء"], modelRows(data.models, true)))}
-    <div class="stats-grid">${panel("تسجيل دفعة مالية", `<div class="panel-body"><form id="payment-form" class="form-grid"><input type="hidden" name="editIndex" value=""><div class="field"><label for="payment-client">العميل</label><input id="payment-client" name="client" required></div><div class="field"><label for="payment-amount">المبلغ (ج.م)</label><input id="payment-amount" name="amount" type="number" min="1" required></div><div class="field"><label for="payment-method">طريقة الدفع</label><select id="payment-method" name="method"><option>تحويل بنكي</option><option>نقدي</option><option>محفظة إلكترونية</option></select></div><button class="button button-primary" type="submit">تسجيل الدفعة</button><button class="row-action" type="button" data-cancel-edit hidden>إلغاء التعديل</button></form></div>`, "تُضاف الدفعات إلى سجل العميل")}${panel("إضافة مستخدم", `<div class="panel-body"><form id="user-form" class="form-grid"><input type="hidden" name="editIndex" value=""><div class="field"><label for="user-name">اسم المستخدم</label><input id="user-name" name="name" required></div><div class="field"><label for="user-role">الدور الوظيفي</label><select id="user-role" name="role"><option>عامل قص</option><option>عاملة خياطة</option><option>مشرف القص</option><option>مشرف الخياطة</option><option>مدير النظام</option></select></div><div class="field"><label for="user-department">القسم</label><input id="user-department" name="department" required></div><button class="button button-primary" type="submit">إضافة المستخدم</button><button class="row-action" type="button" data-cancel-edit hidden>إلغاء التعديل</button></form></div>`, "إنشاء سجل موظف جديد")}</div>
+    <div class="stats-grid">${panel("تسجيل دفعة مالية", `<div class="panel-body"><form id="payment-form" class="form-grid"><input type="hidden" name="editIndex" value=""><div class="field"><label for="payment-client">العميل</label><input id="payment-client" name="client" required></div><div class="field"><label for="payment-amount">المبلغ (ج.م)</label><input id="payment-amount" name="amount" type="number" min="1" required></div><div class="field"><label for="payment-method">طريقة الدفع</label><select id="payment-method" name="method"><option>تحويل بنكي</option><option>نقدي</option><option>محفظة إلكترونية</option></select></div><button class="button button-primary" type="submit">تسجيل الدفعة</button><button class="row-action" type="button" data-cancel-edit hidden>إلغاء التعديل</button></form></div>`, "تُضاف الدفعات إلى سجل العميل")}</div>
+    ${panel("كتالوج الموديلات", table(["الموديل","الوصف","السعر"], catalogModelRows(data.catalogModels)))}
     ${panel("سجل الدفعات المالية", table(["العميل","المبلغ","التاريخ","طريقة الدفع","إجراء"], paymentRows(data.payments)))}
     ${panel("طلبات وأذونات الانصراف", table(["الموظف","التاريخ","السبب","الحالة","إجراء"], data.leaves.map((item, index) => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.date)}</td><td>${escapeHtml(item.reason)}</td><td>${statusTag(item.status)}</td><td>${item.status === "قيد المراجعة" ? `<button class="row-action" data-action="approve-leave" data-index="${index}" type="button">اعتماد</button> <button class="row-action" data-action="deny-leave" data-index="${index}" type="button">رفض</button>` : "—"}</td></tr>`)))}
     ${panel("طلبات الحسابات الجديدة", table(["الاسم الكامل","اسم المستخدم","تاريخ الطلب","تحديد الدور","إجراء"], pendingAccountRows(accounts)))}
-    ${panel("المستخدمون", table(["الاسم","الدور الوظيفي","القسم","إجراء"], userRows(data.users)))}`;
+    ${panel("المستخدمون", table(["الاسم","اسم المستخدم","الدور الوظيفي","اسم الحساب"], userRows(data.users)))}`;
 }
 
 function cuttingView(data) {
   const total = data.cutting.reduce((sum, item) => sum + Number(item.total), 0);
-  const cut = data.cutting.reduce((sum, item) => sum + Number(item.cut), 0);
-  return `<div class="stats-grid">${stat("أوامر القص", data.cutting.length, "أوامر نشطة")}${stat("إجمالي المطلوب", new Intl.NumberFormat("ar-EG").format(total), "قطعة")}${stat("تم قصه", new Intl.NumberFormat("ar-EG").format(cut), "قطعة")}${stat("المتبقي", new Intl.NumberFormat("ar-EG").format(total - cut), "قطعة للقص")}</div>${panel("أوامر مرحلة القص", table(["رقم الأمر","الموديل","القماش","الكمية المطلوبة","المقصوص","التقدم","تحديث القص"], data.cutting.map((item) => {
-    const progress = item.total ? Math.min(100, Math.round(item.cut / item.total * 100)) : 0;
-    return `<tr><td>${escapeHtml(item.order)}</td><td>${escapeHtml(item.model)}</td><td>${escapeHtml(item.fabric)}</td><td>${new Intl.NumberFormat("ar-EG").format(item.total)}</td><td>${new Intl.NumberFormat("ar-EG").format(item.cut)}</td><td><div class="progress-track"><div class="progress-bar" style="width:${progress}%"></div></div></td><td><input type="number" min="0" max="${item.total}" value="${item.cut}" aria-label="الكمية المقصوصة" data-stage-completed="${escapeHtml(item.id)}" data-stage-target="${item.total}"><button class="row-action" type="button" data-action="update-stage" data-stage-id="${escapeHtml(item.id)}">حفظ</button></td></tr>`;
-  })))}`;
+  return `<div class="stats-grid">${stat("أوامر القص", data.cutting.length, "أوامر نشطة")}${stat("إجمالي المطلوب", new Intl.NumberFormat("ar-EG").format(total), "قطعة")}${stat("حالة المرحلة", data.cutting.filter((item) => item.status === "مكتمل").length, "مراحل مكتملة")}${stat("متبقي", data.cutting.filter((item) => item.status !== "مكتمل").length, "مراحل قيد العمل")}</div>${panel("أوامر مرحلة القص", table(["رقم الأمر","الموديل","الكمية المطلوبة","الحالة"], data.cutting.map((item) => `<tr><td>${escapeHtml(item.order.slice(0, 8))}</td><td>${escapeHtml(item.model)}</td><td>${new Intl.NumberFormat("ar-EG").format(item.total)}</td><td>${statusTag(item.status)}</td></tr>`)))}`;
 }
 
 function sewingView(data) {
-  const target = data.sewing.reduce((sum, item) => sum + Number(item.target), 0);
-  const produced = data.sewing.reduce((sum, item) => sum + Number(item.produced), 0);
-  return `<div class="stats-grid">${stat("مراحل الخياطة", data.sewing.length, "مراحل نشطة")}${stat("إجمالي المستهدف", new Intl.NumberFormat("ar-EG").format(target), "قطعة")}${stat("الإنتاج المنفذ", new Intl.NumberFormat("ar-EG").format(produced), "قطعة منفذة")}${stat("نسبة الإنجاز", `${target ? Math.round(produced / target * 100) : 0}%`, "من المستهدف")}</div>${panel("متابعة إنتاج الخياطة", table(["الخط","الموديل","المشرف","الكمية المستهدفة","الإنتاج المنفذ","الحالة","تحديث الإنتاج"], data.sewing.map((item) => `<tr><td>${escapeHtml(item.line)}</td><td>${escapeHtml(item.model)}</td><td>${escapeHtml(item.supervisor)}</td><td>${new Intl.NumberFormat("ar-EG").format(item.target)}</td><td>${new Intl.NumberFormat("ar-EG").format(item.produced)}</td><td>${statusTag(item.status)}</td><td><input type="number" min="0" max="${item.target}" value="${item.produced}" aria-label="الإنتاج المنفذ" data-stage-completed="${escapeHtml(item.id)}" data-stage-target="${item.target}"><button class="row-action" type="button" data-action="update-stage" data-stage-id="${escapeHtml(item.id)}">حفظ</button></td></tr>`)))}`;
+  return `<div class="stats-grid">${stat("مراحل الخياطة", data.sewing.length, "مراحل نشطة")}${stat("مراحل مكتملة", data.sewing.filter((item) => item.status === "مكتمل").length, "حسب حالة المرحلة")}${stat("مراحل قيد العمل", data.sewing.filter((item) => item.status !== "مكتمل").length, "حسب حالة المرحلة")}</div>${panel("متابعة مراحل الخياطة", table(["رقم الأمر","الموديل","العامل","الحالة"], data.sewing.map((item) => `<tr><td>${escapeHtml(item.order.slice(0, 8))}</td><td>${escapeHtml(item.model)}</td><td>${escapeHtml(item.supervisor)}</td><td>${statusTag(item.status)}</td></tr>`)))}`;
 }
 
 function workerView(data, session) {
@@ -252,6 +368,7 @@ function render(session, data, accounts) {
   document.querySelector("#app").innerHTML = `
     <aside class="sidebar"><a class="brand" href="../login.html"><img class="brand-logo" src="../assets/al-motamayez-logo.png" alt="AL-MOTAMAYEZ logo"><span class="brand-copy"><strong>AL-MOTAMAYEZ</strong></span></a><nav>${navigation}</nav><div class="sidebar-bottom"><div class="profile-chip"><span class="avatar">${username.slice(0, 1)}</span><div class="profile-details"><strong>${username}</strong><span>${escapeHtml(session.roleName)}</span></div></div><button class="logout-button" id="logout" type="button">↪ تسجيل الخروج</button></div></aside>
     <main class="main-content"><header class="topbar"><div class="topbar-title"><h1>${info.title}</h1><p>${info.description}</p></div><div class="header-brand"><img class="header-logo" src="../assets/al-motamayez-logo.png" alt="AL-MOTAMAYEZ logo"><div class="brand-copy"><strong>AL-MOTAMAYEZ</strong></div><span class="date-label">${new Intl.DateTimeFormat("ar-EG", { dateStyle: "full" }).format(new Date())}</span></div></header>
+    ${localDataWarning ? `<div class="notice">${escapeHtml(localDataWarning)}</div>` : ""}
     ${session.role === "admin" ? adminView(data, accounts) : session.role === "cutting" ? cuttingView(data) : session.role === "sewing" ? sewingView(data) : session.role === "worker" ? workerView(data, session) : clientView(data, session)}
     <footer class="page-footer">AL-MOTAMAYEZ</footer></main>`;
   bindActions(session);
@@ -275,47 +392,10 @@ function bindActions(session) {
     window.location.replace("../login.html");
   });
 
-  document.querySelectorAll('[data-action="update-stage"]').forEach((button) => button.addEventListener("click", async () => {
-    const input = document.querySelector(`[data-stage-completed="${CSS.escape(button.dataset.stageId)}"]`);
-    const completed = Number(input?.value);
-    const target = Number(input?.dataset.stageTarget);
-    if (!input || !Number.isInteger(completed) || completed < 0 || completed > target) {
-      window.alert("أدخل كمية صحيحة لا تتجاوز الكمية المطلوبة.");
-      return;
-    }
-    button.disabled = true;
-    const { data, error } = await supabaseClient
-      .from("production_stages")
-      .update({
-        completed_quantity: completed,
-        status: completed >= target ? "مكتمل" : completed > 0 ? "جار العمل" : "معلق",
-        updated_at: new Date().toISOString()
-      })
-      .eq("id", button.dataset.stageId)
-      .select("id")
-      .maybeSingle();
-    if (error) {
-      button.disabled = false;
-      window.alert(`تعذر تحديث مرحلة الإنتاج: ${error.message}`);
-      return;
-    }
-    if (!data) {
-      button.disabled = false;
-      window.alert("لم يُسمح بتحديث هذه المرحلة أو لم تعد موجودة.");
-      return;
-    }
-    try {
-      await refreshDashboard(session);
-    } catch (refreshError) {
-      window.alert(`تم حفظ التحديث لكن تعذر إعادة تحميل اللوحة: ${refreshError.message}`);
-    }
-  }));
-
   if (session.role !== "admin") return;
   const editConfigs = {
-    models: { form: "model-form", collection: "models", fields: ["name", "client", "quantity", "status"] },
-    payments: { form: "payment-form", collection: "payments", fields: ["client", "amount", "method"] },
-    users: { form: "user-form", collection: "users", fields: ["name", "role", "department"] }
+    models: { form: "model-form", collection: "models", fields: ["name", "client", "quantity", "fabric", "line", "status"] },
+    payments: { form: "payment-form", collection: "payments", fields: ["client", "amount", "method"] }
   };
   document.querySelectorAll("[data-edit-kind]").forEach((button) => button.addEventListener("click", () => {
     const config = editConfigs[button.dataset.editKind];
@@ -349,9 +429,16 @@ function bindActions(session) {
         requested_model_name: String(formData.get("name")).trim(),
         requested_client_name: String(formData.get("client")).trim(),
         requested_quantity: Number(formData.get("quantity")),
-        requested_status: String(formData.get("status"))
+        requested_status: String(formData.get("status")),
+        requested_fabric: String(formData.get("fabric")).trim(),
+        requested_line_name: String(formData.get("line")).trim()
       });
-      if (error) throw error;
+      if (error) {
+        if (error.code === "PGRST202") {
+          throw new Error("دالة حفظ أوامر التشغيل غير منشأة في Supabase. شغّل supabase/schema.sql من SQL Editor.");
+        }
+        throw error;
+      }
       form.reset();
       form.elements.editIndex.value = "";
       form.querySelector('[data-cancel-edit]').hidden = true;
@@ -381,21 +468,6 @@ function bindActions(session) {
     saveLocalData(data);
     refreshDashboard(session).catch((error) => window.alert(`تعذر تحديث اللوحة: ${error.message}`));
   });
-  document.querySelector("#user-form").addEventListener("submit", (event) => {
-    event.preventDefault();
-    const formData = new FormData(event.currentTarget);
-    const data = readLocalData();
-    const user = {
-      name: String(formData.get("name")).trim(),
-      role: String(formData.get("role")),
-      department: String(formData.get("department")).trim()
-    };
-    const editIndex = String(formData.get("editIndex"));
-    if (editIndex) data.users[Number(editIndex)] = user;
-    else data.users.unshift(user);
-    saveLocalData(data);
-    refreshDashboard(session).catch((error) => window.alert(`تعذر تحديث اللوحة: ${error.message}`));
-  });
   document.querySelectorAll("[data-action]").forEach((button) => button.addEventListener("click", async () => {
     if (button.dataset.action === "activate-account") {
       const roleSelect = [...document.querySelectorAll("[data-pending-role]")].find((item) => item.dataset.pendingRole === button.dataset.accountId);
@@ -404,11 +476,14 @@ function bindActions(session) {
         return;
       }
       button.disabled = true;
-      const { data, error } = await supabaseClient
+      let accountUpdate = supabaseClient
         .from("users")
-        .update({ role: roleSelect.value, status: "active", updated_at: new Date().toISOString() })
-        .eq("id", button.dataset.accountId)
-        .eq("status", "pending")
+        .update(usersTableHasStatus
+          ? { role: roleSelect.value, status: "active", updated_at: new Date().toISOString() }
+          : { role: roleSelect.value })
+        .eq("id", button.dataset.accountId);
+      accountUpdate = accountUpdate.eq(usersTableHasStatus ? "status" : "role", "pending");
+      const { data, error } = await accountUpdate
         .select("id")
         .maybeSingle();
       if (error) {
