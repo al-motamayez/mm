@@ -26,14 +26,15 @@ button { cursor: pointer; }
 .brand { display: inline-flex; align-items: center; gap: 10px; width: fit-content; font-size: 18px; font-weight: 700; }
 .brand-mark { display: grid; width: 36px; height: 36px; place-items: center; border-radius: 12px; color: var(--green-dark); background: #d9e9df; }
 .brand-light .brand-mark { color: var(--green-dark); background: #d9e9df; }
+.brand-logo { display: block; width: 48px; height: 48px; border-radius: 8px; object-fit: contain; background: #fff; }
+.brand-copy { display: grid; gap: 3px; }
+.brand-copy strong { font-size: 15px; }
+.brand-copy span { color: var(--muted); font-size: 11px; font-weight: 500; }
+.brand-light .brand-copy span { color: #c6d8d0; }
 .eyebrow { margin: 0 0 10px; color: #568675; font-size: 13px; font-weight: 600; }
 .login-intro .eyebrow { margin-top: 72px; color: #a9d4c2; }
 .login-intro h1 { margin: 0; font-size: clamp(40px, 5.5vw, 70px); line-height: 1.35; }
 .intro-copy { max-width: 480px; color: #c6d8d0; line-height: 2; }
-.intro-stats { display: flex; gap: 54px; margin-top: 42px; }
-.intro-stats div { display: grid; gap: 2px; }
-.intro-stats strong { font-size: 23px; }
-.intro-stats span { color: #adc4ba; font-size: 13px; }
 .login-card { align-self: center; width: min(440px, calc(100% - 48px)); margin: 48px auto; padding: 38px; border: 1px solid var(--line); border-radius: 20px; background: var(--white); box-shadow: 0 18px 55px #1c302d0b; }
 .card-heading h2 { margin: 0 0 8px; font-size: 26px; }
 .card-heading > p:last-child { margin: 0 0 26px; color: var(--muted); font-size: 14px; }
@@ -46,7 +47,6 @@ input:focus, select:focus { border-color: #5e9b83; box-shadow: 0 0 0 3px #5e9b83
 .button-primary { color: #fff; background: var(--green); }
 .button-primary:hover { background: #174a40; }
 .button-full { width: 100%; min-height: 48px; }
-.demo-notice { margin: 22px 0 0; padding: 12px 14px; border-radius: 9px; color: #745a24; background: #fbf5e7; font-size: 12px; line-height: 1.8; }
 
 .app-shell { display: grid; min-height: 100vh; grid-template-columns: 250px minmax(0, 1fr); }
 .sidebar { display: flex; flex-direction: column; gap: 30px; padding: 27px 20px; border-left: 1px solid var(--line); background: var(--white); }
@@ -66,6 +66,10 @@ input:focus, select:focus { border-color: #5e9b83; box-shadow: 0 0 0 3px #5e9b83
 .logout-button:hover { color: #a13939; background: #fff4f2; }
 .main-content { width: min(1280px, 100%); margin: 0 auto; padding: 35px clamp(20px, 4vw, 56px) 55px; }
 .topbar { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 28px; }
+.header-brand { display: flex; align-items: center; gap: 10px; }
+.header-logo { width: 54px; height: 54px; border: 1px solid var(--line); border-radius: 10px; object-fit: contain; background: #fff; }
+.topbar-title h1 { margin: 0 0 5px; font-size: clamp(22px, 3vw, 29px); }
+.topbar-title p { margin: 0; color: var(--muted); font-size: 13px; }
 .topbar h1 { margin: 0 0 5px; font-size: clamp(22px, 3vw, 29px); }
 .topbar p { margin: 0; color: var(--muted); font-size: 13px; }
 .date-label { color: #65736d; font-size: 12px; }
@@ -111,7 +115,6 @@ td { padding: 13px 16px; border-top: 1px solid #f0f2ef; color: #44514b; font-siz
   .login-intro .eyebrow { margin-top: 35px; }
   .login-intro h1 { font-size: 42px; }
   .intro-copy { font-size: 13px; }
-  .intro-stats { margin-top: 18px; }
   .login-card { width: min(440px, calc(100% - 32px)); margin: 24px auto; padding: 26px 22px; }
   .app-shell { display: block; }
   .sidebar { gap: 15px; padding: 15px 18px; border-left: 0; border-bottom: 1px solid var(--line); }
@@ -121,5 +124,9 @@ td { padding: 13px 16px; border-top: 1px solid #f0f2ef; color: #44514b; font-siz
   .main-content { padding-top: 24px; }
   .form-grid { grid-template-columns: 1fr 1fr; }
   .form-grid .wide { grid-column: span 2; }
+  .header-brand { gap: 7px; }
+  .header-logo { width: 42px; height: 42px; }
+  .header-brand .brand-copy strong { font-size: 12px; }
+  .header-brand .brand-copy span { font-size: 10px; }
   .date-label { display: none; }
 }

@@ -4,20 +4,19 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#153c35">
-  <title>تسجيل الدخول | خيط وإبرة</title>
+  <title>تسجيل الدخول | قسم المتميز - مصنع خيط وإبرة</title>
   <link rel="stylesheet" href="css/styles.css">
 </head>
 <body class="login-page">
   <main class="login-layout">
     <section class="login-intro">
-      <a class="brand brand-light" href="login.html"><span class="brand-mark">خ</span><span>خيط وإبرة</span></a>
-      <p class="eyebrow">إدارة المصنع في مكان واحد</p>
-      <h1>من أول قصّة<br>لآخر غرزة.</h1>
-      <p class="intro-copy">تابع أوامر التشغيل والإنتاج والطلبات والمدفوعات من لوحة واحدة، مصممة لفريق مصنعك.</p>
-      <div class="intro-stats"><div><strong>05</strong><span>مراحل عمل</span></div><div><strong>01</strong><span>منصة موحدة</span></div></div>
+      <a class="brand brand-light" href="login.html"><img class="brand-logo" src="assets/al-motamayez-logo.jpeg" alt="شعار قسم المتميز"><span class="brand-copy"><strong>قسم المتميز</strong><span>مصنع خيط وإبرة</span></span></a>
+      <p class="eyebrow">مصنع خيط وإبرة</p>
+      <h1>قسم المتميز</h1>
+      <p class="intro-copy">منظومة موحدة لإدارة التصنيع والطلبات والإنتاج، بخطوات دقيقة وجودة تليق بعملائنا.</p>
     </section>
     <section class="login-card">
-      <div class="card-heading"><p class="eyebrow">مرحبًا بعودتك</p><h2>تسجيل الدخول</h2><p>اختر نوع الحساب وأدخل اسم المستخدم للمتابعة.</p></div>
+      <div class="card-heading"><p class="eyebrow">قسم المتميز - مصنع خيط وإبرة</p><h2>تسجيل الدخول</h2><p>اختر نوع الحساب وأدخل اسم المستخدم للمتابعة.</p></div>
       <form id="login-form" class="form-stack">
         <label for="role">نوع الحساب</label>
         <select id="role" name="role" required>
@@ -28,11 +27,9 @@
           <option value="client">عميل</option>
         </select>
         <label for="username">اسم المستخدم أو العميل</label>
-        <input id="username" name="username" autocomplete="username" placeholder="مثال: أحمد محمد" required>
-        <p class="field-hint" id="account-hint">للتجربة: اكتب أي اسم.</p>
+        <input id="username" name="username" autocomplete="username" placeholder="اسم المستخدم" required>
         <button class="button button-primary button-full" type="submit">دخول إلى حسابي <span aria-hidden="true">←</span></button>
       </form>
-      <p class="demo-notice"><strong>نسخة تجريبية:</strong> لا يوجد تحقق حقيقي من الهوية في هذا النموذج. لا تستخدم بيانات حقيقية أو حساسة.</p>
     </section>
   </main>
   <script src="js/auth.js"></script>

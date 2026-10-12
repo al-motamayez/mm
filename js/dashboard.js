@@ -1,4 +1,4 @@
-const STORAGE_KEY = "factory-demo-data";
+const STORAGE_KEY = "factory-data-v1";
 const SESSION_KEY = "factory-session";
 const rolePages = {
   admin: "admin.html",
@@ -9,34 +9,13 @@ const rolePages = {
 };
 
 const seedData = {
-  models: [
-    { name: "قميص كلاسيك", client: "شركة النور", quantity: 500, status: "قيد الإنتاج" },
-    { name: "بنطال يومي", client: "متجر الأمل", quantity: 320, status: "مرحلة الخياطة" },
-    { name: "جاكيت خفيف", client: "شركة النور", quantity: 180, status: "جاهز للتسليم" }
-  ],
-  payments: [
-    { client: "شركة النور", amount: 25000, date: "2026-10-02", method: "تحويل بنكي" },
-    { client: "متجر الأمل", amount: 12000, date: "2026-10-05", method: "نقدي" }
-  ],
-  users: [
-    { name: "أحمد محمد", role: "عامل قص", department: "القص" },
-    { name: "مريم علي", role: "عاملة خياطة", department: "الخياطة" }
-  ],
-  leaves: [
-    { name: "أحمد محمد", date: "2026-10-15", reason: "موعد طبي", status: "قيد المراجعة" }
-  ],
-  cutting: [
-    { model: "قميص كلاسيك", order: "ORD-1042", total: 500, cut: 320, fabric: "قطن مصري" },
-    { model: "بنطال يومي", order: "ORD-1043", total: 320, cut: 320, fabric: "دنيم خفيف" }
-  ],
-  sewing: [
-    { line: "خط الخياطة ١", model: "قميص كلاسيك", target: 120, produced: 96, supervisor: "مريم علي" },
-    { line: "خط الخياطة ٢", model: "بنطال يومي", target: 100, produced: 88, supervisor: "مريم علي" }
-  ],
-  tasks: [
-    { worker: "أحمد محمد", task: "تجهيز باترون القميص", model: "قميص كلاسيك", quantity: 80, due: "2026-10-13", status: "قيد التنفيذ" },
-    { worker: "مريم علي", task: "خياطة الجيب الأمامي", model: "بنطال يومي", quantity: 45, due: "2026-10-13", status: "جديدة" }
-  ]
+  models: [],
+  payments: [],
+  users: [],
+  leaves: [],
+  cutting: [],
+  sewing: [],
+  tasks: []
 };
 
 const roleInfo = {
@@ -169,11 +148,10 @@ function render(session, data) {
   const username = escapeHtml(session.username);
   const navigation = `<div><p class="side-label">القائمة الرئيسية</p><a class="nav-link active" href="#"><span class="nav-icon">${info.icon}</span>${info.title}</a></div>`;
   document.querySelector("#app").innerHTML = `
-    <aside class="sidebar"><a class="brand" href="../login.html"><span class="brand-mark">خ</span><span>خيط وإبرة</span></a><nav>${navigation}</nav><div class="sidebar-bottom"><div class="profile-chip"><span class="avatar">${username.slice(0, 1)}</span><div class="profile-details"><strong>${username}</strong><span>${escapeHtml(session.roleName)}</span></div></div><button class="logout-button" id="logout" type="button">↪ تسجيل الخروج</button></div></aside>
-    <main class="main-content"><header class="topbar"><div><h1>${info.title}</h1><p>${info.description}</p></div><span class="date-label">${new Intl.DateTimeFormat("ar-EG", { dateStyle: "full" }).format(new Date())}</span></header>
-    <div class="notice"><strong>بيئة تجريبية:</strong> تُحفظ البيانات في هذا المتصفح فقط. هذه الصفحات لا توفر تحققًا آمنًا من الهوية أو عزلًا فعليًا للبيانات.</div>
+    <aside class="sidebar"><a class="brand" href="../login.html"><img class="brand-logo" src="../assets/al-motamayez-logo.jpeg" alt="شعار قسم المتميز"><span class="brand-copy"><strong>قسم المتميز</strong><span>مصنع خيط وإبرة</span></span></a><nav>${navigation}</nav><div class="sidebar-bottom"><div class="profile-chip"><span class="avatar">${username.slice(0, 1)}</span><div class="profile-details"><strong>${username}</strong><span>${escapeHtml(session.roleName)}</span></div></div><button class="logout-button" id="logout" type="button">↪ تسجيل الخروج</button></div></aside>
+    <main class="main-content"><header class="topbar"><div class="topbar-title"><h1>${info.title}</h1><p>${info.description}</p></div><div class="header-brand"><img class="header-logo" src="../assets/al-motamayez-logo.jpeg" alt="شعار قسم المتميز"><div class="brand-copy"><strong>قسم المتميز</strong><span>مصنع خيط وإبرة</span></div><span class="date-label">${new Intl.DateTimeFormat("ar-EG", { dateStyle: "full" }).format(new Date())}</span></div></header>
     ${session.role === "admin" ? adminView(data) : session.role === "cutting" ? cuttingView(data) : session.role === "sewing" ? sewingView(data) : session.role === "worker" ? workerView(data, session) : clientView(data, session)}
-    <footer class="page-footer">خيط وإبرة · نظام إدارة المصنع · نموذج أولي</footer></main>`;
+    <footer class="page-footer">قسم المتميز - مصنع خيط وإبرة</footer></main>`;
   bindActions(session);
 }
 

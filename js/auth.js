@@ -17,20 +17,6 @@ const roleDestinations = {
 const form = document.querySelector("#login-form");
 const roleInput = document.querySelector("#role");
 const usernameInput = document.querySelector("#username");
-const accountHint = document.querySelector("#account-hint");
-
-const hints = {
-  admin: "للتجربة: اكتب أي اسم.",
-  cutting: "للتجربة: اكتب أي اسم.",
-  sewing: "للتجربة: اكتب أي اسم.",
-  worker: "لرؤية المهام التجريبية، اكتب: أحمد محمد أو مريم علي.",
-  client: "لعرض بيانات عميل تجريبية، اكتب: شركة النور أو متجر الأمل."
-};
-
-roleInput.addEventListener("change", () => {
-  accountHint.textContent = hints[roleInput.value];
-  usernameInput.placeholder = roleInput.value === "client" ? "مثال: شركة النور" : "مثال: أحمد محمد";
-});
 
 form.addEventListener("submit", (event) => {
   event.preventDefault();
