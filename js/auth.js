@@ -116,6 +116,12 @@ async function createPendingAccount(user, fullName, username) {
   }
 }
 
+function isExistingAuthAccountError(error) {
+  return error.code === "user_already_exists"
+    || error.code === "email_exists"
+    || /user already registered|email.*already.*(registered|exists)/i.test(error.message);
+}
+
 async function loginEmailFor(identifier) {
   const normalized = identifier.trim();
   if (normalized.includes("@")) return normalized.toLocaleLowerCase();
@@ -170,15 +176,24 @@ signupForm.addEventListener("submit", async (event) => {
 
   signupButton.disabled = true;
   try {
-    const { data, error } = await supabaseClient.auth.signUp({
-      email: usernameEmail(username),
+    const email = usernameEmail(username);
+    let { data, error } = await supabaseClient.auth.signUp({
+      email,
       password,
       options: { data: { full_name: fullName, username } }
     });
+    if (error && isExistingAuthAccountError(error)) {
+      const recovery = await supabaseClient.auth.signInWithPassword({ email, password });
+      if (recovery.error) {
+        throw new Error("الحساب موجود مسبقًا في المصادقة، لكن تعذر التحقق من كلمة المرور. سجّل الدخول بالحساب أو أعد تعيين كلمة مروره ثم حاول استعادة الطلب.");
+      }
+      data = recovery.data;
+      error = null;
+    }
     if (error) throw error;
     if (!data.user) throw new Error("لم يُنشأ الحساب. حاول مرة أخرى.");
     if (!data.session) {
-      showMessage("أنشأ Supabase Auth الحساب لكنه لم يُصدر جلسة؛ لا يمكن للمتصفح إضافة صف آمن إلى users حتى يكتمل تأكيد الحساب. عطّل Confirm email لحسابات اسم المستخدم أو أتمّ التأكيد ثم سجّل الدخول.");
+      showMessage("أنشأ Supabase Auth الحساب لكنه لم يُصدر جلسة؛ لا يمكن للمتصفح إضافة صف آمن إلى users حتى يكتمل تأكيد الحساب. أكّد الحساب أولاً ثم أعد المحاولة لاستكمال الطلب.");
       return;
     }
     try {
