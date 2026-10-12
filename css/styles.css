@@ -26,7 +26,8 @@ button { cursor: pointer; }
 .brand { display: inline-flex; align-items: center; gap: 10px; width: fit-content; font-size: 18px; font-weight: 700; }
 .brand-mark { display: grid; width: 36px; height: 36px; place-items: center; border-radius: 12px; color: var(--green-dark); background: #d9e9df; }
 .brand-light .brand-mark { color: var(--green-dark); background: #d9e9df; }
-.brand-logo { display: block; width: 48px; height: 48px; border-radius: 8px; object-fit: contain; background: #fff; }
+.brand-logo { display: block; width: 64px; height: 48px; object-fit: contain; }
+.brand-light .brand-logo { filter: brightness(0) invert(1); }
 .brand-copy { display: grid; gap: 3px; }
 .brand-copy strong { font-size: 15px; }
 .brand-copy span { color: var(--muted); font-size: 11px; font-weight: 500; }
@@ -67,7 +68,7 @@ input:focus, select:focus { border-color: #5e9b83; box-shadow: 0 0 0 3px #5e9b83
 .main-content { width: min(1280px, 100%); margin: 0 auto; padding: 35px clamp(20px, 4vw, 56px) 55px; }
 .topbar { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 28px; }
 .header-brand { display: flex; align-items: center; gap: 10px; }
-.header-logo { width: 54px; height: 54px; border: 1px solid var(--line); border-radius: 10px; object-fit: contain; background: #fff; }
+.header-logo { width: 64px; height: 54px; object-fit: contain; }
 .topbar-title h1 { margin: 0 0 5px; font-size: clamp(22px, 3vw, 29px); }
 .topbar-title p { margin: 0; color: var(--muted); font-size: 13px; }
 .topbar h1 { margin: 0 0 5px; font-size: clamp(22px, 3vw, 29px); }
@@ -125,7 +126,7 @@ td { padding: 13px 16px; border-top: 1px solid #f0f2ef; color: #44514b; font-siz
   .form-grid { grid-template-columns: 1fr 1fr; }
   .form-grid .wide { grid-column: span 2; }
   .header-brand { gap: 7px; }
-  .header-logo { width: 42px; height: 42px; }
+  .header-logo { width: 50px; height: 42px; }
   .header-brand .brand-copy strong { font-size: 12px; }
   .header-brand .brand-copy span { font-size: 10px; }
   .date-label { display: none; }
