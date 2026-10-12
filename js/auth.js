@@ -132,7 +132,19 @@ loginForm.addEventListener("submit", async (event) => {
       password
     });
     if (error) {
-      showMessage("اسم المستخدم أو كلمة المرور غير صحيحة.");
+      let account;
+      try {
+        account = await findAccountByUsername(username);
+      } catch (profileError) {
+        console.error("تعذر التحقق من وجود سجل الحساب في users بعد فشل المصادقة.", profileError);
+        showMessage("تعذر التحقق من سجل الحساب في قاعدة البيانات. تحقق من اتصال Supabase وصلاحيات قراءة جدول users.");
+        return;
+      }
+      if (account) {
+        showMessage("فشل تسجيل الدخول عبر Supabase Auth. وجود الحساب في جدول users وحده لا يكفي؛ يجب إنشاء حساب المصادقة بالبريد الداخلي المطابق لاسم المستخدم، وتعيين كلمة المرور له من لوحة Supabase. لا تُخزّن كلمة المرور أو تقارنها من جدول users.");
+      } else {
+        showMessage("اسم المستخدم أو كلمة المرور غير صحيحة.");
+      }
       return;
     }
     if (!data.user) {
