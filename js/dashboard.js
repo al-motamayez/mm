@@ -76,7 +76,8 @@ function emptyDashboardData() {
     leaves: [],
     cutting: [],
     sewing: [],
-    tasks: []
+    tasks: [],
+    clientNotes: []
   };
 }
 
@@ -120,6 +121,7 @@ async function readDashboardData(session) {
   data.payments = payments;
   data.leaves = leaves;
   data.tasks = tasks;
+  data.clientNotes = session.role === "admin" ? await readFlexibleRecords("client_notes") : [];
   let orders;
   let ordersError;
   if (session.role === "admin") {
@@ -191,6 +193,7 @@ async function readDashboardData(session) {
     const sewingStage = orderStages.find((stage) => ["sewing", "خياطة"].includes(stage.stage_name));
     return {
       id: order.id,
+      clientId: order.client_id,
       model_id: order.model_id,
       name: order.model_name || modelNames.get(order.model_id) || "موديل محذوف",
       client: order.client_name,
@@ -238,6 +241,16 @@ async function readDashboardData(session) {
     }));
 
   data.users = session.role === "admin" ? await readUsers() : [];
+  const usersById = new Map(data.users.map((user) => [user.id, user]));
+  data.payments = data.payments.map((payment) => {
+    const clientId = payment.clientId || payment._ownerId;
+    const client = usersById.get(clientId);
+    return {
+      ...payment,
+      clientId,
+      clientName: client?.name || payment.clientName || payment.client || "عميل غير معروف"
+    };
+  });
   return data;
 }
 
@@ -402,18 +415,38 @@ function catalogModelRows(models) {
   return models.map((model) => `<tr><td>${escapeHtml(model.name)}</td><td>${escapeHtml(model.description || "—")}</td><td>${money(Number(model.price || 0))}</td></tr>`);
 }
 
-function paymentRows(payments) {
-  return payments.map((item, index) => `<tr><td>${escapeHtml(item.client)}</td><td>${money(item.amount)}</td><td>${escapeHtml(item.date)}</td><td>${escapeHtml(item.method)}</td><td><button class="row-action" type="button" data-edit-kind="payments" data-index="${index}">تعديل</button></td></tr>`);
+function paymentRows(payments, withActions = false) {
+  return payments.map((item) => `<tr data-payment-client="${escapeHtml(item.clientId || "")}"><td>${escapeHtml(item.clientName || item.client || "—")}</td><td>${money(item.amount)}</td><td>${escapeHtml(item.date || "—")}</td><td>${escapeHtml(item.method || "—")}</td><td>${escapeHtml(item.reference || item.orderReference || "—")}</td><td>${escapeHtml(item.notes || "—")}</td>${withActions ? `<td><button class="row-action" type="button" data-edit-kind="payments" data-record-id="${escapeHtml(item._recordId)}">تعديل</button></td>` : ""}</tr>`);
 }
 
-function userRows(users) {
+function userRows(users, withActions = false) {
   return users.map((item) => {
     const suspended = item.status === "suspended";
     const actions = item.roleKey === "admin"
       ? "حساب إدارة محمي"
-      : `<button class="row-action" type="button" data-action="toggle-user-status" data-account-id="${escapeHtml(item.id)}" data-next-status="${suspended ? "active" : "suspended"}">${suspended ? "إعادة تفعيل" : "توقيف / تعطيل"}</button> <button class="row-action" type="button" data-action="delete-user" data-account-id="${escapeHtml(item.id)}">حذف الحساب</button>`;
+      : `${withActions && item.roleKey === "client" ? `<button class="row-action" type="button" data-edit-client="${escapeHtml(item.id)}">تعديل البيانات</button> ` : ""}<button class="row-action" type="button" data-action="toggle-user-status" data-account-id="${escapeHtml(item.id)}" data-next-status="${suspended ? "active" : "suspended"}">${suspended ? "إعادة تفعيل" : "توقيف / تعطيل"}</button> <button class="row-action" type="button" data-action="delete-user" data-account-id="${escapeHtml(item.id)}">حذف الحساب</button>`;
     return `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.username)}</td><td>${escapeHtml(item.phone || "—")}</td><td>${escapeHtml(item.role)}</td><td>${suspended ? "متوقف" : "نشط"}</td><td>${actions}</td></tr>`;
   });
+}
+
+function clientAccountCards(data) {
+  const clients = data.users.filter((user) => user.roleKey === "client");
+  if (!clients.length) return '<div class="empty-state">لا توجد حسابات عملاء مسجلة.</div>';
+  return `<div class="client-account-grid">${clients.map((client) => {
+    const orders = data.models.filter((order) => order.clientId === client.id);
+    const due = orders.reduce((sum, order) => sum + Number(order.totalAmount || 0), 0);
+    const orderPaid = orders.reduce((sum, order) => sum + Number(order.paidAmount || 0), 0);
+    const paid = data.payments.filter((payment) => payment.clientId === client.id)
+      .reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+    const remaining = Math.max(0, due - orderPaid - paid);
+    const note = data.clientNotes.find((item) => item._ownerId === client.id)?.notes || "";
+    return `<article class="client-account-card">
+      <header><div><h3>${escapeHtml(client.name)}</h3><p>${escapeHtml(client.username)} · ${escapeHtml(client.phone || "بدون هاتف")}</p></div>${statusTag(client.status === "suspended" ? "متوقف" : "نشط")}</header>
+      <div class="client-balance-grid"><div><span>إجمالي المطلوب</span><strong>${money(due)}</strong></div><div><span>المدفوع</span><strong>${money(orderPaid + paid)}</strong></div><div><span>الرصيد المتبقي</span><strong>${money(remaining)}</strong></div></div>
+      <p class="client-notes-preview">${escapeHtml(note || "لا توجد ملاحظات مسجلة.")}</p>
+      <button class="row-action" type="button" data-edit-client="${escapeHtml(client.id)}">تعديل بيانات العميل</button>
+    </article>`;
+  }).join("")}</div>`;
 }
 
 function pendingAccountRows(accounts) {
@@ -428,6 +461,18 @@ function adminView(data, accounts) {
   const clientOptions = activeClients.map((client) =>
     `<option value="${escapeHtml(client.username)}">${escapeHtml(client.name)} (${escapeHtml(client.username)})</option>`
   ).join("");
+  const paymentClientOptions = data.users
+    .filter((user) => user.roleKey === "client")
+    .map((client) => `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)} (${escapeHtml(client.username)})</option>`)
+    .join("");
+  const paymentFilterOptions = data.users
+    .filter((user) => user.roleKey === "client")
+    .map((client) => `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)}</option>`)
+    .join("");
+  const clientProfileOptions = data.users
+    .filter((user) => user.roleKey === "client")
+    .map((client) => `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)} (${escapeHtml(client.username)})</option>`)
+    .join("");
   return `
     <section id="dashboard" class="dashboard-section"><div class="stats-grid">${stat("الموديلات الحالية", data.models.length, "ضمن أوامر التشغيل")}${stat("إجمالي القطع", new Intl.NumberFormat("ar-EG").format(totalUnits), "قطعة")}${stat("المدفوعات المسجلة", money(paid), "إجمالي الدفعات")}${stat("طلبات الانصراف", data.leaves.filter((item) => item.status === "قيد المراجعة").length, "بانتظار المراجعة")}</div></section>
     <section id="orders" class="dashboard-section">
@@ -452,14 +497,19 @@ function adminView(data, accounts) {
         <div class="form-actions"><button class="button button-primary" type="submit">حفظ الطلبية</button><button class="row-action" type="button" data-cancel-edit hidden>إلغاء التعديل</button></div>
       </form></div>`, "الحقول المالية اختيارية وتحسب تلقائيًا", "order-form-panel")}
       ${panel("إدارة الموديلات والطلبيات", orderCards(data.models, true))}
+      ${panel("كتالوج الموديلات", table(["الموديل","الوصف","السعر"], catalogModelRows(data.catalogModels)))}
     </section>
     <section id="finance" class="dashboard-section">
-      ${panel("تسجيل دفعة مالية", `<div class="panel-body"><form id="payment-form" class="form-grid payment-form"><input type="hidden" name="editIndex" value=""><div class="field"><label for="payment-client">العميل</label><input id="payment-client" name="client" required></div><div class="field"><label for="payment-amount">المبلغ (ج.م)</label><input id="payment-amount" name="amount" type="number" min="1" required></div><div class="field"><label for="payment-method">طريقة الدفع</label><select id="payment-method" name="method"><option>تحويل بنكي</option><option>نقدي</option><option>محفظة إلكترونية</option></select></div><div class="form-actions"><button class="button button-primary" type="submit">تسجيل الدفعة</button><button class="row-action" type="button" data-cancel-edit hidden>إلغاء التعديل</button></div></form></div>`, "تُضاف الدفعات إلى سجل العميل")}
-      ${panel("سجل الدفعات المالية", table(["العميل","المبلغ","التاريخ","طريقة الدفع","إجراء"], paymentRows(data.payments)))}
+      ${panel("تسجيل دفعة مالية", `<div class="panel-body"><form id="payment-form" class="form-grid payment-form"><input type="hidden" name="editIndex" value=""><div class="field"><label for="payment-client">العميل</label><select id="payment-client" name="clientId" required><option value="">اختر العميل</option>${paymentClientOptions}</select></div><div class="field"><label for="payment-amount">المبلغ المدفوع (ج.م)</label><input id="payment-amount" name="amount" type="number" min="0.01" step="0.01" required></div><div class="field"><label for="payment-date">تاريخ الدفعة</label><input id="payment-date" name="date" type="date" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10)}" required></div><div class="field"><label for="payment-method">طريقة الدفع</label><select id="payment-method" name="method"><option>تحويل بنكي</option><option>نقدي</option><option>محفظة إلكترونية</option></select></div><div class="field"><label for="payment-reference">رقم الطلبية / مرجع</label><input id="payment-reference" name="reference" autocomplete="off"></div><div class="field"><label for="payment-notes">ملاحظات</label><input id="payment-notes" name="notes"></div><div class="form-actions"><button class="button button-primary" type="submit">تسجيل الدفعة</button><button class="row-action" type="button" data-cancel-edit hidden>إلغاء التعديل</button></div></form></div>`, "تُربط الدفعة بحساب العميل المحدد")}
+      ${panel("سجل الدفعات المالية", `<div class="panel-body"><div class="payment-filter field"><label for="payment-filter-client">تصفية حسب العميل</label><select id="payment-filter-client"><option value="">كل العملاء</option>${paymentFilterOptions}</select></div>${table(["العميل","المبلغ","التاريخ","طريقة الدفع","رقم الطلبية / المرجع","ملاحظات","إجراء"], paymentRows(data.payments, true))}</div>`)}
     </section>
-    ${panel("كتالوج الموديلات", table(["الموديل","الوصف","السعر"], catalogModelRows(data.catalogModels)))}
     <section id="workers-production" class="dashboard-section">${panel("طلبات وأذونات الانصراف", table(["الموظف","التاريخ","السبب","الحالة","إجراء"], data.leaves.map((item, index) => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.date)}</td><td>${escapeHtml(item.reason)}</td><td>${statusTag(item.status)}</td><td>${item.status === "قيد المراجعة" ? `<button class="row-action" data-action="approve-leave" data-index="${index}" type="button">اعتماد</button> <button class="row-action" data-action="deny-leave" data-index="${index}" type="button">رفض</button>` : "—"}</td></tr>`)))}</section>
-    <section id="clients" class="dashboard-section">${panel("طلبات الحسابات الجديدة", table(["الاسم الكامل","اسم المستخدم","رقم التليفون","تاريخ الطلب","تحديد الدور","إجراء"], pendingAccountRows(accounts)))}${panel("المستخدمون والعملاء", table(["الاسم","اسم المستخدم","رقم التليفون","الدور الوظيفي","الحالة","إجراء"], userRows(data.users)))}</section>`;
+    <section id="clients" class="dashboard-section">
+      ${panel("كشف حساب العملاء", clientAccountCards(data), "إجمالي الطلبات والمدفوعات والرصيد المتبقي")}
+      ${panel("إضافة / تعديل بيانات عميل", `<div class="panel-body"><form id="client-form" class="form-grid client-form"><div class="field"><label for="client-select">حساب العميل</label><select id="client-select" name="clientId" required><option value="">اختر حسابًا مسجلًا</option>${clientProfileOptions}</select></div><div class="field"><label for="client-name">اسم العميل</label><input id="client-name" name="name" required></div><div class="field"><label for="client-phone">رقم الهاتف</label><input id="client-phone" name="phone" type="tel"></div><div class="field client-notes-field"><label for="client-notes">ملاحظات</label><textarea id="client-notes" name="notes" rows="3"></textarea></div><div class="form-actions"><button class="button button-primary" type="submit">حفظ بيانات العميل</button><button class="row-action" type="button" data-cancel-client hidden>إلغاء التعديل</button></div></form></div>`, "تعديل بيانات حساب عميل مسجل؛ إنشاء بيانات الدخول يتم من خلال طلب التسجيل")}
+      ${panel("طلبات الحسابات الجديدة", table(["الاسم الكامل","اسم المستخدم","رقم التليفون","تاريخ الطلب","تحديد الدور","إجراء"], pendingAccountRows(accounts)))}
+      ${panel("المستخدمون والعملاء", table(["الاسم","اسم المستخدم","رقم التليفون","الدور الوظيفي","الحالة","إجراء"], userRows(data.users, true)))}
+    </section>`;
 }
 
 function cuttingView(data) {
@@ -478,12 +528,15 @@ function workerView(data, session) {
 
 function clientView(data, session) {
   const models = data.models;
-  const payments = data.payments.filter((item) => item.client === session.username);
+  const payments = data.payments.filter((item) =>
+    (item.clientId || item._ownerId) === session.accountId || item.client === session.username
+  );
   const totalPaid = payments.reduce((sum, item) => sum + Number(item.amount), 0);
   return `<section id="dashboard" class="dashboard-section"><div class="stats-grid">${stat("موديلاتي", models.length, "مرتبطة بحسابك")}${stat("إجمالي الكميات", new Intl.NumberFormat("ar-EG").format(models.reduce((sum, item) => sum + Number(item.quantity), 0)), "قطعة")}${stat("الدفعات المسجلة", money(totalPaid), "إجمالي المدفوع")}</div></section><section id="orders" class="dashboard-section">${panel("موديلاتي والطلبيات", clientOrderCards(models))}</section><section id="finance" class="dashboard-section">${panel("دفعاتي المالية", table(["المبلغ","التاريخ","طريقة الدفع"], payments.map((item) => `<tr><td>${money(item.amount)}</td><td>${escapeHtml(item.date)}</td><td>${escapeHtml(item.method)}</td></tr>`)))}</section>`;
 }
 
 let sidebarCollapsed = false;
+let activeDashboardView = "";
 
 function navigationItems(role, info) {
   if (role === "admin") {
@@ -516,7 +569,7 @@ function render(session, data, accounts) {
     ? adminView(data, accounts)
     : session.role === "client"
       ? clientView(data, session)
-      : `<section id="dashboard">${session.role === "cutting" ? cuttingView(data) : session.role === "sewing" ? sewingView(data) : workerView(data, session)}</section>`;
+      : `<section id="dashboard" class="dashboard-section">${session.role === "cutting" ? cuttingView(data) : session.role === "sewing" ? sewingView(data) : workerView(data, session)}</section>`;
   document.querySelector("#app").innerHTML = `
     <div class="app-shell${collapsedClass}">
       <button class="sidebar-backdrop" type="button" data-sidebar-close aria-label="إغلاق القائمة الجانبية"></button>
@@ -525,9 +578,36 @@ function render(session, data, accounts) {
     ${content}
       <footer class="page-footer">AL-MOTAMAYEZ</footer></main>
     </div>`;
+  activateDashboardView(window.location.hash.slice(1) || "dashboard", false);
   bindSidebar();
   bindActions(session);
 }
+
+function activateDashboardView(viewId, updateHash = true) {
+  const sections = [...document.querySelectorAll(".main-content > .dashboard-section")];
+  const availableViews = new Set(sections.map((section) => section.id));
+  const selectedView = availableViews.has(viewId) ? viewId : sections[0]?.id;
+  if (!selectedView) return;
+  activeDashboardView = selectedView;
+  sections.forEach((section) => {
+    section.hidden = section.id !== selectedView;
+  });
+  document.querySelectorAll("[data-sidebar-link]").forEach((link) => {
+    const active = link.hash === `#${selectedView}`;
+    link.classList.toggle("active", active);
+    link.setAttribute("aria-current", active ? "page" : "false");
+  });
+  if (updateHash && window.location.hash !== `#${selectedView}`) {
+    window.history.replaceState(null, "", `#${selectedView}`);
+  }
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+window.addEventListener("hashchange", () => {
+  if (document.querySelector(".main-content")) {
+    activateDashboardView(window.location.hash.slice(1), false);
+  }
+});
 
 function bindSidebar() {
   const app = document.querySelector(".app-shell");
@@ -551,13 +631,9 @@ function bindSidebar() {
     app.classList.remove("drawer-open");
     setExpanded(false);
   });
-  document.querySelectorAll("[data-sidebar-link]").forEach((link) => link.addEventListener("click", () => {
-    document.querySelectorAll("[data-sidebar-link]").forEach((item) => {
-      item.classList.remove("active");
-      item.setAttribute("aria-current", "false");
-    });
-    link.classList.add("active");
-    link.setAttribute("aria-current", "page");
+  document.querySelectorAll("[data-sidebar-link]").forEach((link) => link.addEventListener("click", (event) => {
+    event.preventDefault();
+    activateDashboardView(link.hash.slice(1));
     if (window.matchMedia("(max-width: 800px)").matches) {
       app.classList.remove("drawer-open");
       setExpanded(false);
@@ -585,16 +661,24 @@ function bindActions(session) {
   if (session.role !== "admin") return;
   const editConfigs = {
     models: { form: "model-form", collection: "models", fields: ["name", "client", "colors", "sizes", "quantity", "deliveredPieces", "pricePerPiece", "paidAmount", "status"] },
-    payments: { form: "payment-form", collection: "payments", fields: ["client", "amount", "method"] }
+    payments: { form: "payment-form", collection: "payments", fields: ["clientId", "amount", "date", "method", "reference", "notes"] }
   };
   document.querySelectorAll("[data-edit-kind]").forEach((button) => button.addEventListener("click", () => {
     const config = editConfigs[button.dataset.editKind];
-    const item = dashboardData[config.collection][Number(button.dataset.index)];
+    const item = button.dataset.editKind === "payments"
+      ? dashboardData.payments.find((payment) => payment._recordId === button.dataset.recordId)
+      : dashboardData[config.collection][Number(button.dataset.index)];
+    if (!item) {
+      window.factoryUI.toast("تعذر العثور على السجل المطلوب تعديله.", "error");
+      return;
+    }
     const form = document.querySelector(`#${config.form}`);
-    form.elements.editIndex.value = button.dataset.index;
+    form.elements.editIndex.value = button.dataset.editKind === "payments" ? item._recordId : button.dataset.index;
     for (const field of config.fields) form.elements[field].value = item[field];
     form.querySelector('[type="submit"]').textContent = "حفظ التعديلات";
     form.querySelector("[data-cancel-edit]").hidden = false;
+    if (button.dataset.editKind === "models") activateDashboardView("orders");
+    else activateDashboardView("finance");
     form.scrollIntoView({ behavior: "smooth", block: "center" });
     form.elements[config.fields[0]].focus();
   }));
@@ -604,8 +688,87 @@ function bindActions(session) {
     form.elements.editIndex.value = "";
     form.querySelector('[type="submit"]').textContent = form.id === "payment-form" ? "تسجيل الدفعة" : form.id === "user-form" ? "إضافة المستخدم" : "حفظ الطلبية";
     button.hidden = true;
-    updateOrderTotals();
+    if (form.id === "model-form") updateOrderTotals();
+    if (form.id === "payment-form") form.elements.date.value = new Date().toISOString().slice(0, 10);
   }));
+  const clientForm = document.querySelector("#client-form");
+  clientForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const formData = new FormData(form);
+    const clientId = String(formData.get("clientId"));
+    const client = dashboardData.users.find((user) => user.id === clientId && user.roleKey === "client");
+    if (!client) {
+      window.factoryUI.toast("اختر حساب عميل صالحًا قبل حفظ البيانات.", "error");
+      return;
+    }
+    const submitButton = form.querySelector('[type="submit"]');
+    submitButton.disabled = true;
+    try {
+      const { data, error } = await supabaseClient
+        .from("users")
+        .update({
+          name: String(formData.get("name")).trim(),
+          phone: String(formData.get("phone")).trim()
+        })
+        .eq("id", clientId)
+        .select("id")
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) throw new Error("لم يتم تحديث حساب العميل. تحقق من صلاحيات الإدارة ثم أعد المحاولة.");
+      const existingNotes = dashboardData.clientNotes.find((item) => item._ownerId === clientId);
+      const notes = String(formData.get("notes")).trim();
+      if (notes || existingNotes) {
+        await saveFlexibleRecord("client_notes", { notes }, existingNotes?._recordId, clientId);
+      }
+      await refreshDashboard(session);
+      window.factoryUI.toast("تم تحديث بيانات العميل بنجاح.");
+    } catch (error) {
+      window.factoryUI.toast(`تعذر حفظ بيانات العميل: ${error.message}`, "error");
+    } finally {
+      submitButton.disabled = false;
+    }
+  });
+  document.querySelectorAll("[data-edit-client]").forEach((button) => button.addEventListener("click", () => {
+    const client = dashboardData.users.find((user) => user.id === button.dataset.editClient && user.roleKey === "client");
+    if (!client) {
+      window.factoryUI.toast("تعذر العثور على حساب العميل.", "error");
+      return;
+    }
+    const form = document.querySelector("#client-form");
+    const notes = dashboardData.clientNotes.find((item) => item._ownerId === client.id)?.notes || "";
+    form.elements.clientId.value = client.id;
+    form.elements.name.value = client.name;
+    form.elements.phone.value = client.phone;
+    form.elements.notes.value = notes;
+    form.querySelector('[type="submit"]').textContent = "حفظ تعديلات العميل";
+    form.querySelector("[data-cancel-client]").hidden = false;
+    activateDashboardView("clients");
+    form.scrollIntoView({ behavior: "smooth", block: "center" });
+    form.elements.name.focus();
+  }));
+  clientForm.elements.clientId.addEventListener("change", () => {
+    const client = dashboardData.users.find((user) => user.id === clientForm.elements.clientId.value && user.roleKey === "client");
+    if (!client) return;
+    const notes = dashboardData.clientNotes.find((item) => item._ownerId === client.id)?.notes || "";
+    clientForm.elements.name.value = client.name;
+    clientForm.elements.phone.value = client.phone;
+    clientForm.elements.notes.value = notes;
+    clientForm.querySelector('[type="submit"]').textContent = "حفظ بيانات العميل";
+    clientForm.querySelector("[data-cancel-client]").hidden = false;
+  });
+  document.querySelector("[data-cancel-client]").addEventListener("click", () => {
+    clientForm.reset();
+    clientForm.elements.clientId.value = "";
+    clientForm.querySelector('[type="submit"]').textContent = "حفظ بيانات العميل";
+    clientForm.querySelector("[data-cancel-client]").hidden = true;
+  });
+  document.querySelector("#payment-filter-client").addEventListener("change", (event) => {
+    const clientId = event.currentTarget.value;
+    document.querySelectorAll("[data-payment-client]").forEach((row) => {
+      row.hidden = Boolean(clientId) && row.dataset.paymentClient !== clientId;
+    });
+  });
   const orderForm = document.querySelector("#model-form");
   const updateOrderTotals = () => {
     if (!orderForm) return;
@@ -680,27 +843,28 @@ function bindActions(session) {
     const formData = new FormData(event.currentTarget);
     const form = event.currentTarget;
     const submitButton = form.querySelector('[type="submit"]');
+    const client = dashboardData.users.find((user) => user.id === String(formData.get("clientId")) && user.roleKey === "client");
+    if (!client) {
+      window.factoryUI.toast("اختر عميلاً مسجلاً من القائمة.", "error");
+      return;
+    }
     const payment = {
-      client: String(formData.get("client")).trim(),
+      clientId: client.id,
+      clientName: client.name,
       amount: Number(formData.get("amount")),
-      date: new Date().toISOString().slice(0, 10),
-      method: String(formData.get("method"))
+      date: String(formData.get("date")),
+      method: String(formData.get("method")),
+      reference: String(formData.get("reference")).trim(),
+      notes: String(formData.get("notes")).trim()
     };
     const editIndex = String(formData.get("editIndex"));
-    const existingPayment = editIndex ? dashboardData.payments[Number(editIndex)] : null;
-    if (existingPayment) payment.date = existingPayment.date;
+    const existingPayment = editIndex ? dashboardData.payments.find((item) => item._recordId === editIndex) : null;
     submitButton.disabled = true;
     try {
-      const { data: client, error } = await supabaseClient
-        .from("users")
-        .select("id")
-        .ilike("username", payment.client)
-        .maybeSingle();
-      if (error) throw error;
-      if (!client) throw new Error("لا يوجد حساب مستخدم بهذا الاسم لربط الدفعة به.");
       await saveFlexibleRecord("payments", payment, existingPayment?._recordId, client.id);
       form.reset();
       form.elements.editIndex.value = "";
+      form.elements.date.value = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
       form.querySelector('[data-cancel-edit]').hidden = true;
       submitButton.textContent = "تسجيل الدفعة";
       await refreshDashboard(session);

@@ -125,6 +125,22 @@ td { padding: 13px 16px; border-top: 1px solid #f0f2ef; color: #44514b; font-siz
 .form-grid .wide { grid-column: span 2; }
 .payment-form { max-width: 760px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .payment-form .form-actions { grid-column: 1 / -1; }
+.payment-filter { display: grid; width: min(360px, 100%); gap: 8px; margin-bottom: 18px; }
+.client-form { max-width: 900px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.client-form .client-notes-field, .client-form .form-actions { grid-column: 1 / -1; }
+.client-form textarea { width: 100%; min-height: 92px; resize: vertical; padding: 12px 14px; border: 1px solid #dfe6e1; border-radius: 9px; color: #21342f; font: inherit; }
+.client-form textarea:focus { border-color: #5e9b83; outline: none; box-shadow: 0 0 0 3px #5e9b831c; }
+.client-account-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; padding: 18px; }
+.client-account-card { min-width: 0; padding: 17px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
+.client-account-card > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.client-account-card h3 { margin: 0; color: var(--green-dark); font-size: 15px; }
+.client-account-card header p { margin: 5px 0 0; color: var(--muted); font-size: 11px; }
+.client-balance-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 17px 0 12px; }
+.client-balance-grid div { min-width: 0; padding: 10px; border-radius: 9px; background: #f5f8f5; }
+.client-balance-grid span, .client-balance-grid strong { display: block; }
+.client-balance-grid span { color: var(--muted); font-size: 10px; }
+.client-balance-grid strong { margin-top: 5px; color: var(--green-dark); font-size: 13px; overflow-wrap: anywhere; }
+.client-notes-preview { min-height: 24px; color: #68756f; font-size: 12px; line-height: 1.7; }
 .dashboard-section { width: 100%; min-width: 0; scroll-margin-top: 22px; }
 .order-form { display: grid; gap: 18px; }
 .form-section { display: grid; gap: 14px; padding: 19px; border: 1px solid var(--line); border-radius: 12px; background: #fcfdfb; }
@@ -228,6 +244,10 @@ td { padding: 13px 16px; border-top: 1px solid #f0f2ef; color: #44514b; font-siz
   .form-section { padding: 15px; }
   .form-section-grid { grid-template-columns: 1fr; }
   .payment-form .form-actions { grid-column: auto; }
+  .client-form { grid-template-columns: minmax(0, 1fr); }
+  .client-form .client-notes-field, .client-form .form-actions { grid-column: auto; }
+  .client-account-grid { grid-template-columns: minmax(0, 1fr); padding: 12px; }
+  .client-balance-grid { grid-template-columns: 1fr; }
   .form-grid .wide { grid-column: span 2; }
   .header-brand { gap: 7px; }
   .header-logo { width: 50px; height: 42px; }
