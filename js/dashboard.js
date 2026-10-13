@@ -425,7 +425,7 @@ function bindActions(session) {
   document.querySelector("#logout").addEventListener("click", async () => {
     const { error } = await supabaseClient.auth.signOut();
     if (error) {
-      window.alert(`تعذر تسجيل الخروج: ${error.message}`);
+      window.factoryUI.toast(`تعذر تسجيل الخروج: ${error.message}`, "error");
       return;
     }
     window.location.replace("../login.html");
@@ -483,8 +483,9 @@ function bindActions(session) {
       form.querySelector('[data-cancel-edit]').hidden = true;
       submitButton.textContent = "إضافة الموديل";
       await refreshDashboard(session);
+      window.factoryUI.toast(editIndex ? "تم تحديث أمر التشغيل بنجاح." : "تم حفظ أمر التشغيل بنجاح.");
     } catch (error) {
-      window.alert(`تعذر حفظ أمر التشغيل أونلاين: ${error.message}`);
+      window.factoryUI.toast(`تعذر حفظ أمر التشغيل أونلاين: ${error.message}`, "error");
     } finally {
       submitButton.disabled = false;
     }
@@ -518,8 +519,9 @@ function bindActions(session) {
       form.querySelector('[data-cancel-edit]').hidden = true;
       submitButton.textContent = "تسجيل الدفعة";
       await refreshDashboard(session);
+      window.factoryUI.toast(existingPayment ? "تم تحديث الدفعة بنجاح." : "تم تسجيل الدفعة بنجاح.");
     } catch (error) {
-      window.alert(`تعذر حفظ الدفعة أونلاين: ${error.message}`);
+      window.factoryUI.toast(`تعذر حفظ الدفعة أونلاين: ${error.message}`, "error");
     } finally {
       submitButton.disabled = false;
     }
@@ -528,9 +530,15 @@ function bindActions(session) {
     if (button.dataset.action === "activate-account") {
       const roleSelect = [...document.querySelectorAll("[data-pending-role]")].find((item) => item.dataset.pendingRole === button.dataset.accountId);
       if (!roleSelect || !["client", "worker", "cutting", "sewing"].includes(roleSelect.value)) {
-        window.alert("اختر دورًا صالحًا قبل تفعيل الحساب.");
+        window.factoryUI.toast("اختر دورًا صالحًا قبل تفعيل الحساب.", "error");
         return;
       }
+      const accountName = button.closest("tr")?.cells[0]?.textContent || "";
+      if (!await window.factoryUI.confirmAction({
+        title: "تفعيل الحساب",
+        message: `هل تريد تفعيل طلب حساب ${accountName} بالدور المحدد؟`,
+        confirmLabel: "تفعيل"
+      })) return;
       button.disabled = true;
       let accountUpdate = supabaseClient
         .from("users")
@@ -546,23 +554,38 @@ function bindActions(session) {
         .maybeSingle();
       if (error) {
         button.disabled = false;
-        window.alert(`تعذر تفعيل الحساب: ${error.message}`);
+        window.factoryUI.toast(`تعذر تفعيل الحساب: ${error.message}`, "error");
         return;
       }
       if (!data) {
         button.disabled = false;
-        window.alert("لم يعد طلب الحساب معلقًا. حدّث الصفحة وحاول مجددًا.");
+        window.factoryUI.toast("لم يعد طلب الحساب معلقًا. حدّث الصفحة وحاول مجددًا.", "error");
         return;
       }
-      refreshDashboard(session).catch((error) => window.alert(`تعذر تحديث اللوحة: ${error.message}`));
+      window.factoryUI.toast("تم تفعيل الحساب بنجاح.");
+      refreshDashboard(session).catch((error) => window.factoryUI.toast(`تعذر تحديث اللوحة: ${error.message}`, "error"));
       return;
     }
     if (button.dataset.action === "toggle-user-status") {
       const nextStatus = button.dataset.nextStatus;
       if (!usersTableHasStatus || !["active", "suspended"].includes(nextStatus)) {
-        window.alert("يتطلب تغيير الحالة تحديث users لتضمين حالة suspended. شغّل supabase/schema.sql.");
+        window.factoryUI.toast("يتطلب تغيير الحالة تحديث users لتضمين حالة suspended. شغّل supabase/schema.sql.", "error");
         return;
       }
+      const account = dashboardData.users.find((user) => user.id === button.dataset.accountId);
+      if (!account) {
+        window.factoryUI.toast("تعذر العثور على الحساب. حدّث الصفحة وحاول مجددًا.", "error");
+        return;
+      }
+      const suspending = nextStatus === "suspended";
+      if (!await window.factoryUI.confirmAction({
+        title: suspending ? "إيقاف الحساب" : "إعادة تفعيل الحساب",
+        message: suspending
+          ? `هل تريد إيقاف حساب ${account.name}؟ لن يتمكن من استخدام النظام.`
+          : `هل تريد إعادة تفعيل حساب ${account.name}؟`,
+        confirmLabel: suspending ? "توقيف / تعطيل" : "إعادة تفعيل",
+        danger: suspending
+      })) return;
       button.disabled = true;
       const { data, error } = await supabaseClient
         .from("users")
@@ -573,20 +596,30 @@ function bindActions(session) {
         .maybeSingle();
       if (error) {
         button.disabled = false;
-        window.alert(`تعذر تغيير حالة الحساب: ${error.message}`);
+        window.factoryUI.toast(`تعذر تغيير حالة الحساب: ${error.message}`, "error");
         return;
       }
       if (!data) {
         button.disabled = false;
-        window.alert("لم يتغير الحساب. حدّث الصفحة وحاول مجددًا.");
+        window.factoryUI.toast("لم يتغير الحساب. حدّث الصفحة وحاول مجددًا.", "error");
         return;
       }
-      refreshDashboard(session).catch((refreshError) => window.alert(`تغيرت حالة الحساب، لكن تعذر تحديث اللوحة: ${refreshError.message}`));
+      window.factoryUI.toast(suspending ? "تم إيقاف الحساب بنجاح." : "تمت إعادة تفعيل الحساب بنجاح.");
+      refreshDashboard(session).catch((refreshError) => window.factoryUI.toast(`تغيرت حالة الحساب، لكن تعذر تحديث اللوحة: ${refreshError.message}`, "error"));
       return;
     }
     if (button.dataset.action === "delete-user") {
       const account = dashboardData.users.find((user) => user.id === button.dataset.accountId);
-      if (!account || !window.confirm(`هل تريد حذف حساب ${account.name} نهائيًا؟ لا يمكن التراجع عن هذا الإجراء.`)) return;
+      if (!account) {
+        window.factoryUI.toast("تعذر العثور على الحساب. حدّث الصفحة وحاول مجددًا.", "error");
+        return;
+      }
+      if (!await window.factoryUI.confirmAction({
+        title: "حذف الحساب نهائيًا",
+        message: `هل تريد حذف حساب ${account.name} نهائيًا؟ لا يمكن التراجع عن هذا الإجراء.`,
+        confirmLabel: "حذف الحساب",
+        danger: true
+      })) return;
       button.disabled = true;
       const { data, error } = await supabaseClient
         .from("users")
@@ -596,27 +629,36 @@ function bindActions(session) {
         .maybeSingle();
       if (error) {
         button.disabled = false;
-        window.alert(`تعذر حذف الحساب: ${error.message}`);
+        window.factoryUI.toast(`تعذر حذف الحساب: ${error.message}`, "error");
         return;
       }
       if (!data) {
         button.disabled = false;
-        window.alert("لم يُحذف الحساب. قد لا تملك صلاحية الحذف أو ربما حُذف بالفعل.");
+        window.factoryUI.toast("لم يُحذف الحساب. قد لا تملك صلاحية الحذف أو ربما حُذف بالفعل.", "error");
         return;
       }
-      refreshDashboard(session).catch((refreshError) => window.alert(`حُذف الحساب، لكن تعذر تحديث اللوحة: ${refreshError.message}`));
+      window.factoryUI.toast("تم حذف الحساب بنجاح.");
+      refreshDashboard(session).catch((refreshError) => window.factoryUI.toast(`حُذف الحساب، لكن تعذر تحديث اللوحة: ${refreshError.message}`, "error"));
       return;
     }
     const index = Number(button.dataset.index);
     if (button.dataset.action === "delete-model") {
       const order = dashboardData.models[index];
       if (!order) {
-        window.alert("تعذر العثور على أمر التشغيل. حدّث الصفحة وحاول مجددًا.");
+        window.factoryUI.toast("تعذر العثور على أمر التشغيل. حدّث الصفحة وحاول مجددًا.", "error");
+        return;
+      }
+      if (!await window.factoryUI.confirmAction({
+        title: "حذف أمر التشغيل",
+        message: `هل تريد حذف أمر التشغيل للموديل ${order.name}؟`,
+        confirmLabel: "حذف الأمر",
+        danger: true
+      })) {
         return;
       }
       const { error } = await supabaseClient.from("orders").delete().eq("id", order.id);
       if (error) {
-        window.alert(`تعذر حذف أمر التشغيل: ${error.message}`);
+        window.factoryUI.toast(`تعذر حذف أمر التشغيل: ${error.message}`, "error");
         return;
       }
       if (order.model_id) {
@@ -625,32 +667,43 @@ function bindActions(session) {
           .select("id", { count: "exact", head: true })
           .eq("model_id", order.model_id);
         if (countError) {
-          window.alert(`حُذف أمر التشغيل، لكن تعذر التحقق من استخدام الموديل: ${countError.message}`);
+          window.factoryUI.toast(`حُذف أمر التشغيل، لكن تعذر التحقق من استخدام الموديل: ${countError.message}`, "error");
           return;
         }
         if (count === 0) {
           const { error: modelError } = await supabaseClient.from("models").delete().eq("id", order.model_id);
           if (modelError) {
-            window.alert(`حُذف أمر التشغيل، لكن تعذر حذف الموديل غير المستخدم: ${modelError.message}`);
+            window.factoryUI.toast(`حُذف أمر التشغيل، لكن تعذر حذف الموديل غير المستخدم: ${modelError.message}`, "error");
             return;
           }
         }
       }
-      refreshDashboard(session).catch((error) => window.alert(`حُذف أمر التشغيل، لكن تعذر تحديث اللوحة: ${error.message}`));
+      window.factoryUI.toast("تم حذف أمر التشغيل بنجاح.");
+      refreshDashboard(session).catch((error) => window.factoryUI.toast(`حُذف أمر التشغيل، لكن تعذر تحديث اللوحة: ${error.message}`, "error"));
       return;
     }
     if (button.dataset.action === "approve-leave" || button.dataset.action === "deny-leave") {
       const leave = dashboardData.leaves[index];
       if (!leave?._recordId) {
-        window.alert("تعذر العثور على طلب الانصراف. حدّث الصفحة وحاول مجددًا.");
+        window.factoryUI.toast("تعذر العثور على طلب الانصراف. حدّث الصفحة وحاول مجددًا.", "error");
         return;
       }
-      leave.status = button.dataset.action === "approve-leave" ? "تم الاعتماد" : "مرفوض";
+      const approved = button.dataset.action === "approve-leave";
+      if (!await window.factoryUI.confirmAction({
+        title: approved ? "اعتماد طلب الانصراف" : "رفض طلب الانصراف",
+        message: `هل تريد ${approved ? "اعتماد" : "رفض"} طلب انصراف ${leave.name}؟`,
+        confirmLabel: approved ? "اعتماد" : "رفض",
+        danger: !approved
+      })) {
+        return;
+      }
+      leave.status = approved ? "تم الاعتماد" : "مرفوض";
       try {
         await saveFlexibleRecord("leaves", leave, leave._recordId, leave._ownerId);
         await refreshDashboard(session);
+        window.factoryUI.toast(approved ? "تم اعتماد طلب الانصراف." : "تم رفض طلب الانصراف.");
       } catch (error) {
-        window.alert(`تعذر تحديث طلب الانصراف أونلاين: ${error.message}`);
+        window.factoryUI.toast(`تعذر تحديث طلب الانصراف أونلاين: ${error.message}`, "error");
       }
     }
   }));
@@ -663,5 +716,6 @@ async function initializeDashboard() {
 
 initializeDashboard().catch((error) => {
   document.querySelector("#app").innerHTML = `<main class="main-content"><div class="notice">تعذر تحميل بيانات المصنع: ${escapeHtml(error.message)}.</div></main>`;
+  window.factoryUI.toast(`تعذر تحميل بيانات المصنع: ${error.message}`, "error");
   console.error("تعذر تحميل بيانات لوحة المصنع.", error);
 });
