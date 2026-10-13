@@ -115,6 +115,37 @@ as $$
   );
 $$;
 
+create or replace function public.ensure_factory_admin_profile()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  auth_email text;
+begin
+  select lower(trim(auth_user.email))
+    into auth_email
+  from auth.users as auth_user
+  where auth_user.id = auth.uid()
+    and auth_user.email_confirmed_at is not null;
+
+  if auth_email is distinct from 'mohamed01007033454@gmail.com' then
+    raise exception 'Only the verified factory administrator may initialize this profile.';
+  end if;
+
+  insert into public.users (id, name, username, email, role, status)
+  values (auth.uid(), 'ZERO0', 'ZERO0', auth_email, 'admin', 'active')
+  on conflict (id) do update
+  set name = excluded.name,
+      username = excluded.username,
+      email = excluded.email,
+      role = excluded.role,
+      status = excluded.status,
+      updated_at = now();
+end;
+$$;
+
 create table if not exists public.factory_clients (
   id uuid primary key default gen_random_uuid(),
   user_id uuid unique references auth.users (id) on delete set null,
@@ -322,6 +353,8 @@ revoke delete on public.users from authenticated;
 grant insert (id, name, username, email, phone, role, status) on public.users to authenticated;
 revoke all on function public.is_active_factory_admin() from public, anon, authenticated;
 grant execute on function public.is_active_factory_admin() to authenticated;
+revoke all on function public.ensure_factory_admin_profile() from public, anon, authenticated;
+grant execute on function public.ensure_factory_admin_profile() to authenticated;
 revoke all on function public.delete_user_by_admin(uuid) from public, anon, authenticated;
 grant execute on function public.delete_user_by_admin(uuid) to authenticated;
 revoke all on function public.create_pending_factory_user() from public, anon, authenticated;

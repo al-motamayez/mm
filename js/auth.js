@@ -24,14 +24,6 @@ function usernameEmail(username) {
   return `${username.trim().toLocaleLowerCase()}@${AUTH_EMAIL_DOMAIN}`;
 }
 
-function usernameForAuthUser(user) {
-  const email = user.email?.toLocaleLowerCase();
-  if (email === ADMIN_AUTH_EMAIL) return ADMIN_USERNAME;
-  const metadataUsername = user.user_metadata?.username;
-  if (metadataUsername) return metadataUsername;
-  return email?.split("@")[0];
-}
-
 function showMessage(text, isError = true) {
   message.textContent = text;
   message.classList.toggle("message-error", isError);
@@ -144,9 +136,14 @@ async function loginEmailFor(identifier) {
 }
 
 async function routeAuthenticatedUser(user) {
-  const username = usernameForAuthUser(user);
-  if (!username) throw new Error("تعذر تحديد اسم المستخدم لحساب المصادقة.");
-  const account = await findAccountByUsername(username);
+  if (user.email?.toLocaleLowerCase() === ADMIN_AUTH_EMAIL) {
+    const { error } = await supabaseClient.rpc("ensure_factory_admin_profile");
+    if (error) {
+      console.error("تعذر تجهيز ملف الأدمن الموثق في users.", error);
+      throw new Error("تم التحقق من كلمة المرور، لكن تعذر تجهيز ملف الأدمن. أعد تشغيل supabase/schema.sql وتحقق من صلاحيات الدالة.");
+    }
+  }
+  const account = await findAccountById(user.id);
   if (account?.status === "suspended") {
     const { error: signOutError } = await supabaseClient.auth.signOut();
     if (signOutError) throw signOutError;
