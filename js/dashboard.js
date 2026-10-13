@@ -3,6 +3,7 @@ const ADMIN_USERNAME = "ZERO0";
 const ADMIN_AUTH_EMAIL = "mohamed01007033454@gmail.com";
 let dashboardData;
 let usersTableHasStatus = false;
+let selectedClientId = "";
 const rolePages = {
   admin: "admin.html",
   cutting: "cutting.html",
@@ -73,6 +74,8 @@ function emptyDashboardData() {
     models: [],
     clients: [],
     payments: [],
+    settlements: [],
+    deliveries: [],
     users: [],
     leaves: [],
     cutting: [],
@@ -92,6 +95,7 @@ async function readFlexibleRecords(collection) {
   return data.map((record) => ({
     ...record.payload,
     created_at: record.payload.created_at || record.created_at,
+    _createdAt: record.created_at,
     _recordId: record.id,
     _ownerId: record.owner_id
   }));
@@ -114,12 +118,22 @@ async function saveFlexibleRecord(collection, payload, recordId = null, ownerId 
 
 async function readDashboardData(session) {
   const data = emptyDashboardData();
-  const [payments, leaves, tasks] = await Promise.all([
+  const [payments, leaves, tasks, settlements, deliveriesResult] = await Promise.all([
     readFlexibleRecords("payments"),
     readFlexibleRecords("leaves"),
-    readFlexibleRecords("tasks")
+    readFlexibleRecords("tasks"),
+    readFlexibleRecords("settlements"),
+    supabaseClient.from("factory_deliveries")
+      .select("id, order_id, customer_id, quantity, price_per_piece, amount, delivered_at, legacy_import")
+      .order("delivered_at", { ascending: false })
   ]);
+  if (["42P01", "PGRST205"].includes(deliveriesResult.error?.code)) {
+    throw new Error("سجل التسليمات غير موجود في قاعدة البيانات. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+  }
+  if (deliveriesResult.error) throw deliveriesResult.error;
   data.payments = payments;
+  data.settlements = settlements;
+  data.deliveries = deliveriesResult.data || [];
   data.leaves = leaves;
   data.tasks = tasks;
   data.clientNotes = session.role === "admin" ? await readFlexibleRecords("client_notes") : [];
@@ -138,7 +152,8 @@ async function readDashboardData(session) {
   } else {
     let ordersQuery = supabaseClient
       .from("orders")
-      .select("id, model_name, model_number, total_pieces, status, created_at")
+      .select("id, model_name, model_number, total_pieces, archived_at, status, created_at")
+      .is("archived_at", null)
       .order("created_at", { ascending: false });
     ({ data: orders, error: ordersError } = await ordersQuery);
     if (ordersError?.code === "42703") {
@@ -154,7 +169,7 @@ async function readDashboardData(session) {
   if (session.role === "admin") {
     const { data: clients, error: clientsError } = await supabaseClient
       .from("factory_clients")
-      .select("id, user_id, name, phone, notes, created_at")
+      .select("id, user_id, name, phone, notes, account_period_started_at, created_at")
       .order("created_at", { ascending: false });
     if (clientsError) throw clientsError;
     data.clients = clients.map((client) => ({
@@ -167,13 +182,14 @@ async function readDashboardData(session) {
   const clientsById = new Map(data.clients.map((client) => [client.id, client]));
 
   let stages = [];
-  if (session.role !== "client" || orders.length) {
+  if (session.role === "admin" || orders.length) {
     let stagesQuery = supabaseClient
       .from("production_stages")
       .select("id, order_id, stage_name, worker_name, fabric, line_name, target_quantity, completed_quantity, status, updated_at");
-    if (session.role === "client") {
+    if (session.role !== "admin") {
       stagesQuery = stagesQuery.in("order_id", orders.map((order) => order.id));
-    } else if (session.role === "cutting") {
+    }
+    if (session.role === "cutting") {
       stagesQuery = stagesQuery.in("stage_name", ["cutting", "قص", "تقطيع"]);
     } else if (session.role === "sewing") {
       stagesQuery = stagesQuery.in("stage_name", ["sewing", "خياطة"]);
@@ -183,9 +199,10 @@ async function readDashboardData(session) {
       stagesQuery = supabaseClient
         .from("production_stages")
         .select("id, order_id, stage_name, worker_name, status, updated_at");
-      if (session.role === "client") {
+      if (session.role !== "admin") {
         stagesQuery = stagesQuery.in("order_id", orders.map((order) => order.id));
-      } else if (session.role === "cutting") {
+      }
+      if (session.role === "cutting") {
         stagesQuery = stagesQuery.in("stage_name", ["cutting", "قص", "تقطيع"]);
       } else if (session.role === "sewing") {
         stagesQuery = stagesQuery.in("stage_name", ["sewing", "خياطة"]);
@@ -216,6 +233,7 @@ async function readDashboardData(session) {
       colors: order.colors || "",
       sizes: order.sizes || "",
       deliveredPieces: Number(order.delivered_pieces || 0),
+      archivedAt: order.archived_at || null,
       remainingPieces: Number(order.total_pieces) - Number(order.delivered_pieces || 0),
       pricePerPiece: Number(order.price_per_piece || 0),
       totalAmount: Number(order.total_amount || 0),
@@ -394,7 +412,9 @@ function stat(label, value, note = "") {
 
 function orderCards(models, withActions = false) {
   if (!models.length) return '<div class="empty-state">لا توجد طلبيات لعرضها حاليًا.</div>';
-  return `<div class="order-cards">${models.map((item, index) => `<article class="order-card">
+  return `<div class="order-cards">${models.map((item) => {
+    const index = dashboardData.models.findIndex((order) => order.id === item.id);
+    return `<article class="order-card">
     <header class="order-card-heading"><div><p class="order-card-label">الموديل ${item.modelNumber ? `· رقم ${escapeHtml(item.modelNumber)}` : ""}</p><h3>${escapeHtml(item.name || item.modelNumber || "موديل بدون اسم")}</h3></div>${statusTag(item.status)}</header>
     <p class="order-card-client">العميل: <strong>${escapeHtml(item.client)}</strong></p>
     <dl class="order-card-details">
@@ -404,8 +424,9 @@ function orderCards(models, withActions = false) {
       <div><dt>سعر القطعة</dt><dd>${money(item.pricePerPiece)}</dd></div><div><dt>قيمة الكمية المسلّمة</dt><dd>${money(item.totalAmount)}</dd></div>
       <div><dt>المدفوع</dt><dd>${money(item.paidAmount)}</dd></div><div><dt>المتبقي من قيمة المسلّم</dt><dd>${money(item.remainingAmount)}</dd></div>
     </dl>
-    ${withActions ? `<footer class="order-card-actions"><button class="row-action" type="button" data-edit-kind="models" data-index="${index}">تعديل الطلبية</button><button class="row-action" type="button" data-action="record-delivery" data-index="${index}">تسجيل تسليم</button>${item.status === "مكتمل" ? '<span class="status">مغلق / مؤرشف</span>' : `<button class="row-action order-close-action" type="button" data-action="close-order" data-index="${index}">اكتمل / إغلاق الطلب</button>`}<button class="row-action" type="button" data-action="delete-model" data-index="${index}">حذف</button></footer>` : ""}
-  </article>`).join("")}</div>`;
+    ${withActions ? `<footer class="order-card-actions"><button class="row-action" type="button" data-edit-kind="models" data-index="${index}">تعديل الطلبية</button><button class="row-action" type="button" data-action="record-delivery" data-index="${index}">تسجيل تسليم</button>${item.status === "مكتمل" ? '<span class="status">مغلق / مؤرشف</span>' : `<button class="row-action order-close-action" type="button" data-action="close-order" data-index="${index}">اكتمل / إغلاق الطلب</button>`}</footer>` : ""}
+  </article>`;
+  }).join("")}</div>`;
 }
 
 function orderProgress(status) {
@@ -435,8 +456,16 @@ function clientOrderCards(orders) {
   </article>`).join("")}</div>`;
 }
 
-function paymentRows(payments, withActions = false) {
-  return payments.map((item) => `<tr data-payment-client="${escapeHtml(item.customerId || "")}"><td>${escapeHtml(item.clientName || item.client || "—")}</td><td>${money(item.amount)}</td><td>${escapeHtml(item.date || "—")}</td><td>${escapeHtml(item.method || "—")}</td><td>${escapeHtml(item.reference || item.orderReference || "—")}</td><td>${escapeHtml(item.notes || "—")}</td>${withActions ? `<td><button class="row-action" type="button" data-edit-kind="payments" data-record-id="${escapeHtml(item._recordId)}">تعديل</button></td>` : ""}</tr>`);
+function paymentRows(payments, withActions = false, clients = []) {
+  return payments.map((item) => {
+    const client = clients.find((entry) => entry.id === item.customerId);
+    const settled = client?.account_period_started_at
+      && new Date(item._createdAt || item.created_at).getTime() < new Date(client.account_period_started_at).getTime();
+    const action = withActions
+      ? `<td>${settled ? '<span class="status">فترة مصفّاة</span>' : `<button class="row-action" type="button" data-edit-kind="payments" data-record-id="${escapeHtml(item._recordId)}">تعديل</button>`}</td>`
+      : "";
+    return `<tr data-payment-client="${escapeHtml(item.customerId || "")}"><td>${escapeHtml(item.clientName || item.client || "—")}</td><td>${money(item.amount)}</td><td>${escapeHtml(item.date || "—")}</td><td>${escapeHtml(item.method || "—")}</td><td>${escapeHtml(item.reference || item.orderReference || "—")}</td><td>${escapeHtml(item.notes || "—")}</td>${action}</tr>`;
+  });
 }
 
 function userRows(users, withActions = false) {
@@ -449,24 +478,82 @@ function userRows(users, withActions = false) {
   });
 }
 
+function clientAccountSummary(client, data) {
+  const settlements = data.settlements
+    .filter((entry) => entry.customerId === client.id)
+    .sort((left, right) => new Date(right.date || right._createdAt).getTime() - new Date(left.date || left._createdAt).getTime());
+  const latestSettlement = settlements[0] || null;
+  const openingBalance = Number(latestSettlement?.balance || 0);
+  const orders = data.models.filter((order) => order.customerId === client.id && !order.archivedAt);
+  const deliveredTotal = orders.reduce((sum, order) => sum + Number(order.totalAmount || 0), 0);
+  const orderPaid = orders.reduce((sum, order) => sum + Number(order.paidAmount || 0), 0);
+  const periodStart = client.account_period_started_at || latestSettlement?.date || null;
+  const payments = data.payments.filter((payment) =>
+    payment.customerId === client.id
+    && (!periodStart || new Date(payment._createdAt || payment.created_at).getTime() >= new Date(periodStart).getTime())
+  );
+  const paymentsTotal = payments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+  const due = openingBalance + deliveredTotal;
+  const paid = orderPaid + paymentsTotal;
+  return {
+    settlements,
+    latestSettlement,
+    openingBalance,
+    orders,
+    archivedOrders: data.models.filter((order) => order.customerId === client.id && order.archivedAt),
+    deliveredTotal,
+    orderPaid,
+    payments,
+    paymentsTotal,
+    due,
+    paid,
+    balance: due - paid
+  };
+}
+
 function clientAccountCards(data) {
   const clients = data.clients;
   if (!clients.length) return '<div class="empty-state">لا توجد حسابات عملاء مسجلة.</div>';
   return `<div class="client-account-grid">${clients.map((client) => {
-    const orders = data.models.filter((order) => order.customerId === client.id);
-    const due = orders.reduce((sum, order) => sum + Number(order.totalAmount || 0), 0);
-    const orderPaid = orders.reduce((sum, order) => sum + Number(order.paidAmount || 0), 0);
-    const paid = data.payments.filter((payment) => payment.customerId === client.id)
-      .reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
-    const remaining = due - orderPaid - paid;
+    const summary = clientAccountSummary(client, data);
     const linkedUser = data.users.find((user) => user.id === client.user_id);
     return `<article class="client-account-card">
       <header><div><h3>${escapeHtml(client.name)}</h3><p>${escapeHtml(client.phone || "بدون هاتف")}${linkedUser ? ` · ${escapeHtml(linkedUser.username)}` : " · ملف عميل بلا حساب دخول"}</p></div>${statusTag(linkedUser?.status === "suspended" ? "متوقف" : "نشط")}</header>
-      <div class="client-balance-grid"><div><span>إجمالي المطلوب</span><strong>${money(due)}</strong></div><div><span>المدفوع</span><strong>${money(orderPaid + paid)}</strong></div><div><span>الرصيد المتبقي</span><strong>${money(remaining)}</strong></div></div>
+      <div class="client-balance-grid"><div><span>إجمالي المطلوب</span><strong>${money(summary.due)}</strong></div><div><span>المدفوع</span><strong>${money(summary.paid)}</strong></div><div><span>الرصيد المتبقي</span><strong>${money(summary.balance)}</strong></div></div>
       <p class="client-notes-preview">${escapeHtml(client.notes || "لا توجد ملاحظات مسجلة.")}</p>
-      <button class="row-action" type="button" data-edit-customer="${escapeHtml(client.id)}">تعديل بيانات العميل</button>
+      <div class="client-card-actions"><button class="button button-primary" type="button" data-open-client-details="${escapeHtml(client.id)}">التفاصيل</button><button class="row-action" type="button" data-edit-customer="${escapeHtml(client.id)}">تعديل بيانات العميل</button></div>
     </article>`;
   }).join("")}</div>`;
+}
+
+function clientDetailsView(client, data) {
+  const summary = clientAccountSummary(client, data);
+  const pricedOrders = summary.orders.filter((order) => order.pricePerPiece > 0);
+  const unpricedOrders = summary.orders.filter((order) => order.pricePerPiece <= 0);
+  const archivedOrders = summary.archivedOrders;
+  const deliveries = data.deliveries.filter((delivery) => delivery.customer_id === client.id);
+  const orderCard = (order, archived = false) => `<article class="order-card client-history-card">
+    <header class="order-card-heading"><div><p class="order-card-label">${archived ? "طلب مؤرشف" : "طلب حالي"}${order.modelNumber ? ` · رقم ${escapeHtml(order.modelNumber)}` : ""}</p><h3>${escapeHtml(order.name || "موديل بدون اسم")}</h3></div>${statusTag(order.status)}</header>
+    <dl class="order-card-details">
+      <div><dt>العدد الإجمالي بعد القص</dt><dd>${order.quantity ? `${new Intl.NumberFormat("ar-EG").format(order.quantity)} قطعة` : "بانتظار الحصر"}</dd></div>
+      <div><dt>المستلم</dt><dd>${new Intl.NumberFormat("ar-EG").format(order.deliveredPieces)} قطعة</dd></div>
+      <div><dt>المتبقي</dt><dd>${order.quantity ? `${new Intl.NumberFormat("ar-EG").format(order.remainingPieces)} قطعة` : "بانتظار الحصر"}</dd></div>
+      ${order.pricePerPiece > 0 ? `<div><dt>سعر القطعة</dt><dd>${money(order.pricePerPiece)}</dd></div><div><dt>إجمالي قيمة المسلّم</dt><dd>${money(order.totalAmount)}</dd></div>` : '<div><dt>التسعير</dt><dd>لم يُسعّر بعد</dd></div>'}
+      ${archived ? `<div><dt>تاريخ الأرشفة</dt><dd>${escapeHtml(new Intl.DateTimeFormat("ar-EG", { dateStyle: "medium" }).format(new Date(order.archivedAt)))}</dd></div>` : ""}
+    </dl>
+  </article>`;
+  return `<div class="clients-toolbar client-detail-toolbar"><div><h2>${escapeHtml(client.name)} · تفاصيل الحساب</h2><p>${escapeHtml(client.phone || "لا يوجد رقم هاتف")}</p></div><button class="row-action" type="button" data-return-clients>العودة إلى العملاء</button></div>
+    <div class="stats-grid client-finance-summary">${summary.latestSettlement ? stat("رصيد سابق مرحّل", money(summary.openingBalance), "افتتاح الفترة الحالية") : ""}${stat("إجمالي المطلوب", money(summary.due), "يشمل الرصيد السابق المرحّل")}${stat("المدفوع", money(summary.paid))}${stat("الرصيد المتبقي", money(summary.balance), summary.balance < 0 ? "رصيد دائن للعميل" : "مستحق على العميل")}</div>
+    <section class="client-detail-section"><header class="section-heading"><div><h2>الموديلات التي تم تسعيرها</h2><p>يُحتسب المطلوب المالي على الكمية التي تم تسليمها.</p></div></header>${pricedOrders.length ? `<div class="order-cards">${pricedOrders.map((order) => orderCard(order)).join("")}</div>` : '<div class="empty-state">لا توجد موديلات مسعّرة في الفترة الحالية.</div>'}</section>
+    <section class="client-detail-section"><header class="section-heading"><div><h2>موديلات لم تُسعّر بعد</h2><p>طلبات في القص أو الانتظار أو مراحل التشغيل الأخرى.</p></div></header>${unpricedOrders.length ? `<div class="order-cards">${unpricedOrders.map((order) => orderCard(order)).join("")}</div>` : '<div class="empty-state">لا توجد موديلات بانتظار التسعير.</div>'}</section>
+    <section class="client-detail-section">${panel("سجل التسليمات", table(["الموديل","الكمية","سعر القطعة وقت التسليم","قيمة التسليم","التاريخ"], deliveries.map((delivery) => {
+      const order = data.models.find((item) => item.id === delivery.order_id);
+      return `<tr><td>${escapeHtml(order?.name || "طلب مؤرشف")}</td><td>${new Intl.NumberFormat("ar-EG").format(delivery.quantity)}</td><td>${money(delivery.price_per_piece)}</td><td>${money(delivery.amount)}</td><td>${escapeHtml(new Intl.DateTimeFormat("ar-EG", { dateStyle: "medium" }).format(new Date(delivery.delivered_at)))}</td></tr>`;
+    })))}</section>
+    <section class="client-detail-section"><header class="section-heading"><div><h2>الفترات المالية السابقة</h2><p>الأوامر والتسليمات محفوظة في الأرشيف ولا تُحذف عند التصفية.</p></div><button class="button button-primary" type="button" data-settle-client="${escapeHtml(client.id)}">تصفية الحساب وترحيل الرصيد</button></header>
+      ${summary.settlements.length ? `<div class="settlement-history">${summary.settlements.map((entry) => `<article class="settlement-card"><div><strong>رصيد سابق مرحّل</strong><small>${escapeHtml(entry.date || entry._createdAt)}</small></div><div><span>رصيد افتتاحي</span><strong>${money(entry.openingBalance)}</strong></div><div><span>قيمة التسليمات</span><strong>${money(entry.deliveredTotal)}</strong></div><div><span>المدفوع</span><strong>${money(Number(entry.orderPaidTotal || 0) + Number(entry.paymentsTotal || 0))}</strong></div><div><span>رصيد الفترة الختامي</span><strong>${money(entry.balance)}</strong></div></article>`).join("")}</div>` : '<div class="empty-state">لم تتم تصفية حساب العميل سابقًا.</div>'}
+      ${archivedOrders.length ? `<h3 class="history-subheading">الموديلات والطلبات المؤرشفة</h3><div class="order-cards">${archivedOrders.map((order) => orderCard(order, true)).join("")}</div>` : ""}
+    </section>`;
 }
 
 function pendingAccountRows(accounts) {
@@ -475,7 +562,8 @@ function pendingAccountRows(accounts) {
 }
 
 function adminView(data, accounts) {
-  const totalUnits = data.models.reduce((sum, item) => sum + Number(item.quantity), 0);
+  const activeOrders = data.models.filter((order) => !order.archivedAt);
+  const totalUnits = activeOrders.reduce((sum, item) => sum + Number(item.quantity), 0);
   const paid = data.payments.reduce((sum, item) => sum + Number(item.amount), 0);
   const clientOptions = data.clients.map((client) =>
     `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)}${client.phone ? ` · ${escapeHtml(client.phone)}` : ""}</option>`
@@ -487,10 +575,10 @@ function adminView(data, accounts) {
     .map((client) => `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)}</option>`)
     .join("");
   return `
-    <section id="dashboard" class="dashboard-section"><div class="stats-grid">${stat("الموديلات الحالية", data.models.length, "ضمن أوامر التشغيل")}${stat("إجمالي القطع", new Intl.NumberFormat("ar-EG").format(totalUnits), "قطعة")}${stat("المدفوعات المسجلة", money(paid), "إجمالي الدفعات")}${stat("طلبات الانصراف", data.leaves.filter((item) => item.status === "قيد المراجعة").length, "بانتظار المراجعة")}</div></section>
+    <section id="dashboard" class="dashboard-section"><div class="stats-grid">${stat("الموديلات الحالية", activeOrders.length, "ضمن أوامر التشغيل")}${stat("إجمالي القطع", new Intl.NumberFormat("ar-EG").format(totalUnits), "قطعة")}${stat("المدفوعات المسجلة", money(paid), "إجمالي الدفعات")}${stat("طلبات الانصراف", data.leaves.filter((item) => item.status === "قيد المراجعة").length, "بانتظار المراجعة")}</div></section>
     <section id="orders" class="dashboard-section">
       <div class="clients-toolbar"><div><h2>الموديلات والطلبيات</h2><p>سجّل الموديل أولاً، ثم حدّث العدد الفعلي بعد الفرش والقص.</p></div><button class="button button-primary" type="button" data-open-order-modal>＋ إضافة موديل / طلبية</button></div>
-      ${panel("إدارة الموديلات والطلبيات", orderCards(data.models, true))}
+      ${panel("إدارة الموديلات والطلبيات", orderCards(activeOrders, true))}
       <div class="modal-backdrop" id="order-modal" hidden><section class="modal-card order-modal-card" role="dialog" aria-modal="true" aria-labelledby="order-modal-title"><button class="modal-close" type="button" data-close-order aria-label="إغلاق">×</button><h2 id="order-modal-title">إضافة موديل / طلبية</h2><p>يمكن ترك العدد فارغًا حتى انتهاء الفرش والقص، ثم إدخال العدد الفعلي عند تعديل الطلب.</p><form id="model-form" class="order-form modal-form"><input type="hidden" name="editIndex" value="">
         <section class="form-section"><h3>المعلومات الأساسية <span>إجباري</span></h3><div class="form-section-grid">
           <div class="field"><label for="model-client">العميل</label><select id="model-client" name="customerId" required><option value="">اختر العميل</option>${clientOptions}</select></div>
@@ -501,12 +589,12 @@ function adminView(data, accounts) {
         <section class="form-section"><h3>التفاصيل التشغيلية <span>اختياري</span></h3><div class="form-section-grid">
           <div class="field"><label for="model-colors">الألوان</label><input id="model-colors" name="colors" placeholder="مثال: أسود، أبيض"></div>
           <div class="field"><label for="model-sizes">المقاسات</label><input id="model-sizes" name="sizes" placeholder="مثال: S، M، L، XL"></div>
-          <div class="field"><label for="model-delivered">الكمية المسلّمة فعليًا</label><input id="model-delivered" name="deliveredPieces" type="number" min="0" step="1" value="0"></div>
+          <input type="hidden" name="deliveredPieces" value="0"><div class="field"><label>إجمالي الكمية المسلّمة</label><output id="model-delivered-summary" class="calculated-value">0 قطعة</output></div>
           <div class="field"><label for="model-status">حالة الطلب</label><select id="model-status" name="status"><option>قيد الانتظار</option><option>معلق</option><option>تحت الإنشاء</option><option>في الخط</option><option>تحت التصنيع</option><option>قيد الإنتاج</option><option>جاهز للتسليم</option><option>مكتمل</option></select></div>
         </div></section>
         <section class="form-section"><h3>التفاصيل المالية <span>اختياري</span></h3><div class="form-section-grid">
           <div class="field"><label for="model-price">سعر القطعة (ج.م)</label><input id="model-price" name="pricePerPiece" type="number" min="0" step="0.01" value="0"></div>
-          <div class="field"><label for="model-paid">المبلغ المدفوع / العربون (ج.م)</label><input id="model-paid" name="paidAmount" type="number" min="0" step="0.01" value="0"></div>
+          <div class="field"><label for="model-paid">العربون على الطلب (لا تكرره في سجل الدفعات)</label><input id="model-paid" name="paidAmount" type="number" min="0" step="0.01" value="0"></div>
           <div class="field"><label for="model-total">قيمة الكمية المسلّمة</label><output id="model-total" class="calculated-value">0 ج.م</output></div>
           <div class="field"><label for="model-remaining">المتبقي من قيمة المسلّم</label><output id="model-remaining" class="calculated-value">0 ج.م</output></div>
         </div></section>
@@ -516,7 +604,7 @@ function adminView(data, accounts) {
     </section>
     <section id="finance" class="dashboard-section">
       ${panel("تسجيل دفعة مالية", `<div class="panel-body"><form id="payment-form" class="form-grid payment-form"><input type="hidden" name="editIndex" value=""><div class="field"><label for="payment-client">العميل</label><select id="payment-client" name="customerId" required><option value="">اختر العميل</option>${paymentClientOptions}</select></div><div class="field"><label for="payment-amount">المبلغ المدفوع (ج.م)</label><input id="payment-amount" name="amount" type="number" min="0.01" step="0.01" required></div><div class="field"><label for="payment-date">تاريخ الدفعة</label><input id="payment-date" name="date" type="date" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10)}" required></div><div class="field"><label for="payment-method">طريقة الدفع</label><select id="payment-method" name="method"><option>تحويل بنكي</option><option>نقدي</option><option>محفظة إلكترونية</option></select></div><div class="field"><label for="payment-reference">رقم الطلبية / مرجع</label><input id="payment-reference" name="reference" autocomplete="off"></div><div class="field"><label for="payment-notes">ملاحظات</label><input id="payment-notes" name="notes"></div><div class="form-actions"><button class="button button-primary" type="submit">تسجيل الدفعة</button><button class="row-action" type="button" data-cancel-edit hidden>إلغاء التعديل</button></div></form></div>`, "تُربط الدفعة بملف العميل المحدد")}
-      ${panel("سجل الدفعات المالية", `<div class="panel-body"><div class="payment-filter field"><label for="payment-filter-client">تصفية حسب العميل</label><select id="payment-filter-client"><option value="">كل العملاء</option>${paymentFilterOptions}</select></div>${table(["العميل","المبلغ","التاريخ","طريقة الدفع","رقم الطلبية / المرجع","ملاحظات","إجراء"], paymentRows(data.payments, true))}</div>`)}
+      ${panel("سجل الدفعات المالية", `<div class="panel-body"><div class="payment-filter field"><label for="payment-filter-client">تصفية حسب العميل</label><select id="payment-filter-client"><option value="">كل العملاء</option>${paymentFilterOptions}</select></div>${table(["العميل","المبلغ","التاريخ","طريقة الدفع","رقم الطلبية / المرجع","ملاحظات","إجراء"], paymentRows(data.payments, true, data.clients))}</div>`)}
     </section>
     <section id="workers-production" class="dashboard-section">${panel("طلبات وأذونات الانصراف", table(["الموظف","التاريخ","السبب","الحالة","إجراء"], data.leaves.map((item, index) => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.date)}</td><td>${escapeHtml(item.reason)}</td><td>${statusTag(item.status)}</td><td>${item.status === "قيد المراجعة" ? `<button class="row-action" data-action="approve-leave" data-index="${index}" type="button">اعتماد</button> <button class="row-action" data-action="deny-leave" data-index="${index}" type="button">رفض</button>` : "—"}</td></tr>`)))}</section>
     <section id="clients" class="dashboard-section">
@@ -524,6 +612,7 @@ function adminView(data, accounts) {
       ${clientAccountCards(data)}
       <div class="modal-backdrop" id="client-modal" hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="client-modal-title"><button class="modal-close" type="button" data-close-client aria-label="إغلاق">×</button><h2 id="client-modal-title">إضافة عميل جديد</h2><p>إنشاء ملف عميل للتعاملات والطلبيات، دون إنشاء بيانات دخول.</p><form id="client-form" class="modal-form"><input type="hidden" name="clientId"><label for="client-name">اسم العميل</label><input id="client-name" name="name" required><label for="client-phone">رقم الهاتف</label><input id="client-phone" name="phone" type="tel"><label for="client-notes">ملاحظات</label><textarea id="client-notes" name="notes" rows="3"></textarea><div class="form-actions"><button class="button button-primary" type="submit">حفظ العميل</button><button class="row-action" type="button" data-close-client>إلغاء</button></div></form></section></div>
     </section>
+    <section id="client-details" class="dashboard-section">${data.clients.some((client) => client.id === selectedClientId) ? clientDetailsView(data.clients.find((client) => client.id === selectedClientId), data) : '<div class="empty-state">اختر عميلاً لعرض تفاصيل حسابه.</div>'}</section>
     <section id="accounts" class="dashboard-section">
       ${panel("طلبات الحسابات الجديدة", table(["الاسم الكامل","اسم المستخدم","رقم التليفون","تاريخ الطلب","تحديد الدور","إجراء"], pendingAccountRows(accounts)))}
       ${panel("حسابات المستخدمين", table(["الاسم","اسم المستخدم","رقم التليفون","الدور الوظيفي","الحالة","إجراء"], userRows(data.users)))}
@@ -545,16 +634,25 @@ function workerView(data, session) {
 }
 
 function clientView(data, session) {
-  const models = data.models;
+  const settlements = data.settlements
+    .filter((entry) => entry._ownerId === session.accountId)
+    .sort((left, right) => new Date(right.date || right._createdAt).getTime() - new Date(left.date || left._createdAt).getTime());
+  const latestSettlement = settlements[0] || null;
+  const openingBalance = Number(latestSettlement?.balance || 0);
+  const currentOrders = data.models.filter((item) => !item.archivedAt);
+  const archivedOrders = data.models.filter((item) => item.archivedAt);
   const payments = data.payments.filter((item) =>
-    (item.clientId || item._ownerId) === session.accountId || item.client === session.username
+    ((item.clientId || item._ownerId) === session.accountId || item.client === session.username)
+    && (!latestSettlement || new Date(item._createdAt || item.created_at).getTime() >= new Date(latestSettlement.date || latestSettlement._createdAt).getTime())
   );
-  const totalAmount = models.reduce((sum, item) => sum + Number(item.totalAmount || 0), 0);
+  const totalAmount = currentOrders.reduce((sum, item) => sum + Number(item.totalAmount || 0), 0);
   const paymentsTotal = payments.reduce((sum, item) => sum + Number(item.amount), 0);
-  const orderPaid = models.reduce((sum, item) => sum + Number(item.paidAmount || 0), 0);
+  const orderPaid = currentOrders.reduce((sum, item) => sum + Number(item.paidAmount || 0), 0);
   const totalPaid = paymentsTotal + orderPaid;
-  const remaining = totalAmount - totalPaid;
-  return `<section id="dashboard" class="dashboard-section"><div class="stats-grid">${stat("موديلاتي", models.length, "مرتبطة بحسابك")}${stat("العدد الفعلي", new Intl.NumberFormat("ar-EG").format(models.reduce((sum, item) => sum + Number(item.quantity), 0)), "قطعة بعد القص")}${stat("إجمالي قيمة المسلّم", money(totalAmount))}${stat("إجمالي المدفوع", money(totalPaid))}${stat("المتبقي", money(remaining))}</div></section><section id="orders" class="dashboard-section">${panel("موديلاتي والطلبيات", clientOrderCards(models))}</section><section id="finance" class="dashboard-section">${panel("دفعاتي المالية", table(["المبلغ","التاريخ","طريقة الدفع"], payments.map((item) => `<tr><td>${money(item.amount)}</td><td>${escapeHtml(item.date)}</td><td>${escapeHtml(item.method)}</td></tr>`)))}</section>`;
+  const due = openingBalance + totalAmount;
+  const remaining = due - totalPaid;
+  const deliveredUnits = currentOrders.reduce((sum, item) => sum + Number(item.quantity), 0);
+  return `<section id="dashboard" class="dashboard-section"><div class="stats-grid">${stat("موديلاتي الحالية", currentOrders.length, "ضمن الفترة الحالية")}${stat("العدد الفعلي", new Intl.NumberFormat("ar-EG").format(deliveredUnits), "قطعة بعد القص")}${latestSettlement ? stat("رصيد سابق مرحّل", money(openingBalance), "افتتاح الفترة الحالية") : ""}${stat("إجمالي المطلوب", money(due), "يشمل الرصيد السابق المرحّل")}${stat("إجمالي المدفوع", money(totalPaid))}${stat("الرصيد المتبقي", money(remaining))}</div></section><section id="orders" class="dashboard-section">${panel("موديلاتي والطلبيات الحالية", clientOrderCards(currentOrders))}${archivedOrders.length ? panel("الطلبات المؤرشفة", clientOrderCards(archivedOrders)) : ""}</section><section id="finance" class="dashboard-section">${panel("دفعاتي المالية", table(["المبلغ","التاريخ","طريقة الدفع"], payments.map((item) => `<tr><td>${money(item.amount)}</td><td>${escapeHtml(item.date)}</td><td>${escapeHtml(item.method)}</td></tr>`)))}</section>`;
 }
 
 let sidebarCollapsed = false;
@@ -615,8 +713,9 @@ function activateDashboardView(viewId, updateHash = true) {
   sections.forEach((section) => {
     section.hidden = section.id !== selectedView;
   });
+  const navigationView = selectedView === "client-details" ? "clients" : selectedView;
   document.querySelectorAll("[data-sidebar-link]").forEach((link) => {
-    const active = link.hash === `#${selectedView}`;
+    const active = link.hash === `#${navigationView}`;
     link.classList.toggle("active", active);
     link.setAttribute("aria-current", active ? "page" : "false");
   });
@@ -695,6 +794,51 @@ async function persistFactoryOrder(order, changes = {}) {
   return data;
 }
 
+function bindClientDetailActions(session) {
+  document.querySelectorAll("[data-return-clients]").forEach((button) => button.addEventListener("click", () => {
+    selectedClientId = "";
+    activateDashboardView("clients");
+  }));
+  document.querySelectorAll("[data-settle-client]").forEach((button) => button.addEventListener("click", async () => {
+    const client = dashboardData.clients.find((entry) => entry.id === button.dataset.settleClient);
+    if (!client) {
+      window.factoryUI.toast("تعذر العثور على ملف العميل.", "error");
+      return;
+    }
+    const summary = clientAccountSummary(client, dashboardData);
+    const balanceMessage = summary.balance >= 0
+      ? `سيتم ترحيل مبلغ ${money(summary.balance)} كمستحق على العميل.`
+      : `سيتم ترحيل مبلغ ${money(Math.abs(summary.balance))} كرصيد دائن للعميل.`;
+    if (!await window.factoryUI.confirmAction({
+      title: "تصفية الحساب وبدء فترة جديدة",
+      message: `${balanceMessage} ستؤرشف موديلات وتسليمات الفترة الحالية دون حذفها.`,
+      confirmLabel: "تصفية وترحيل الرصيد"
+    })) return;
+
+    button.disabled = true;
+    let settlementSaved = false;
+    try {
+      const { data, error } = await supabaseClient.rpc("settle_factory_client_account", {
+        requested_customer_id: client.id
+      });
+      if (error?.code === "PGRST202") throw new Error("دالة تصفية الحساب غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+      if (error) throw error;
+      settlementSaved = true;
+      const balance = Number(data?.balance);
+      if (!Number.isFinite(balance)) throw new Error("أُنجزت استجابة التصفية لكن لم تُعد قيمة الرصيد المرحّل.");
+      await refreshDashboard(session);
+      window.factoryUI.toast(balance >= 0
+        ? `تمت التصفية وترحيل ${money(balance)} كمستحق على العميل.`
+        : `تمت التصفية وترحيل ${money(Math.abs(balance))} كرصيد دائن للعميل.`);
+    } catch (error) {
+      button.disabled = false;
+      window.factoryUI.toast(settlementSaved
+        ? `تمت التصفية، لكن تعذر تحديث البيانات المعروضة: ${error.message}`
+        : `تعذر تصفية حساب العميل: ${error.message}`, "error");
+    }
+  }));
+}
+
 function bindActions(session) {
   document.querySelector("#logout").addEventListener("click", async () => {
     const { error } = await supabaseClient.auth.signOut();
@@ -707,7 +851,7 @@ function bindActions(session) {
 
   if (session.role !== "admin") return;
   const editConfigs = {
-    models: { form: "model-form", collection: "models", fields: ["customerId", "name", "modelNumber", "colors", "sizes", "quantity", "deliveredPieces", "pricePerPiece", "paidAmount", "status"] },
+    models: { form: "model-form", collection: "models", fields: ["customerId", "name", "modelNumber", "colors", "sizes", "quantity", "pricePerPiece", "paidAmount", "status"] },
     payments: { form: "payment-form", collection: "payments", fields: ["customerId", "amount", "date", "method", "reference", "notes"] }
   };
   document.querySelectorAll("[data-edit-kind]").forEach((button) => button.addEventListener("click", () => {
@@ -727,6 +871,9 @@ function bindActions(session) {
     form.querySelector('[type="submit"]').textContent = "حفظ التعديلات";
     form.querySelector("[data-cancel-edit]").hidden = false;
     if (button.dataset.editKind === "models") {
+      form.elements.deliveredPieces.value = item.deliveredPieces;
+      form.querySelector("#model-delivered-summary").textContent = `${new Intl.NumberFormat("ar-EG").format(item.deliveredPieces)} قطعة`;
+      updateOrderTotals();
       activateDashboardView("orders");
       document.querySelector("#order-modal-title").textContent = "تعديل الموديل / الطلبية";
       document.querySelector("#order-modal").hidden = false;
@@ -845,6 +992,18 @@ function bindActions(session) {
     activateDashboardView("clients");
     form.elements.name.focus();
   }));
+  document.querySelectorAll("[data-open-client-details]").forEach((button) => button.addEventListener("click", () => {
+    const client = dashboardData.clients.find((entry) => entry.id === button.dataset.openClientDetails);
+    if (!client) {
+      window.factoryUI.toast("تعذر العثور على ملف العميل.", "error");
+      return;
+    }
+    selectedClientId = client.id;
+    document.querySelector("#client-details").innerHTML = clientDetailsView(client, dashboardData);
+    activateDashboardView("client-details");
+    bindClientDetailActions(session);
+  }));
+  bindClientDetailActions(session);
   document.querySelector("#payment-filter-client").addEventListener("change", (event) => {
     const clientId = event.currentTarget.value;
     document.querySelectorAll("[data-payment-client]").forEach((row) => {
@@ -875,13 +1034,22 @@ function bindActions(session) {
     }
     const submitButton = deliveryForm.querySelector('[type="submit"]');
     submitButton.disabled = true;
+    let deliverySaved = false;
     try {
-      await persistFactoryOrder(order, { deliveredPieces: Number(order.deliveredPieces || 0) + quantity });
+      const { error } = await supabaseClient.rpc("record_factory_delivery", {
+        requested_order_id: order.id,
+        requested_quantity: quantity
+      });
+      if (error?.code === "PGRST202") throw new Error("دالة تسجيل التسليم غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+      if (error) throw error;
+      deliverySaved = true;
       closeDeliveryModal();
       await refreshDashboard(session);
       window.factoryUI.toast("تم تسجيل التسليم وإضافته إلى إجمالي الكمية المسلّمة.");
     } catch (error) {
-      window.factoryUI.toast(`تعذر تسجيل التسليم: ${error.message}`, "error");
+      window.factoryUI.toast(deliverySaved
+        ? `تم تسجيل التسليم، لكن تعذر تحديث البيانات المعروضة: ${error.message}`
+        : `تعذر تسجيل التسليم: ${error.message}`, "error");
     } finally {
       submitButton.disabled = false;
     }
@@ -893,7 +1061,7 @@ function bindActions(session) {
     const paid = Number(orderForm.elements.paidAmount.value || 0);
     const total = delivered * price;
     const formatAmount = (value) => `${new Intl.NumberFormat("ar-EG", { maximumFractionDigits: 2 }).format(value)} ج.م`;
-    orderForm.elements.deliveredPieces.removeAttribute("max");
+    orderForm.querySelector("#model-delivered-summary").textContent = `${new Intl.NumberFormat("ar-EG").format(delivered)} قطعة`;
     orderForm.elements.paidAmount.removeAttribute("max");
     orderForm.querySelector("#model-total").textContent = formatAmount(total);
     orderForm.querySelector("#model-remaining").textContent = formatAmount(total - paid);
@@ -981,9 +1149,25 @@ function bindActions(session) {
     };
     const editIndex = String(formData.get("editIndex"));
     const existingPayment = editIndex ? dashboardData.payments.find((item) => item._recordId === editIndex) : null;
+    if (existingPayment && existingPayment.customerId !== client.id) {
+      window.factoryUI.toast("لا يمكن نقل دفعة مسجلة إلى ملف عميل آخر.", "error");
+      return;
+    }
     submitButton.disabled = true;
+    let paymentSaved = false;
     try {
-      await saveFlexibleRecord("payments", payment, existingPayment?._recordId, client.user_id || null);
+      const { error } = await supabaseClient.rpc("save_factory_payment", {
+        requested_record_id: existingPayment?._recordId || null,
+        requested_customer_id: payment.customerId,
+        requested_amount: payment.amount,
+        requested_date: payment.date,
+        requested_method: payment.method,
+        requested_reference: payment.reference,
+        requested_notes: payment.notes
+      });
+      if (error?.code === "PGRST202") throw new Error("دالة حفظ الدفعات غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+      if (error) throw error;
+      paymentSaved = true;
       form.reset();
       form.elements.editIndex.value = "";
       form.elements.date.value = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
@@ -992,7 +1176,9 @@ function bindActions(session) {
       await refreshDashboard(session);
       window.factoryUI.toast(existingPayment ? "تم تحديث الدفعة بنجاح." : "تم تسجيل الدفعة بنجاح.");
     } catch (error) {
-      window.factoryUI.toast(`تعذر حفظ الدفعة أونلاين: ${error.message}`, "error");
+      window.factoryUI.toast(paymentSaved
+        ? `تم حفظ الدفعة، لكن تعذر تحديث البيانات المعروضة: ${error.message}`
+        : `تعذر حفظ الدفعة أونلاين: ${error.message}`, "error");
     } finally {
       submitButton.disabled = false;
     }
@@ -1137,29 +1323,6 @@ function bindActions(session) {
       return;
     }
     const index = Number(button.dataset.index);
-    if (button.dataset.action === "delete-model") {
-      const order = dashboardData.models[index];
-      if (!order) {
-        window.factoryUI.toast("تعذر العثور على أمر التشغيل. حدّث الصفحة وحاول مجددًا.", "error");
-        return;
-      }
-      if (!await window.factoryUI.confirmAction({
-        title: "حذف أمر التشغيل",
-        message: `هل تريد حذف أمر التشغيل للموديل ${order.name}؟`,
-        confirmLabel: "حذف الأمر",
-        danger: true
-      })) {
-        return;
-      }
-      const { error } = await supabaseClient.from("orders").delete().eq("id", order.id);
-      if (error) {
-        window.factoryUI.toast(`تعذر حذف أمر التشغيل: ${error.message}`, "error");
-        return;
-      }
-      window.factoryUI.toast("تم حذف أمر التشغيل بنجاح.");
-      refreshDashboard(session).catch((error) => window.factoryUI.toast(`حُذف أمر التشغيل، لكن تعذر تحديث اللوحة: ${error.message}`, "error"));
-      return;
-    }
     if (button.dataset.action === "approve-leave" || button.dataset.action === "deny-leave") {
       const leave = dashboardData.leaves[index];
       if (!leave?._recordId) {

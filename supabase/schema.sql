@@ -152,9 +152,13 @@ create table if not exists public.factory_clients (
   name text not null check (length(trim(name)) > 0),
   phone text not null default '',
   notes text not null default '',
+  account_period_started_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.factory_clients
+  add column if not exists account_period_started_at timestamptz;
 
 create or replace function public.sync_factory_client_profile()
 returns trigger
@@ -383,7 +387,8 @@ alter table public.orders
   add column if not exists total_pieces integer not null default 0,
   add column if not exists delivered_pieces integer not null default 0,
   add column if not exists price_per_piece numeric(12, 2) not null default 0,
-  add column if not exists paid_amount numeric(12, 2) not null default 0;
+  add column if not exists paid_amount numeric(12, 2) not null default 0,
+  add column if not exists archived_at timestamptz;
 
 alter table public.orders
   drop column if exists remaining_amount,
@@ -578,7 +583,8 @@ begin
 end;
 $$;
 
-create or replace function public.read_factory_orders_client()
+drop function if exists public.read_factory_orders_client();
+create function public.read_factory_orders_client()
 returns table (
   id uuid,
   client_id uuid,
@@ -589,6 +595,7 @@ returns table (
   sizes text,
   total_pieces integer,
   delivered_pieces integer,
+  archived_at timestamptz,
   price_per_piece numeric,
   total_amount numeric,
   paid_amount numeric,
@@ -616,6 +623,7 @@ begin
            factory_order.sizes,
            factory_order.total_pieces,
            factory_order.delivered_pieces,
+           factory_order.archived_at,
            factory_order.price_per_piece,
            factory_order.total_amount,
            factory_order.paid_amount,
@@ -651,6 +659,7 @@ as $$
 declare
   saved_order_id uuid;
   matched_customer_id uuid;
+  current_customer_id uuid;
   matched_client_id uuid;
   resolved_model_name text;
 begin
@@ -665,6 +674,7 @@ begin
     or requested_delivered_pieces is null
     or requested_delivered_pieces < 0
     or (requested_quantity = 0 and requested_delivered_pieces > 0)
+    or (requested_order_id is null and requested_delivered_pieces <> 0)
     or requested_price_per_piece is null
     or requested_price_per_piece < 0
     or requested_paid_amount is null
@@ -707,18 +717,46 @@ begin
         line_name = nullif(trim(requested_line_name), '')
     where order_id = saved_order_id;
   else
-    perform 1
+    select customer_id
+      into current_customer_id
     from public.orders
     where id = requested_order_id
     for update;
     if not found then
       raise exception 'Factory order not found.';
     end if;
+    if current_customer_id is distinct from matched_customer_id then
+      raise exception 'An existing factory order cannot be reassigned to another customer.';
+    end if;
+    if exists (
+      select 1 from public.orders
+      where id = requested_order_id and archived_at is not null
+    ) then
+      raise exception 'Archived factory orders cannot be edited.';
+    end if;
+    if exists (
+      select 1 from public.orders
+      where id = requested_order_id
+        and delivered_pieces <> requested_delivered_pieces
+    ) then
+      raise exception 'Record deliveries through the delivery workflow; delivered totals cannot be edited.';
+    end if;
+    if exists (
+      select 1 from public.orders
+      where id = requested_order_id
+        and delivered_pieces > 0
+        and price_per_piece <> requested_price_per_piece
+    ) then
+      raise exception 'The unit price cannot be changed after a delivery has been recorded.';
+    end if;
 
     update public.production_stages
-    set target_quantity = requested_quantity,
+    set target_quantity = case
+      when stage_name = 'delivery' then greatest(requested_quantity, requested_delivered_pieces)
+      else requested_quantity
+    end,
         completed_quantity = case
-      when stage_name = 'delivery' then least(requested_delivered_pieces, requested_quantity)
+      when stage_name = 'delivery' then requested_delivered_pieces
           else least(completed_quantity, requested_quantity)
         end,
         fabric = nullif(trim(requested_fabric), ''),
@@ -790,14 +828,334 @@ create table if not exists public.factory_records (
   updated_at timestamptz not null default now()
 );
 
+create or replace function public.guard_factory_financial_history()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  payment_customer_id uuid;
+  payment_period_started_at timestamptz;
+begin
+  if old.collection = 'settlements' then
+    raise exception 'Settled account history is immutable.';
+  end if;
+
+  if old.collection = 'payments'
+     and old.payload ->> 'customerId' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
+    payment_customer_id := (old.payload ->> 'customerId')::uuid;
+    select account_period_started_at
+      into payment_period_started_at
+    from public.factory_clients
+    where id = payment_customer_id;
+    if payment_period_started_at is not null and old.created_at < payment_period_started_at then
+      raise exception 'Payments in a settled period are immutable.';
+    end if;
+  end if;
+
+  if tg_op = 'DELETE' then
+    return old;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists guard_factory_financial_history on public.factory_records;
+create trigger guard_factory_financial_history
+  before update or delete on public.factory_records
+  for each row execute procedure public.guard_factory_financial_history();
+
 create index if not exists factory_records_collection_created_idx
   on public.factory_records (collection, created_at desc);
 create index if not exists factory_records_owner_collection_idx
   on public.factory_records (owner_id, collection);
 
+create table if not exists public.factory_deliveries (
+  id uuid primary key default gen_random_uuid(),
+  order_id uuid not null references public.orders (id) on delete restrict,
+  customer_id uuid not null references public.factory_clients (id) on delete restrict,
+  quantity integer not null check (quantity > 0),
+  price_per_piece numeric(12, 2) not null check (price_per_piece >= 0),
+  amount numeric(14, 2) generated always as (quantity * price_per_piece) stored,
+  delivered_at timestamptz not null default now(),
+  legacy_import boolean not null default false,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists factory_deliveries_customer_date_idx
+  on public.factory_deliveries (customer_id, delivered_at desc);
+create index if not exists factory_deliveries_order_date_idx
+  on public.factory_deliveries (order_id, delivered_at desc);
+create unique index if not exists factory_deliveries_legacy_order_idx
+  on public.factory_deliveries (order_id)
+  where legacy_import;
+
+insert into public.factory_deliveries (
+  order_id, customer_id, quantity, price_per_piece, delivered_at, legacy_import
+)
+select factory_order.id,
+       factory_order.customer_id,
+       factory_order.delivered_pieces,
+       factory_order.price_per_piece,
+       factory_order.created_at,
+       true
+from public.orders as factory_order
+where factory_order.customer_id is not null
+  and factory_order.delivered_pieces > 0
+on conflict (order_id) where legacy_import do nothing;
+
+create or replace function public.record_factory_delivery(
+  requested_order_id uuid,
+  requested_quantity integer
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  matched_customer_id uuid;
+  current_order public.orders%rowtype;
+  saved_delivery_id uuid;
+begin
+  if not public.is_active_factory_admin() then
+    raise exception 'Only active admins can record factory deliveries.';
+  end if;
+  if requested_order_id is null or requested_quantity is null or requested_quantity <= 0 then
+    raise exception 'A valid order and positive delivery quantity are required.';
+  end if;
+
+  select customer_id
+    into matched_customer_id
+  from public.orders
+  where id = requested_order_id;
+  if not found or matched_customer_id is null then
+    raise exception 'Factory order not found or has no customer.';
+  end if;
+
+  perform 1
+  from public.factory_clients
+  where id = matched_customer_id
+  for update;
+
+  select *
+    into current_order
+  from public.orders
+  where id = requested_order_id
+  for update;
+  if not found or current_order.customer_id <> matched_customer_id then
+    raise exception 'Factory order changed while the delivery was being recorded.';
+  end if;
+  if current_order.archived_at is not null then
+    raise exception 'Archived factory orders cannot receive new deliveries.';
+  end if;
+  if current_order.total_pieces <= 0 then
+    raise exception 'Record the actual cut quantity before recording a delivery.';
+  end if;
+
+  insert into public.factory_deliveries (
+    order_id, customer_id, quantity, price_per_piece
+  )
+  values (
+    current_order.id, current_order.customer_id, requested_quantity, current_order.price_per_piece
+  )
+  returning id into saved_delivery_id;
+
+  update public.orders
+  set delivered_pieces = delivered_pieces + requested_quantity
+  where id = current_order.id;
+
+  update public.production_stages
+  set target_quantity = greatest(target_quantity, current_order.delivered_pieces + requested_quantity),
+      completed_quantity = current_order.delivered_pieces + requested_quantity,
+      updated_at = now()
+  where order_id = current_order.id
+    and stage_name = 'delivery';
+
+  return saved_delivery_id;
+end;
+$$;
+
+create or replace function public.save_factory_payment(
+  requested_record_id uuid,
+  requested_customer_id uuid,
+  requested_amount numeric,
+  requested_date date,
+  requested_method text,
+  requested_reference text,
+  requested_notes text
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  matched_client public.factory_clients%rowtype;
+  saved_record_id uuid := coalesce(requested_record_id, gen_random_uuid());
+  existing_record public.factory_records%rowtype;
+  payment_payload jsonb;
+begin
+  if not public.is_active_factory_admin() then
+    raise exception 'Only active admins can record factory payments.';
+  end if;
+  if requested_customer_id is null
+     or requested_amount is null
+     or requested_amount <= 0
+     or requested_date is null then
+    raise exception 'A valid customer, positive amount, and payment date are required.';
+  end if;
+
+  select *
+    into matched_client
+  from public.factory_clients
+  where id = requested_customer_id
+  for update;
+  if not found then
+    raise exception 'The selected factory customer does not exist.';
+  end if;
+
+  payment_payload := jsonb_build_object(
+    'customerId', matched_client.id,
+    'clientId', matched_client.user_id,
+    'clientName', matched_client.name,
+    'amount', requested_amount,
+    'date', requested_date,
+    'method', coalesce(nullif(trim(requested_method), ''), 'غير محدد'),
+    'reference', coalesce(trim(requested_reference), ''),
+    'notes', coalesce(trim(requested_notes), '')
+  );
+
+  if requested_record_id is null then
+    insert into public.factory_records (id, collection, owner_id, payload, created_at, updated_at)
+    values (saved_record_id, 'payments', matched_client.user_id, payment_payload, clock_timestamp(), clock_timestamp());
+  else
+    select *
+      into existing_record
+    from public.factory_records
+    where id = requested_record_id
+      and collection = 'payments'
+    for update;
+    if not found or existing_record.payload ->> 'customerId' <> matched_client.id::text then
+      raise exception 'The selected payment does not belong to this customer.';
+    end if;
+    if matched_client.account_period_started_at is not null
+       and existing_record.created_at < matched_client.account_period_started_at then
+      raise exception 'Payments in a settled period are read-only.';
+    end if;
+
+    update public.factory_records
+    set owner_id = matched_client.user_id,
+        payload = payment_payload,
+        updated_at = now()
+    where id = requested_record_id;
+  end if;
+
+  return saved_record_id;
+end;
+$$;
+
+create or replace function public.settle_factory_client_account(
+  requested_customer_id uuid
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  matched_client public.factory_clients%rowtype;
+  opening_balance numeric(14, 2) := 0;
+  delivered_total numeric(14, 2) := 0;
+  order_paid_total numeric(14, 2) := 0;
+  payments_total numeric(14, 2) := 0;
+  closing_balance numeric(14, 2);
+  settlement_time timestamptz := clock_timestamp();
+begin
+  if not public.is_active_factory_admin() then
+    raise exception 'Only active admins can settle factory client accounts.';
+  end if;
+  if requested_customer_id is null then
+    raise exception 'A customer is required to settle an account.';
+  end if;
+
+  select *
+    into matched_client
+  from public.factory_clients
+  where id = requested_customer_id
+  for update;
+  if not found then
+    raise exception 'The selected factory customer does not exist.';
+  end if;
+
+  select coalesce((payload ->> 'balance')::numeric, 0)
+    into opening_balance
+  from public.factory_records
+  where collection = 'settlements'
+    and payload ->> 'customerId' = matched_client.id::text
+  order by created_at desc
+  limit 1;
+  opening_balance := coalesce(opening_balance, 0);
+
+  select coalesce(sum(total_amount), 0),
+         coalesce(sum(paid_amount), 0)
+    into delivered_total, order_paid_total
+  from public.orders
+  where customer_id = matched_client.id
+    and archived_at is null;
+
+  select coalesce(sum((payload ->> 'amount')::numeric), 0)
+    into payments_total
+  from public.factory_records
+  where collection = 'payments'
+    and payload ->> 'customerId' = matched_client.id::text
+    and (
+      matched_client.account_period_started_at is null
+      or created_at >= matched_client.account_period_started_at
+    );
+
+  closing_balance := opening_balance + delivered_total - order_paid_total - payments_total;
+
+  update public.orders
+  set archived_at = settlement_time
+  where customer_id = matched_client.id
+    and archived_at is null;
+
+  insert into public.factory_records (collection, owner_id, payload, created_at, updated_at)
+  values (
+    'settlements',
+    matched_client.user_id,
+    jsonb_build_object(
+      'customerId', matched_client.id,
+      'clientName', matched_client.name,
+      'openingBalance', opening_balance,
+      'deliveredTotal', delivered_total,
+      'orderPaidTotal', order_paid_total,
+      'paymentsTotal', payments_total,
+      'balance', closing_balance,
+      'date', settlement_time
+    ),
+    settlement_time,
+    settlement_time
+  );
+
+  update public.factory_clients
+  set account_period_started_at = settlement_time,
+      updated_at = now()
+  where id = matched_client.id;
+
+  return jsonb_build_object(
+    'balance', closing_balance,
+    'settledAt', settlement_time
+  );
+end;
+$$;
+
 alter table public.orders enable row level security;
 alter table public.production_stages enable row level security;
 alter table public.factory_records enable row level security;
+alter table public.factory_deliveries enable row level security;
 
 drop policy if exists "Factory roles read relevant orders" on public.orders;
 create policy "Factory roles read relevant orders"
@@ -835,13 +1193,29 @@ create policy "Supervisors update their production stages"
   on public.production_stages for update to authenticated
   using (
     public.is_active_factory_admin()
-    or (stage_name = 'cutting' and public.has_active_factory_role(array['cutting']))
-    or (stage_name = 'sewing' and public.has_active_factory_role(array['sewing']))
+    or (
+      stage_name = 'cutting'
+      and public.has_active_factory_role(array['cutting'])
+      and exists (select 1 from public.orders where orders.id = production_stages.order_id and orders.archived_at is null)
+    )
+    or (
+      stage_name = 'sewing'
+      and public.has_active_factory_role(array['sewing'])
+      and exists (select 1 from public.orders where orders.id = production_stages.order_id and orders.archived_at is null)
+    )
   )
   with check (
     public.is_active_factory_admin()
-    or (stage_name = 'cutting' and public.has_active_factory_role(array['cutting']))
-    or (stage_name = 'sewing' and public.has_active_factory_role(array['sewing']))
+    or (
+      stage_name = 'cutting'
+      and public.has_active_factory_role(array['cutting'])
+      and exists (select 1 from public.orders where orders.id = production_stages.order_id and orders.archived_at is null)
+    )
+    or (
+      stage_name = 'sewing'
+      and public.has_active_factory_role(array['sewing'])
+      and exists (select 1 from public.orders where orders.id = production_stages.order_id and orders.archived_at is null)
+    )
   );
 
 drop policy if exists "Admins manage factory records" on public.factory_records;
@@ -857,12 +1231,27 @@ create policy "Users read their own factory records"
     owner_id = auth.uid()
     and (
       (collection = 'payments' and public.has_active_factory_role(array['client']))
+      or (collection = 'settlements' and public.has_active_factory_role(array['client']))
       or (collection = 'leaves' and public.has_active_factory_role(array['worker', 'cutting', 'sewing']))
       or (collection = 'tasks' and public.has_active_factory_role(array['worker']))
     )
   );
 
-revoke all on public.orders, public.production_stages, public.factory_records from public, anon, authenticated;
+drop policy if exists "Users read their own factory deliveries" on public.factory_deliveries;
+create policy "Users read their own factory deliveries"
+  on public.factory_deliveries for select to authenticated
+  using (
+    public.is_active_factory_admin()
+    or exists (
+      select 1
+      from public.orders
+      where orders.id = factory_deliveries.order_id
+        and orders.client_id = auth.uid()
+        and public.has_active_factory_role(array['client'])
+    )
+  );
+
+revoke all on public.orders, public.production_stages, public.factory_records, public.factory_deliveries from public, anon, authenticated;
 alter table public.factory_clients enable row level security;
 drop policy if exists "Admins manage factory clients" on public.factory_clients;
 create policy "Admins manage factory clients"
@@ -870,12 +1259,14 @@ create policy "Admins manage factory clients"
   using (public.is_active_factory_admin())
   with check (public.is_active_factory_admin());
 revoke all on public.factory_clients from public, anon, authenticated;
-grant select, insert, update on public.factory_clients to authenticated;
-grant select (id, client_id, customer_id, model_name, model_number, colors, sizes, total_pieces, delivered_pieces, status, created_at)
+grant select on public.factory_clients to authenticated;
+grant insert (name, phone, notes) on public.factory_clients to authenticated;
+grant update (name, phone, notes, updated_at) on public.factory_clients to authenticated;
+grant select (id, client_id, customer_id, model_name, model_number, colors, sizes, total_pieces, delivered_pieces, archived_at, status, created_at)
   on public.orders to authenticated;
-grant delete on public.orders to authenticated;
 grant select on public.production_stages to authenticated;
-grant select, insert, update, delete on public.factory_records to authenticated;
+grant select, insert, update on public.factory_records to authenticated;
+grant select on public.factory_deliveries to authenticated;
 grant update (completed_quantity, status, updated_at) on public.production_stages to authenticated;
 revoke all on function public.has_active_factory_role(text[]) from public, anon, authenticated;
 grant execute on function public.has_active_factory_role(text[]) to authenticated;
@@ -887,6 +1278,12 @@ revoke all on function public.read_factory_orders_client() from public, anon, au
 grant execute on function public.read_factory_orders_client() to authenticated;
 revoke all on function public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric) from public, anon, authenticated;
 grant execute on function public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric) to authenticated;
+revoke all on function public.record_factory_delivery(uuid, integer) from public, anon, authenticated;
+grant execute on function public.record_factory_delivery(uuid, integer) to authenticated;
+revoke all on function public.save_factory_payment(uuid, uuid, numeric, date, text, text, text) from public, anon, authenticated;
+grant execute on function public.save_factory_payment(uuid, uuid, numeric, date, text, text, text) to authenticated;
+revoke all on function public.settle_factory_client_account(uuid) from public, anon, authenticated;
+grant execute on function public.settle_factory_client_account(uuid) to authenticated;
 
 -- Create this Auth user with email auto-confirmed before running the schema:
 --   email: mohamed01007033454@gmail.com
