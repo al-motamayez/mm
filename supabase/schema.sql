@@ -745,9 +745,8 @@ grant execute on function public.read_factory_orders_admin() to authenticated;
 revoke all on function public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric) from public, anon, authenticated;
 grant execute on function public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric) to authenticated;
 
--- Run this schema first, then create this Auth user with email auto-confirmed,
--- and run this schema again to promote the generated account row:
---   email: zero0@accounts.al-motamayez.invalid
+-- Create this Auth user with email auto-confirmed before running the schema:
+--   email: mohamed01007033454@gmail.com
 -- Set its password privately in the Supabase Dashboard; never store it here.
 update public.users as account
 set name = 'ZERO0',
@@ -761,5 +760,16 @@ where account.id = auth_user.id
     'mohamed01007033454@gmail.com',
     'zero0@accounts.al-motamayez.invalid'
   );
+
+insert into public.users (id, name, username, role, status)
+select auth_user.id, 'ZERO0', 'ZERO0', 'admin', 'active'
+from auth.users as auth_user
+where lower(auth_user.email) = 'mohamed01007033454@gmail.com'
+on conflict (id) do update
+set name = excluded.name,
+    username = excluded.username,
+    role = excluded.role,
+    status = excluded.status,
+    updated_at = now();
 
 notify pgrst, 'reload schema';
