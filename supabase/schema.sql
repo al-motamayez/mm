@@ -366,8 +366,8 @@ create table if not exists public.orders (
   customer_id uuid references public.factory_clients (id) on delete set null,
   model_name text,
   model_number text not null default '',
-  total_pieces integer not null default 1 check (total_pieces > 0),
-  status text not null default 'جديد',
+  total_pieces integer not null default 0 check (total_pieces >= 0),
+  status text not null default 'قيد الانتظار',
   created_at timestamptz not null default now()
 );
 
@@ -380,14 +380,20 @@ alter table public.orders
   add column if not exists model_number text not null default '',
   add column if not exists colors text not null default '',
   add column if not exists sizes text not null default '',
-  add column if not exists total_pieces integer not null default 1,
+  add column if not exists total_pieces integer not null default 0,
   add column if not exists delivered_pieces integer not null default 0,
   add column if not exists price_per_piece numeric(12, 2) not null default 0,
-  add column if not exists paid_amount numeric(12, 2) not null default 0,
-  add column if not exists total_amount numeric(14, 2)
-    generated always as (total_pieces * price_per_piece) stored,
-  add column if not exists remaining_amount numeric(14, 2)
-    generated always as (total_pieces * price_per_piece - paid_amount) stored;
+  add column if not exists paid_amount numeric(12, 2) not null default 0;
+
+alter table public.orders
+  drop column if exists remaining_amount,
+  drop column if exists total_amount;
+
+alter table public.orders
+  add column total_amount numeric(14, 2)
+    generated always as (delivered_pieces * price_per_piece) stored,
+  add column remaining_amount numeric(14, 2)
+    generated always as (delivered_pieces * price_per_piece - paid_amount) stored;
 
 create table if not exists public.production_stages (
   id uuid primary key default gen_random_uuid(),
@@ -434,9 +440,11 @@ where target_quantity < completed_quantity;
 
 alter table public.orders
   drop constraint if exists orders_total_pieces_positive,
+  drop constraint if exists orders_total_pieces_check,
   drop constraint if exists orders_delivered_pieces_range,
   drop constraint if exists orders_delivered_pieces_nonnegative,
   drop constraint if exists orders_amounts_range,
+  drop constraint if exists orders_paid_amount_nonnegative,
   drop constraint if exists orders_factory_status_check;
 
 update public.orders as factory_order
@@ -446,7 +454,9 @@ set model_name = coalesce(
       'موديل'
     ),
     model_number = coalesce(nullif(trim(factory_order.model_number), ''), ''),
-    total_pieces = greatest(coalesce(factory_order.total_pieces, 1), 1),
+    total_pieces = greatest(coalesce(factory_order.total_pieces, 0), 0),
+    price_per_piece = greatest(coalesce(factory_order.price_per_piece, 0), 0),
+    paid_amount = greatest(coalesce(factory_order.paid_amount, 0), 0),
     delivered_pieces = greatest(
       coalesce(factory_order.delivered_pieces, 0),
       greatest(coalesce((
@@ -461,21 +471,34 @@ set model_name = coalesce(
       when 'مكتمل' then 'مكتمل'
       when 'تم الانتهاء' then 'مكتمل'
       when 'جاهز للتسليم' then 'جاهز للتسليم'
+      when 'قيد الانتظار' then 'قيد الانتظار'
+      when 'معلق' then 'معلق'
+      when 'تحت الإنشاء' then 'تحت الإنشاء'
+      when 'في الخط' then 'في الخط'
+      when 'تحت التصنيع' then 'تحت التصنيع'
       when 'قيد الإنتاج' then 'قيد الإنتاج'
-      else 'قيد الإنتاج'
+      else 'قيد الانتظار'
     end;
 
 alter table public.orders
+  alter column total_pieces set default 0,
+  alter column total_pieces set not null,
+  alter column delivered_pieces set default 0,
+  alter column delivered_pieces set not null,
+  alter column price_per_piece set default 0,
+  alter column price_per_piece set not null,
+  alter column paid_amount set default 0,
+  alter column paid_amount set not null,
   alter column model_name drop not null;
 
 alter table public.orders
-  alter column status set default 'قيد الإنتاج';
+  alter column status set default 'قيد الانتظار';
 alter table public.orders
-  add constraint orders_total_pieces_positive check (total_pieces > 0),
+  add constraint orders_total_pieces_check check (total_pieces >= 0),
   add constraint orders_delivered_pieces_nonnegative check (delivered_pieces >= 0),
-  add constraint orders_amounts_range check (paid_amount between 0 and total_pieces * price_per_piece),
+  add constraint orders_paid_amount_nonnegative check (paid_amount >= 0),
   add constraint orders_factory_status_check check (
-    status in ('قيد الإنتاج', 'جاهز للتسليم', 'مكتمل')
+    status in ('قيد الانتظار', 'معلق', 'تحت الإنشاء', 'في الخط', 'تحت التصنيع', 'قيد الإنتاج', 'جاهز للتسليم', 'مكتمل')
   );
 
 do $$
@@ -555,6 +578,56 @@ begin
 end;
 $$;
 
+create or replace function public.read_factory_orders_client()
+returns table (
+  id uuid,
+  client_id uuid,
+  customer_id uuid,
+  model_name text,
+  model_number text,
+  colors text,
+  sizes text,
+  total_pieces integer,
+  delivered_pieces integer,
+  price_per_piece numeric,
+  total_amount numeric,
+  paid_amount numeric,
+  remaining_amount numeric,
+  status text,
+  created_at timestamptz
+)
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+begin
+  if not public.has_active_factory_role(array['client']) then
+    raise exception 'Only active clients can read their order totals.';
+  end if;
+
+  return query
+    select factory_order.id,
+           factory_order.client_id,
+           factory_order.customer_id,
+           factory_order.model_name,
+           factory_order.model_number,
+           factory_order.colors,
+           factory_order.sizes,
+           factory_order.total_pieces,
+           factory_order.delivered_pieces,
+           factory_order.price_per_piece,
+           factory_order.total_amount,
+           factory_order.paid_amount,
+           factory_order.remaining_amount,
+           factory_order.status,
+           factory_order.created_at
+    from public.orders as factory_order
+    where factory_order.client_id = auth.uid()
+    order by factory_order.created_at desc;
+end;
+$$;
+
 create or replace function public.save_factory_order(
   requested_order_id uuid,
   requested_customer_id uuid,
@@ -588,16 +661,16 @@ begin
       and length(trim(coalesce(requested_model_number, ''))) = 0)
     or requested_customer_id is null
     or requested_quantity is null
-    or requested_quantity <= 0
+    or requested_quantity < 0
     or requested_delivered_pieces is null
     or requested_delivered_pieces < 0
+    or (requested_quantity = 0 and requested_delivered_pieces > 0)
     or requested_price_per_piece is null
     or requested_price_per_piece < 0
     or requested_paid_amount is null
     or requested_paid_amount < 0
-    or requested_paid_amount > requested_quantity * requested_price_per_piece
     or requested_status is null
-    or requested_status not in ('قيد الإنتاج', 'جاهز للتسليم', 'مكتمل') then
+    or requested_status not in ('قيد الانتظار', 'معلق', 'تحت الإنشاء', 'في الخط', 'تحت التصنيع', 'قيد الإنتاج', 'جاهز للتسليم', 'مكتمل') then
     raise exception 'Invalid factory order data.';
   end if;
 
@@ -810,6 +883,8 @@ revoke all on function public.create_factory_order_stages() from public, anon, a
 revoke all on function public.sync_factory_client_profile() from public, anon, authenticated;
 revoke all on function public.read_factory_orders_admin() from public, anon, authenticated;
 grant execute on function public.read_factory_orders_admin() to authenticated;
+revoke all on function public.read_factory_orders_client() from public, anon, authenticated;
+grant execute on function public.read_factory_orders_client() to authenticated;
 revoke all on function public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric) from public, anon, authenticated;
 grant execute on function public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric) to authenticated;
 
