@@ -38,6 +38,7 @@ create table if not exists public.users (
 );
 
 alter table public.users add column if not exists phone text;
+alter table public.users add column if not exists email text;
 alter table public.users drop constraint if exists users_status_check;
 alter table public.users add constraint users_status_check
   check (status in ('pending', 'active', 'suspended'));
@@ -208,7 +209,9 @@ declare
   user_username text;
   user_name text;
   user_phone text;
+  user_email text;
 begin
+  user_email := lower(trim(new.email));
   user_username := coalesce(
     nullif(new.raw_user_meta_data ->> 'username', ''),
     split_part(new.email, '@', 1)
@@ -221,12 +224,15 @@ begin
   user_phone := nullif(trim(new.raw_user_meta_data ->> 'phone'), '');
 
   if lower(user_username) = 'zero0'
-    and lower(new.email) <> 'zero0@accounts.al-motamayez.invalid' then
+    and lower(new.email) not in (
+      'zero0@accounts.al-motamayez.invalid',
+      'mohamed01007033454@gmail.com'
+    ) then
     raise exception 'This username is reserved.';
   end if;
 
-  insert into public.users (id, name, username, phone, role, status)
-  values (new.id, user_name, user_username, user_phone, null, 'pending');
+  insert into public.users (id, name, username, email, phone, role, status)
+  values (new.id, user_name, user_username, user_email, user_phone, null, 'pending');
   return new;
 end;
 $$;
@@ -236,6 +242,27 @@ drop trigger if exists create_pending_factory_user on auth.users;
 create trigger create_pending_factory_user
   after insert on auth.users
   for each row execute procedure public.create_pending_factory_user();
+
+create or replace function public.sync_factory_user_email()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.users
+  set email = lower(trim(new.email)),
+      updated_at = now()
+  where id = new.id
+    and email is distinct from lower(trim(new.email));
+  return new;
+end;
+$$;
+
+drop trigger if exists sync_factory_user_email on auth.users;
+create trigger sync_factory_user_email
+  after update of email on auth.users
+  for each row execute procedure public.sync_factory_user_email();
 
 -- Preserve profiles created by the earlier schema without moving credentials.
 do $$
@@ -250,6 +277,12 @@ begin
   end if;
 end;
 $$;
+
+update public.users as account
+set email = auth_user.email
+from auth.users as auth_user
+where account.id = auth_user.id
+  and account.email is distinct from auth_user.email;
 
 alter table public.users enable row level security;
 
@@ -270,6 +303,7 @@ create policy "Users create own pending account"
     id = auth.uid()
     and role is null
     and status = 'pending'
+    and lower(trim(coalesce(email, ''))) = lower(coalesce(auth.jwt() ->> 'email', ''))
   );
 
 drop policy if exists "Admins activate accounts" on public.users;
@@ -285,12 +319,13 @@ drop policy if exists "Admins delete non-admin accounts" on public.users;
 revoke all on public.users from anon, authenticated;
 grant select, update on public.users to authenticated;
 revoke delete on public.users from authenticated;
-grant insert (id, name, username, phone, role, status) on public.users to authenticated;
+grant insert (id, name, username, email, phone, role, status) on public.users to authenticated;
 revoke all on function public.is_active_factory_admin() from public, anon, authenticated;
 grant execute on function public.is_active_factory_admin() to authenticated;
 revoke all on function public.delete_user_by_admin(uuid) from public, anon, authenticated;
 grant execute on function public.delete_user_by_admin(uuid) to authenticated;
 revoke all on function public.create_pending_factory_user() from public, anon, authenticated;
+revoke all on function public.sync_factory_user_email() from public, anon, authenticated;
 
 create table if not exists public.orders (
   id uuid primary key default gen_random_uuid(),
@@ -751,6 +786,7 @@ grant execute on function public.save_factory_order(uuid, uuid, text, text, inte
 update public.users as account
 set name = 'ZERO0',
     username = 'ZERO0',
+    email = auth_user.email,
     role = 'admin',
     status = 'active',
     updated_at = now()
@@ -761,13 +797,14 @@ where account.id = auth_user.id
     'zero0@accounts.al-motamayez.invalid'
   );
 
-insert into public.users (id, name, username, role, status)
-select auth_user.id, 'ZERO0', 'ZERO0', 'admin', 'active'
+insert into public.users (id, name, username, email, role, status)
+select auth_user.id, 'ZERO0', 'ZERO0', lower(auth_user.email), 'admin', 'active'
 from auth.users as auth_user
 where lower(auth_user.email) = 'mohamed01007033454@gmail.com'
 on conflict (id) do update
 set name = excluded.name,
     username = excluded.username,
+    email = excluded.email,
     role = excluded.role,
     status = excluded.status,
     updated_at = now();

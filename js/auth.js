@@ -102,6 +102,7 @@ async function createPendingAccount(user, fullName, username, phone) {
       id: user.id,
       name: fullName,
       username,
+      email: user.email,
       phone,
       role: null,
       status: "pending"
