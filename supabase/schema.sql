@@ -114,6 +114,46 @@ as $$
   );
 $$;
 
+create or replace function public.delete_user_by_admin(target_user_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  target_role text;
+begin
+  if not public.is_active_factory_admin() then
+    raise exception 'Only an active factory admin may delete user profiles.';
+  end if;
+  if target_user_id is null or target_user_id = auth.uid() then
+    raise exception 'The current account cannot be deleted through this action.';
+  end if;
+
+  select account.role
+    into target_role
+  from public.users as account
+  where account.id = target_user_id
+  for update;
+
+  if not found then
+    raise exception 'The requested user profile does not exist.';
+  end if;
+  if target_role = 'admin' then
+    raise exception 'Admin accounts cannot be deleted through this action.';
+  end if;
+
+  delete from public.users as account
+  where account.id = target_user_id;
+  if not found then
+    raise exception 'The requested user profile was not deleted.';
+  end if;
+end;
+$$;
+
+revoke all on function public.delete_user_by_admin(uuid) from public, anon, authenticated;
+grant execute on function public.delete_user_by_admin(uuid) to authenticated;
+
 create or replace function public.create_pending_factory_user()
 returns trigger
 language plpgsql
@@ -197,17 +237,15 @@ create policy "Admins activate accounts"
   with check (public.is_active_factory_admin() and role is distinct from 'admin');
 
 drop policy if exists "Admins delete non-admin accounts" on public.users;
-create policy "Admins delete non-admin accounts"
-  on public.users
-  for delete
-  to authenticated
-  using (public.is_active_factory_admin() and role is distinct from 'admin');
 
 revoke all on public.users from anon, authenticated;
-grant select, update, delete on public.users to authenticated;
+grant select, update on public.users to authenticated;
+revoke delete on public.users from authenticated;
 grant insert (id, name, username, phone, role, status) on public.users to authenticated;
 revoke all on function public.is_active_factory_admin() from public, anon, authenticated;
 grant execute on function public.is_active_factory_admin() to authenticated;
+revoke all on function public.delete_user_by_admin(uuid) from public, anon, authenticated;
+grant execute on function public.delete_user_by_admin(uuid) to authenticated;
 revoke all on function public.create_pending_factory_user() from public, anon, authenticated;
 
 create table if not exists public.models (

@@ -621,20 +621,15 @@ function bindActions(session) {
         danger: true
       })) return;
       button.disabled = true;
-      const { data, error } = await supabaseClient
-        .from("users")
-        .delete()
-        .eq("id", account.id)
-        .select("id")
-        .maybeSingle();
-      if (error) {
+      const userId = account.id;
+      try {
+        const { error } = await supabaseClient.rpc("delete_user_by_admin", {
+          target_user_id: userId
+        });
+        if (error) throw error;
+      } catch (error) {
         button.disabled = false;
         window.factoryUI.toast(`تعذر حذف الحساب: ${error.message}`, "error");
-        return;
-      }
-      if (!data) {
-        button.disabled = false;
-        window.factoryUI.toast("لم يُحذف الحساب. قد لا تملك صلاحية الحذف أو ربما حُذف بالفعل.", "error");
         return;
       }
       window.factoryUI.toast("تم حذف الحساب بنجاح.");
