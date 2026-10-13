@@ -113,6 +113,14 @@ td { padding: 13px 16px; border-top: 1px solid #f0f2ef; color: #44514b; font-siz
 .row-action:hover { border-color: #abc6b7; color: var(--green); }
 .progress-track { width: 90px; height: 6px; overflow: hidden; border-radius: 9px; background: #edf0ed; }
 .progress-bar { height: 100%; border-radius: 9px; background: #6ca589; }
+.calculated-value { display: flex; min-height: 46px; align-items: center; padding: 10px 13px; border: 1px solid #e2ebe5; border-radius: 9px; color: var(--green-dark); background: #f5f9f6; font-weight: 700; }
+.order-progress { display: grid; min-width: 250px; grid-template-columns: repeat(4, minmax(76px, 1fr)); gap: 5px; }
+.order-progress-step { position: relative; padding-top: 15px; color: #96a29b; font-size: 10px; white-space: normal; }
+.order-progress-step::before { position: absolute; top: 2px; right: 0; width: 9px; height: 9px; border: 2px solid #dbe3dd; border-radius: 50%; background: #fff; content: ""; }
+.order-progress-step:not(:last-child)::after { position: absolute; top: 6px; right: 12px; left: -4px; height: 2px; background: #e4eae5; content: ""; }
+.order-progress-step.complete { color: #527764; }
+.order-progress-step.complete::before, .order-progress-step.complete:not(:last-child)::after { border-color: #5b9874; background: #5b9874; }
+.order-progress-step.current { color: var(--green-dark); font-weight: 700; }
 .page-footer { margin-top: 30px; color: #9aa49e; text-align: center; font-size: 11px; }
 
 .toast-region { position: fixed; z-index: 1100; top: 20px; left: 20px; display: grid; width: min(390px, calc(100vw - 40px)); gap: 10px; direction: rtl; }
