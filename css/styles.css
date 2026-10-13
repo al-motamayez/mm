@@ -64,10 +64,11 @@ input:focus, select:focus { border-color: #5e9b83; box-shadow: 0 0 0 3px #5e9b83
 .sidebar { position: sticky; top: 0; display: flex; flex: 0 0 280px; width: 280px; height: 100vh; flex-direction: column; gap: 30px; overflow-x: hidden; padding: 27px 20px; border-left: 1px solid var(--line); background: var(--white); transition: padding .22s ease, flex-basis .22s ease, width .22s ease; }
 .sidebar .brand { margin-bottom: 6px; }
 .side-label { margin: 0 0 12px; color: #9aa59f; font-size: 11px; font-weight: 600; }
-.sidebar nav { display: grid; gap: 4px; }
+.sidebar nav { display: flex; flex: 1; flex-direction: column; gap: 4px; }
 .nav-link { display: flex; align-items: center; gap: 11px; margin: 3px 0; padding: 10px 12px; border-radius: 8px; color: #64716b; font-size: 13px; }
 .nav-link.active { color: var(--green); background: var(--green-pale); font-weight: 600; }
 .nav-link:hover { color: var(--green); background: #f4f8f5; }
+.nav-link-last { margin-top: auto; padding-top: 14px; border-top: 1px solid var(--line); border-radius: 0; }
 .nav-icon { display: grid; flex: 0 0 22px; width: 22px; place-items: center; text-align: center; font-size: 14px; }
 .nav-link .nav-icon:last-child { font-size: 10px; font-weight: 700; }
 .sidebar-bottom { margin-top: auto; }
@@ -141,6 +142,20 @@ td { padding: 13px 16px; border-top: 1px solid #f0f2ef; color: #44514b; font-siz
 .client-balance-grid span { color: var(--muted); font-size: 10px; }
 .client-balance-grid strong { margin-top: 5px; color: var(--green-dark); font-size: 13px; overflow-wrap: anywhere; }
 .client-notes-preview { min-height: 24px; color: #68756f; font-size: 12px; line-height: 1.7; }
+.clients-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+.clients-toolbar h2 { margin: 0; color: var(--green-dark); font-size: 22px; }
+.clients-toolbar p { margin: 5px 0 0; color: var(--muted); font-size: 13px; }
+.modal-backdrop { position: fixed; z-index: 1300; inset: 0; display: grid; place-items: center; overflow-y: auto; padding: 20px; background: #10251f80; }
+.modal-card { position: relative; width: min(520px, 100%); max-height: min(90vh, 760px); overflow-y: auto; padding: 26px; border: 1px solid var(--line); border-radius: 16px; background: #fff; box-shadow: 0 24px 70px #10251f40; }
+.modal-card h2 { margin: 0; padding-left: 30px; color: var(--green-dark); font-size: 20px; }
+.modal-card > p { margin: 9px 0 22px; color: var(--muted); font-size: 13px; line-height: 1.7; }
+.modal-close { position: absolute; top: 16px; left: 16px; display: grid; width: 34px; height: 34px; place-items: center; border: 1px solid var(--line); border-radius: 50%; color: #53635b; background: #fff; font-size: 22px; }
+.modal-form { display: grid; gap: 10px; }
+.modal-form label { margin-top: 5px; color: #465651; font-size: 13px; font-weight: 600; }
+.modal-form textarea { min-height: 88px; padding: 11px 13px; border: 1px solid #dfe6e1; border-radius: 9px; font: inherit; resize: vertical; }
+.modal-form textarea:focus { border-color: #5e9b83; outline: none; box-shadow: 0 0 0 3px #5e9b831c; }
+.modal-form .form-actions { margin-top: 8px; }
+.order-close-action { border-color: #9bbfa9; color: var(--green); background: var(--green-pale); font-weight: 600; }
 .dashboard-section { width: 100%; min-width: 0; scroll-margin-top: 22px; }
 .order-form { display: grid; gap: 18px; }
 .form-section { display: grid; gap: 14px; padding: 19px; border: 1px solid var(--line); border-radius: 12px; background: #fcfdfb; }
@@ -248,6 +263,9 @@ td { padding: 13px 16px; border-top: 1px solid #f0f2ef; color: #44514b; font-siz
   .client-form .client-notes-field, .client-form .form-actions { grid-column: auto; }
   .client-account-grid { grid-template-columns: minmax(0, 1fr); padding: 12px; }
   .client-balance-grid { grid-template-columns: 1fr; }
+  .clients-toolbar { align-items: flex-start; flex-direction: column; }
+  .clients-toolbar .button { width: 100%; min-height: 46px; }
+  .modal-card { padding: 22px 18px; }
   .form-grid .wide { grid-column: span 2; }
   .header-brand { gap: 7px; }
   .header-logo { width: 50px; height: 42px; }

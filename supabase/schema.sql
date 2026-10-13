@@ -114,6 +114,50 @@ as $$
   );
 $$;
 
+create table if not exists public.factory_clients (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid unique references auth.users (id) on delete set null,
+  name text not null check (length(trim(name)) > 0),
+  phone text not null default '',
+  notes text not null default '',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create or replace function public.sync_factory_client_profile()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if new.role = 'client' and new.status = 'active' then
+    insert into public.factory_clients (user_id, name, phone)
+    values (new.id, new.name, coalesce(new.phone, ''))
+    on conflict (user_id) do update
+      set name = excluded.name,
+          phone = excluded.phone,
+          updated_at = now();
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists sync_factory_client_profile on public.users;
+create trigger sync_factory_client_profile
+  after insert or update of name, phone, role, status on public.users
+  for each row execute procedure public.sync_factory_client_profile();
+
+insert into public.factory_clients (user_id, name, phone)
+select account.id, account.name, coalesce(account.phone, '')
+from public.users as account
+where account.role = 'client'
+  and account.status = 'active'
+on conflict (user_id) do update
+  set name = excluded.name,
+      phone = excluded.phone,
+      updated_at = now();
+
 create or replace function public.delete_user_by_admin(target_user_id uuid)
 returns void
 language plpgsql
@@ -248,29 +292,24 @@ revoke all on function public.delete_user_by_admin(uuid) from public, anon, auth
 grant execute on function public.delete_user_by_admin(uuid) to authenticated;
 revoke all on function public.create_pending_factory_user() from public, anon, authenticated;
 
-create table if not exists public.models (
-  id uuid primary key default gen_random_uuid(),
-  name text not null check (length(trim(name)) > 0),
-  description text,
-  price numeric not null default 0 check (price >= 0),
-  created_at timestamptz not null default now()
-);
-
 create table if not exists public.orders (
   id uuid primary key default gen_random_uuid(),
   client_id uuid references auth.users (id) on delete set null,
-  client_name text not null,
-  model_id uuid references public.models (id) on delete set null,
-  quantity integer not null check (quantity > 0),
+  customer_id uuid references public.factory_clients (id) on delete set null,
+  model_name text,
+  model_number text not null default '',
+  total_pieces integer not null default 1 check (total_pieces > 0),
   status text not null default 'جديد',
   created_at timestamptz not null default now()
 );
 
 alter table public.orders
-  add column if not exists client_id uuid references auth.users (id) on delete set null;
+  add column if not exists client_id uuid references auth.users (id) on delete set null,
+  add column if not exists customer_id uuid references public.factory_clients (id) on delete set null;
 
 alter table public.orders
   add column if not exists model_name text,
+  add column if not exists model_number text not null default '',
   add column if not exists colors text not null default '',
   add column if not exists sizes text not null default '',
   add column if not exists total_pieces integer not null default 1,
@@ -316,57 +355,59 @@ end
 where lower(trim(stage_name)) in ('تقطيع', 'قص', 'خياطة', 'تشطيب', 'تسليم');
 
 update public.production_stages as stage
-set target_quantity = greatest(orders.quantity, stage.completed_quantity)
-from public.orders
-where stage.order_id = orders.id
+set target_quantity = greatest(factory_order.total_pieces, stage.completed_quantity)
+from public.orders as factory_order
+where stage.order_id = factory_order.id
   and stage.target_quantity = 0;
 
 update public.production_stages
 set target_quantity = completed_quantity
 where target_quantity < completed_quantity;
 
+alter table public.orders
+  drop constraint if exists orders_total_pieces_positive,
+  drop constraint if exists orders_delivered_pieces_range,
+  drop constraint if exists orders_delivered_pieces_nonnegative,
+  drop constraint if exists orders_amounts_range,
+  drop constraint if exists orders_factory_status_check;
+
 update public.orders as factory_order
 set model_name = coalesce(
       nullif(trim(factory_order.model_name), ''),
-      (select model.name from public.models as model where model.id = factory_order.model_id),
+      nullif(trim(factory_order.model_number), ''),
       'موديل'
     ),
-    total_pieces = greatest(coalesce(factory_order.quantity, 1), 1),
-    delivered_pieces = least(
+    model_number = coalesce(nullif(trim(factory_order.model_number), ''), ''),
+    total_pieces = greatest(coalesce(factory_order.total_pieces, 1), 1),
+    delivered_pieces = greatest(
+      coalesce(factory_order.delivered_pieces, 0),
       greatest(coalesce((
         select stage.completed_quantity
         from public.production_stages as stage
         where stage.order_id = factory_order.id
           and stage.stage_name = 'delivery'
         limit 1
-      ), 0), 0),
-      greatest(coalesce(factory_order.quantity, 1), 1)
+      ), 0), 0)
     ),
     status = case trim(factory_order.status)
-      when 'قيد التنفيذ' then 'جاري الخياطة والتقفيل'
-      when 'تم الانتهاء' then 'مكتمل'
-      when 'جديد' then 'جاري القص'
-      when 'جاري القص' then 'جاري القص'
-      when 'جاري الخياطة والتقفيل' then 'جاري الخياطة والتقفيل'
-      when 'جاهز للتسليم' then 'جاهز للتسليم'
       when 'مكتمل' then 'مكتمل'
-      else 'جاري القص'
+      when 'تم الانتهاء' then 'مكتمل'
+      when 'جاهز للتسليم' then 'جاهز للتسليم'
+      when 'قيد الإنتاج' then 'قيد الإنتاج'
+      else 'قيد الإنتاج'
     end;
 
 alter table public.orders
-  alter column model_name set not null;
+  alter column model_name drop not null;
 
 alter table public.orders
-  drop constraint if exists orders_total_pieces_positive,
-  drop constraint if exists orders_delivered_pieces_range,
-  drop constraint if exists orders_amounts_range,
-  drop constraint if exists orders_factory_status_check;
+  alter column status set default 'قيد الإنتاج';
 alter table public.orders
   add constraint orders_total_pieces_positive check (total_pieces > 0),
-  add constraint orders_delivered_pieces_range check (delivered_pieces between 0 and total_pieces),
+  add constraint orders_delivered_pieces_nonnegative check (delivered_pieces >= 0),
   add constraint orders_amounts_range check (paid_amount between 0 and total_pieces * price_per_piece),
   add constraint orders_factory_status_check check (
-    status in ('جاري القص', 'جاري الخياطة والتقفيل', 'جاهز للتسليم', 'مكتمل')
+    status in ('قيد الإنتاج', 'جاهز للتسليم', 'مكتمل')
   );
 
 do $$
@@ -385,12 +426,10 @@ end;
 $$;
 
 update public.orders as factory_order
-set client_id = account.id
-from public.users as account
-where factory_order.client_id is null
-  and lower(factory_order.client_name) = lower(account.username)
-  and account.role = 'client'
-  and account.status = 'active';
+set customer_id = customer.id
+from public.factory_clients as customer
+where factory_order.customer_id is null
+  and customer.user_id = factory_order.client_id;
 
 create or replace function public.create_factory_order_stages()
 returns trigger
@@ -401,10 +440,10 @@ as $$
 begin
   insert into public.production_stages (order_id, stage_name, target_quantity)
   values
-    (new.id, 'cutting', new.quantity),
-    (new.id, 'sewing', new.quantity),
-    (new.id, 'finishing', new.quantity),
-    (new.id, 'delivery', new.quantity);
+    (new.id, 'cutting', new.total_pieces),
+    (new.id, 'sewing', new.total_pieces),
+    (new.id, 'finishing', new.total_pieces),
+    (new.id, 'delivery', new.total_pieces);
   return new;
 end;
 $$;
@@ -415,7 +454,7 @@ create trigger create_factory_order_stages
   for each row execute procedure public.create_factory_order_stages();
 
 insert into public.production_stages (order_id, stage_name, target_quantity)
-select factory_order.id, stage.stage_name, factory_order.quantity
+select factory_order.id, stage.stage_name, factory_order.total_pieces
 from public.orders as factory_order
 cross join (values ('cutting'), ('sewing'), ('finishing'), ('delivery')) as stage(stage_name)
 where not exists (
@@ -427,6 +466,7 @@ where not exists (
 
 drop function if exists public.save_factory_order(uuid, text, text, integer, text);
 drop function if exists public.save_factory_order(uuid, text, text, integer, text, text, text);
+drop function if exists public.save_factory_order(uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric);
 
 create or replace function public.read_factory_orders_admin()
 returns setof public.orders
@@ -449,8 +489,9 @@ $$;
 
 create or replace function public.save_factory_order(
   requested_order_id uuid,
+  requested_customer_id uuid,
   requested_model_name text,
-  requested_client_name text,
+  requested_model_number text,
   requested_quantity integer,
   requested_status text,
   requested_fabric text,
@@ -468,48 +509,55 @@ set search_path = public
 as $$
 declare
   saved_order_id uuid;
-  saved_model_id uuid;
+  matched_customer_id uuid;
   matched_client_id uuid;
+  resolved_model_name text;
 begin
   if not public.is_active_factory_admin() then
     raise exception 'Only active admins can create or edit factory orders.';
   end if;
-  if length(trim(requested_model_name)) = 0
-    or length(trim(requested_client_name)) = 0
+  if (length(trim(coalesce(requested_model_name, ''))) = 0
+      and length(trim(coalesce(requested_model_number, ''))) = 0)
+    or requested_customer_id is null
+    or requested_quantity is null
     or requested_quantity <= 0
+    or requested_delivered_pieces is null
     or requested_delivered_pieces < 0
-    or requested_delivered_pieces > requested_quantity
+    or requested_price_per_piece is null
     or requested_price_per_piece < 0
+    or requested_paid_amount is null
     or requested_paid_amount < 0
     or requested_paid_amount > requested_quantity * requested_price_per_piece
-    or requested_status not in ('جاري القص', 'جاري الخياطة والتقفيل', 'جاهز للتسليم', 'مكتمل') then
+    or requested_status is null
+    or requested_status not in ('قيد الإنتاج', 'جاهز للتسليم', 'مكتمل') then
     raise exception 'Invalid factory order data.';
   end if;
 
-  select id into matched_client_id
-  from public.users
-  where lower(username) = lower(trim(requested_client_name))
-    and role = 'client'
-    and status = 'active'
-  limit 1;
+  select customer.id, customer.user_id
+    into matched_customer_id, matched_client_id
+  from public.factory_clients as customer
+  where customer.id = requested_customer_id
+  for update;
 
-  if matched_client_id is null then
-    raise exception 'No active client account matches the supplied username.';
+  if matched_customer_id is null then
+    raise exception 'The selected factory customer does not exist.';
   end if;
 
-  if requested_order_id is null then
-    insert into public.models (name)
-    values (trim(requested_model_name))
-    returning id into saved_model_id;
+  resolved_model_name := coalesce(
+    nullif(trim(coalesce(requested_model_name, '')), ''),
+    nullif(trim(coalesce(requested_model_number, '')), '')
+  );
 
+  if requested_order_id is null then
     insert into public.orders (
-      client_id, client_name, model_id, model_name, colors, sizes, quantity,
+      client_id, customer_id, model_name, model_number, colors, sizes,
       total_pieces, delivered_pieces, price_per_piece, paid_amount, status
     )
     values (
-      matched_client_id, trim(requested_client_name), saved_model_id, trim(requested_model_name),
+      matched_client_id, matched_customer_id, resolved_model_name,
+      coalesce(trim(requested_model_number), ''),
       coalesce(trim(requested_colors), ''), coalesce(trim(requested_sizes), ''),
-      requested_quantity, requested_quantity, requested_delivered_pieces,
+      requested_quantity, requested_delivered_pieces,
       requested_price_per_piece, requested_paid_amount, trim(requested_status)
     )
     returning id into saved_order_id;
@@ -518,20 +566,18 @@ begin
         line_name = nullif(trim(requested_line_name), '')
     where order_id = saved_order_id;
   else
-    select model_id into saved_model_id
+    perform 1
     from public.orders
-    where id = requested_order_id;
+    where id = requested_order_id
+    for update;
     if not found then
       raise exception 'Factory order not found.';
     end if;
 
-    update public.models
-    set name = trim(requested_model_name)
-    where id = saved_model_id;
     update public.production_stages
     set target_quantity = requested_quantity,
         completed_quantity = case
-          when stage_name = 'delivery' then requested_delivered_pieces
+      when stage_name = 'delivery' then least(requested_delivered_pieces, requested_quantity)
           else least(completed_quantity, requested_quantity)
         end,
         fabric = nullif(trim(requested_fabric), ''),
@@ -539,11 +585,11 @@ begin
     where order_id = requested_order_id;
     update public.orders
     set client_id = matched_client_id,
-        client_name = trim(requested_client_name),
-        model_name = trim(requested_model_name),
+        customer_id = matched_customer_id,
+        model_name = resolved_model_name,
+        model_number = coalesce(trim(requested_model_number), ''),
         colors = coalesce(trim(requested_colors), ''),
         sizes = coalesce(trim(requested_sizes), ''),
-        quantity = requested_quantity,
         total_pieces = requested_quantity,
         delivered_pieces = requested_delivered_pieces,
         price_per_piece = requested_price_per_piece,
@@ -565,7 +611,7 @@ begin
     select tablename, policyname
     from pg_policies
     where schemaname = 'public'
-      and tablename in ('users', 'models', 'orders', 'production_stages')
+      and tablename in ('users', 'orders', 'production_stages')
   loop
     execute format(
       'drop policy if exists %I on public.%I',
@@ -608,21 +654,9 @@ create index if not exists factory_records_collection_created_idx
 create index if not exists factory_records_owner_collection_idx
   on public.factory_records (owner_id, collection);
 
-alter table public.models enable row level security;
 alter table public.orders enable row level security;
 alter table public.production_stages enable row level security;
 alter table public.factory_records enable row level security;
-
-drop policy if exists "Authenticated users read models" on public.models;
-create policy "Authenticated users read models"
-  on public.models for select to authenticated
-  using (public.has_active_factory_role(array['admin', 'client', 'worker', 'cutting', 'sewing']));
-
-drop policy if exists "Admins manage models" on public.models;
-create policy "Admins manage models"
-  on public.models for all to authenticated
-  using (public.is_active_factory_admin())
-  with check (public.is_active_factory_admin());
 
 drop policy if exists "Factory roles read relevant orders" on public.orders;
 create policy "Factory roles read relevant orders"
@@ -687,9 +721,16 @@ create policy "Users read their own factory records"
     )
   );
 
-revoke all on public.models, public.orders, public.production_stages, public.factory_records from public, anon, authenticated;
-grant select, delete on public.models to authenticated;
-grant select (id, client_id, client_name, model_id, model_name, colors, sizes, quantity, total_pieces, delivered_pieces, status, created_at)
+revoke all on public.orders, public.production_stages, public.factory_records from public, anon, authenticated;
+alter table public.factory_clients enable row level security;
+drop policy if exists "Admins manage factory clients" on public.factory_clients;
+create policy "Admins manage factory clients"
+  on public.factory_clients for all to authenticated
+  using (public.is_active_factory_admin())
+  with check (public.is_active_factory_admin());
+revoke all on public.factory_clients from public, anon, authenticated;
+grant select, insert, update on public.factory_clients to authenticated;
+grant select (id, client_id, customer_id, model_name, model_number, colors, sizes, total_pieces, delivered_pieces, status, created_at)
   on public.orders to authenticated;
 grant delete on public.orders to authenticated;
 grant select on public.production_stages to authenticated;
@@ -698,10 +739,11 @@ grant update (completed_quantity, status, updated_at) on public.production_stage
 revoke all on function public.has_active_factory_role(text[]) from public, anon, authenticated;
 grant execute on function public.has_active_factory_role(text[]) to authenticated;
 revoke all on function public.create_factory_order_stages() from public, anon, authenticated;
+revoke all on function public.sync_factory_client_profile() from public, anon, authenticated;
 revoke all on function public.read_factory_orders_admin() from public, anon, authenticated;
 grant execute on function public.read_factory_orders_admin() to authenticated;
-revoke all on function public.save_factory_order(uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric) from public, anon, authenticated;
-grant execute on function public.save_factory_order(uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric) to authenticated;
+revoke all on function public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric) from public, anon, authenticated;
+grant execute on function public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric) to authenticated;
 
 -- Run this schema first, then create this Auth user with email auto-confirmed,
 -- and run this schema again to promote the generated account row:
