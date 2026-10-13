@@ -40,8 +40,9 @@ async function readSession() {
     return null;
   }
   const authEmail = user.email?.toLocaleLowerCase();
-  const username = user.user_metadata?.username
-    || (authEmail === ADMIN_AUTH_EMAIL ? ADMIN_USERNAME : authEmail?.split("@")[0]);
+  const username = authEmail === ADMIN_AUTH_EMAIL
+    ? ADMIN_USERNAME
+    : user.user_metadata?.username || authEmail?.split("@")[0];
   if (!username) throw new Error("تعذر تحديد اسم المستخدم لحساب المصادقة.");
   const account = await findAccountByUsername(username);
   if (!account || account.status !== "active" || !rolePages[account.role]) {
@@ -124,7 +125,7 @@ async function readDashboardData(session) {
   if (session.role === "admin") {
     ({ data: orders, error: ordersError } = await supabaseClient.rpc("read_factory_orders_admin"));
     if (ordersError?.code === "PGRST202") {
-      throw new Error("دالة قراءة الطلبيات الإدارية غير منشأة. شغّل supabase/schema.sql.");
+      throw new Error("دالة read_factory_orders_admin غير موجودة في قاعدة البيانات الحالية. شغّل ملف supabase/schema.sql كاملًا في SQL Editor ثم أعد تحميل الصفحة. لا تستبدلها بـ select('*')؛ فالدالة مطلوبة لحماية التفاصيل المالية من حسابات العملاء.");
     }
   } else {
     let ordersQuery = supabaseClient

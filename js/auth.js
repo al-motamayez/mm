@@ -25,10 +25,10 @@ function usernameEmail(username) {
 }
 
 function usernameForAuthUser(user) {
-  const metadataUsername = user.user_metadata?.username;
-  if (metadataUsername) return metadataUsername;
   const email = user.email?.toLocaleLowerCase();
   if (email === ADMIN_AUTH_EMAIL) return ADMIN_USERNAME;
+  const metadataUsername = user.user_metadata?.username;
+  if (metadataUsername) return metadataUsername;
   return email?.split("@")[0];
 }
 
@@ -264,7 +264,7 @@ loginForm.addEventListener("submit", async (event) => {
         return;
       }
       if (account) {
-        showMessage("فشل تسجيل الدخول عبر Supabase Auth. وجود الحساب في جدول users وحده لا يكفي؛ يجب إنشاء حساب المصادقة بالبريد الداخلي المطابق لاسم المستخدم، وتعيين كلمة المرور له من لوحة Supabase. لا تُخزّن كلمة المرور أو تقارنها من جدول users.");
+        showMessage("تعذر تسجيل الدخول عبر Supabase Auth. تأكد أن حساب Auth للأدمن يستخدم البريد mohamed01007033454@gmail.com، وأن كلمة المرور هي كلمة مروره الحالية في Supabase Auth (وليست كلمة محفوظة في users). إذا نسيتها، أعد تعيينها من لوحة Supabase، وتأكد أن users.id يطابق معرّف حساب Auth.");
       } else {
         showMessage("اسم المستخدم أو كلمة المرور غير صحيحة.");
       }
