@@ -388,6 +388,8 @@ alter table public.orders
   add column if not exists delivered_pieces integer not null default 0,
   add column if not exists price_per_piece numeric(12, 2) not null default 0,
   add column if not exists paid_amount numeric(12, 2) not null default 0,
+  add column if not exists expected_delivery_date date,
+  add column if not exists model_image_url text,
   add column if not exists archived_at timestamptz;
 
 alter table public.orders
@@ -596,6 +598,8 @@ returns table (
   total_pieces integer,
   delivered_pieces integer,
   archived_at timestamptz,
+  expected_delivery_date date,
+  model_image_url text,
   price_per_piece numeric,
   total_amount numeric,
   paid_amount numeric,
@@ -624,6 +628,8 @@ begin
            factory_order.total_pieces,
            factory_order.delivered_pieces,
            factory_order.archived_at,
+           factory_order.expected_delivery_date,
+           factory_order.model_image_url,
            factory_order.price_per_piece,
            factory_order.total_amount,
            factory_order.paid_amount,
@@ -636,7 +642,10 @@ begin
 end;
 $$;
 
-create or replace function public.save_factory_order(
+drop function if exists public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric);
+drop function if exists public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date);
+drop function if exists public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text);
+create function public.save_factory_order(
   requested_order_id uuid,
   requested_customer_id uuid,
   requested_model_name text,
@@ -649,7 +658,9 @@ create or replace function public.save_factory_order(
   requested_sizes text,
   requested_delivered_pieces integer,
   requested_price_per_piece numeric,
-  requested_paid_amount numeric
+  requested_paid_amount numeric,
+  requested_expected_delivery_date date,
+  requested_model_image_url text
 )
 returns uuid
 language plpgsql
@@ -702,14 +713,14 @@ begin
   if requested_order_id is null then
     insert into public.orders (
       client_id, customer_id, model_name, model_number, colors, sizes,
-      total_pieces, delivered_pieces, price_per_piece, paid_amount, status
+      total_pieces, delivered_pieces, price_per_piece, paid_amount, expected_delivery_date, model_image_url, status
     )
     values (
       matched_client_id, matched_customer_id, resolved_model_name,
       coalesce(trim(requested_model_number), ''),
       coalesce(trim(requested_colors), ''), coalesce(trim(requested_sizes), ''),
       requested_quantity, requested_delivered_pieces,
-      requested_price_per_piece, requested_paid_amount, trim(requested_status)
+      requested_price_per_piece, requested_paid_amount, requested_expected_delivery_date, requested_model_image_url, trim(requested_status)
     )
     returning id into saved_order_id;
     update public.production_stages
@@ -773,6 +784,8 @@ begin
         delivered_pieces = requested_delivered_pieces,
         price_per_piece = requested_price_per_piece,
         paid_amount = requested_paid_amount,
+        expected_delivery_date = requested_expected_delivery_date,
+        model_image_url = requested_model_image_url,
         status = trim(requested_status)
     where id = requested_order_id;
     saved_order_id := requested_order_id;
@@ -878,10 +891,16 @@ create table if not exists public.factory_deliveries (
   quantity integer not null check (quantity > 0),
   price_per_piece numeric(12, 2) not null check (price_per_piece >= 0),
   amount numeric(14, 2) generated always as (quantity * price_per_piece) stored,
+  recipient_name text not null default '',
+  expected_delivery_date date,
   delivered_at timestamptz not null default now(),
   legacy_import boolean not null default false,
   created_at timestamptz not null default now()
 );
+
+alter table public.factory_deliveries
+  add column if not exists recipient_name text not null default '',
+  add column if not exists expected_delivery_date date;
 
 create index if not exists factory_deliveries_customer_date_idx
   on public.factory_deliveries (customer_id, delivered_at desc);
@@ -892,12 +911,13 @@ create unique index if not exists factory_deliveries_legacy_order_idx
   where legacy_import;
 
 insert into public.factory_deliveries (
-  order_id, customer_id, quantity, price_per_piece, delivered_at, legacy_import
+  order_id, customer_id, quantity, price_per_piece, expected_delivery_date, delivered_at, legacy_import
 )
 select factory_order.id,
        factory_order.customer_id,
        factory_order.delivered_pieces,
        factory_order.price_per_piece,
+       factory_order.expected_delivery_date,
        factory_order.created_at,
        true
 from public.orders as factory_order
@@ -905,9 +925,17 @@ where factory_order.customer_id is not null
   and factory_order.delivered_pieces > 0
 on conflict (order_id) where legacy_import do nothing;
 
+update public.factory_deliveries as delivery
+set expected_delivery_date = factory_order.expected_delivery_date
+from public.orders as factory_order
+where delivery.order_id = factory_order.id
+  and delivery.expected_delivery_date is null;
+
+drop function if exists public.record_factory_delivery(uuid, integer);
 create or replace function public.record_factory_delivery(
   requested_order_id uuid,
-  requested_quantity integer
+  requested_quantity integer,
+  requested_recipient_name text
 )
 returns uuid
 language plpgsql
@@ -922,8 +950,9 @@ begin
   if not public.is_active_factory_admin() then
     raise exception 'Only active admins can record factory deliveries.';
   end if;
-  if requested_order_id is null or requested_quantity is null or requested_quantity <= 0 then
-    raise exception 'A valid order and positive delivery quantity are required.';
+  if requested_order_id is null or requested_quantity is null or requested_quantity <= 0
+     or length(trim(coalesce(requested_recipient_name, ''))) = 0 then
+    raise exception 'A valid order, positive delivery quantity, and recipient name are required.';
   end if;
 
   select customer_id
@@ -955,10 +984,11 @@ begin
   end if;
 
   insert into public.factory_deliveries (
-    order_id, customer_id, quantity, price_per_piece
+    order_id, customer_id, quantity, price_per_piece, recipient_name, expected_delivery_date
   )
   values (
-    current_order.id, current_order.customer_id, requested_quantity, current_order.price_per_piece
+    current_order.id, current_order.customer_id, requested_quantity, current_order.price_per_piece,
+    trim(requested_recipient_name), current_order.expected_delivery_date
   )
   returning id into saved_delivery_id;
 
@@ -974,6 +1004,84 @@ begin
     and stage_name = 'delivery';
 
   return saved_delivery_id;
+end;
+$$;
+
+create or replace function public.finish_factory_cutting(
+  requested_order_id uuid,
+  requested_size_data jsonb,
+  requested_colors text,
+  requested_model_image_url text
+)
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  current_order public.orders%rowtype;
+  size_counts jsonb;
+  cut_total numeric;
+  size_type text;
+begin
+  if not public.has_active_factory_role(array['cutting']) then
+    raise exception 'Only active cutting supervisors can finish cutting.';
+  end if;
+  if requested_order_id is null or requested_size_data is null
+     or coalesce(jsonb_typeof(requested_size_data), '') <> 'object' then
+    raise exception 'A valid order and size breakdown are required.';
+  end if;
+
+  size_type := requested_size_data ->> 'type';
+  size_counts := requested_size_data -> 'counts';
+  if coalesce(size_type, '') not in ('men', 'women', 'children')
+     or coalesce(jsonb_typeof(size_counts), '') <> 'object' then
+    raise exception 'Select a supported size category and at least one size.';
+  end if;
+  if exists (
+    select 1
+    from jsonb_each_text(size_counts) as size_entry(size_name, quantity_text)
+    where quantity_text is null
+       or quantity_text !~ '^[0-9]+$'
+       or (case when quantity_text ~ '^[0-9]+$' then quantity_text::numeric else 0 end) > 2147483647
+       or (size_type in ('men', 'women') and size_name not in ('S', 'M', 'L', 'XL', '2XL', '3XL', '4XL'))
+       or (size_type = 'children' and size_name not in ('2', '4', '6', '8', '10', '12', '14', '16'))
+  ) then
+    raise exception 'The size breakdown contains an invalid size or quantity.';
+  end if;
+  select coalesce(sum(value::numeric), 0)
+    into cut_total
+  from jsonb_each_text(size_counts);
+  if cut_total <= 0 or cut_total > 2147483647 then
+    raise exception 'Enter a positive cut quantity for at least one size.';
+  end if;
+
+  select *
+    into current_order
+  from public.orders
+  where id = requested_order_id
+  for update;
+  if not found or current_order.archived_at is not null then
+    raise exception 'The active factory order was not found.';
+  end if;
+
+  update public.orders
+  set sizes = requested_size_data::text,
+      colors = coalesce(trim(requested_colors), ''),
+      model_image_url = coalesce(nullif(trim(requested_model_image_url), ''), model_image_url),
+      total_pieces = cut_total::integer,
+      status = 'في الخط'
+  where id = requested_order_id;
+
+  update public.production_stages
+  set target_quantity = cut_total,
+      completed_quantity = cut_total,
+      status = 'مكتمل',
+      updated_at = now()
+  where order_id = requested_order_id
+    and stage_name = 'cutting';
+
+  return cut_total::integer;
 end;
 $$;
 
@@ -1265,6 +1373,7 @@ grant insert (name, phone, notes) on public.factory_clients to authenticated;
 grant update (name, phone, notes, updated_at) on public.factory_clients to authenticated;
 grant select (id, client_id, customer_id, model_name, model_number, colors, sizes, total_pieces, delivered_pieces, archived_at, status, created_at)
   on public.orders to authenticated;
+grant select (model_image_url) on public.orders to authenticated;
 grant select on public.production_stages to authenticated;
 grant select, insert, update on public.factory_records to authenticated;
 grant select on public.factory_deliveries to authenticated;
@@ -1277,14 +1386,31 @@ revoke all on function public.read_factory_orders_admin() from public, anon, aut
 grant execute on function public.read_factory_orders_admin() to authenticated;
 revoke all on function public.read_factory_orders_client() from public, anon, authenticated;
 grant execute on function public.read_factory_orders_client() to authenticated;
-revoke all on function public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric) from public, anon, authenticated;
-grant execute on function public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric) to authenticated;
-revoke all on function public.record_factory_delivery(uuid, integer) from public, anon, authenticated;
-grant execute on function public.record_factory_delivery(uuid, integer) to authenticated;
+revoke all on function public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text) from public, anon, authenticated;
+grant execute on function public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text) to authenticated;
+revoke all on function public.record_factory_delivery(uuid, integer, text) from public, anon, authenticated;
+grant execute on function public.record_factory_delivery(uuid, integer, text) to authenticated;
+revoke all on function public.finish_factory_cutting(uuid, jsonb, text, text) from public, anon, authenticated;
+grant execute on function public.finish_factory_cutting(uuid, jsonb, text, text) to authenticated;
 revoke all on function public.save_factory_payment(uuid, uuid, numeric, date, text, text, text) from public, anon, authenticated;
 grant execute on function public.save_factory_payment(uuid, uuid, numeric, date, text, text, text) to authenticated;
 revoke all on function public.settle_factory_client_account(uuid) from public, anon, authenticated;
 grant execute on function public.settle_factory_client_account(uuid) to authenticated;
+
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('factory-model-images', 'factory-model-images', true, 5242880, array['image/jpeg', 'image/png', 'image/webp'])
+on conflict (id) do update
+set public = excluded.public,
+    file_size_limit = excluded.file_size_limit,
+    allowed_mime_types = excluded.allowed_mime_types;
+
+drop policy if exists "Factory staff upload model images" on storage.objects;
+create policy "Factory staff upload model images"
+  on storage.objects for insert to authenticated
+  with check (
+    bucket_id = 'factory-model-images'
+    and public.has_active_factory_role(array['admin', 'cutting'])
+  );
 
 -- Create this Auth user with email auto-confirmed before running the schema:
 --   email: mohamed01007033454@gmail.com
