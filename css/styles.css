@@ -151,6 +151,8 @@ td { padding: 13px 16px; border-top: 1px solid #f0f2ef; color: #44514b; font-siz
 .model-preview-list { position: absolute; z-index: 30; top: calc(100% + 8px); right: 0; display: none; width: min(330px, calc(100vw - 48px)); max-height: 260px; overflow-y: auto; padding: 12px; border: 1px solid #aebfb3; border-radius: 11px; background: #fff; box-shadow: 0 14px 35px #10251f24; }
 .model-preview:hover .model-preview-list, .model-preview:focus-within .model-preview-list { display: grid; gap: 9px; }
 .model-preview-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.model-preview-link { width: 100%; border: 0; color: inherit; background: transparent; font: inherit; text-align: right; cursor: pointer; }
+.model-preview-link:hover, .model-preview-link:focus-visible { border-radius: 7px; background: #eff5f0; outline: 2px solid #438267; outline-offset: 2px; }
 .model-preview-item:last-child { padding-bottom: 0; border-bottom: 0; }
 .model-preview-item strong { overflow-wrap: anywhere; color: #183d33; font-size: 14px; }
 .model-preview-item > span:not(.status) { color: #40544b; font-size: 13px; }
@@ -188,6 +190,9 @@ td { padding: 13px 16px; border-top: 1px solid #f0f2ef; color: #44514b; font-siz
 .client-note-form { display: grid; max-width: 720px; gap: 10px; }
 .client-note-form textarea { min-height: 86px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; font: inherit; }
 .client-note-form button { justify-self: start; }
+.order-delete-action { color: #8b3028; border-color: #e3c5c1; }
+.order-delete-action:hover { color: #721f19; background: #fff0ee; }
+.order-delete-protected { align-self: center; color: #59665f; font-size: 12px; }
 .client-finance-summary { margin-bottom: 20px; }
 .client-detail-section { min-width: 0; margin-top: 22px; }
 .client-detail-section > .order-cards { padding: 12px 0; }

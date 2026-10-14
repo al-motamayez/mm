@@ -516,6 +516,7 @@ function bindPickers(form) {
     updateColorPicker(root);
   });
   form.addEventListener("reset", () => window.setTimeout(() => {
+    if (form.elements.editIndex.value) return;
     form.querySelectorAll("[data-size-picker]").forEach((root) => {
       root.dataset.sizeLegacy = "";
       root.querySelectorAll("[data-size-toggle]").forEach((button) => {
@@ -642,6 +643,13 @@ function stat(label, value, note = "") {
   return `<article class="stat-card"><span>${label}</span><strong>${value}</strong>${note ? `<small>${note}</small>` : ""}</article>`;
 }
 
+function orderCanBeDeleted(item) {
+  return !item.archivedAt
+    && Number(item.deliveredPieces) === 0
+    && Number(item.paidAmount) === 0
+    && !dashboardData.deliveries.some((delivery) => delivery.order_id === item.id);
+}
+
 function orderCards(models, withActions = false) {
   if (!models.length) return '<div class="empty-state">لا توجد طلبيات لعرضها حاليًا.</div>';
   return `<div class="order-cards">${models.map((item) => {
@@ -657,7 +665,7 @@ function orderCards(models, withActions = false) {
       <div><dt>التسليم المتوقع</dt><dd>${formatDateOnly(item.expectedDeliveryDate)}</dd></div><div><dt>تاريخ الإنشاء</dt><dd>${formatDateTime(item.created_at)}</dd></div>
       <div><dt>المدفوع</dt><dd>${money(item.paidAmount)}</dd></div><div><dt>المتبقي من قيمة المسلّم</dt><dd>${money(item.remainingAmount)}</dd></div>
     </dl>
-    ${withActions ? `<footer class="order-card-actions"><button class="row-action" type="button" data-edit-kind="models" data-index="${index}">تعديل الطلبية</button><button class="row-action" type="button" data-action="record-delivery" data-index="${index}">تسجيل تسليم</button>${item.status === "مكتمل" ? '<span class="status">مغلق / مؤرشف</span>' : `<button class="row-action order-close-action" type="button" data-action="close-order" data-index="${index}">اكتمل / إغلاق الطلب</button>`}</footer>` : ""}
+    ${withActions ? `<footer class="order-card-actions"><button class="row-action" type="button" data-edit-kind="models" data-index="${index}">تعديل الطلبية</button><button class="row-action" type="button" data-action="record-delivery" data-index="${index}">تسجيل تسليم</button>${item.status === "مكتمل" ? '<span class="status">مغلق / مؤرشف</span>' : `<button class="row-action order-close-action" type="button" data-action="close-order" data-index="${index}">اكتمل / إغلاق الطلب</button>`}${orderCanBeDeleted(item) ? `<button class="row-action order-delete-action" type="button" data-action="delete-order" data-order-id="${escapeHtml(item.id)}">حذف الموديل</button>` : '<span class="order-delete-protected" title="لا يمكن حذف طلب له تسليمات أو مبالغ مسجلة أو مؤرشف">محمي بسجل مالي / تسليم</span>'}</footer>` : ""}
   </article>`;
   }).join("")}</div>`;
 }
@@ -749,7 +757,7 @@ function clientAccountCards(data) {
   const clients = data.clients;
   if (!clients.length) return '<div class="empty-state">لا توجد حسابات عملاء مسجلة.</div>';
   const previewList = (orders, id) => orders.length
-    ? `<div class="model-preview-list" id="${id}" role="tooltip">${orders.map((order) => `<div class="model-preview-item"><strong>${escapeHtml(order.name)}</strong><span>${escapeHtml(order.modelNumber || "دون رقم")}</span>${statusTag(order.status)}</div>`).join("")}</div>`
+    ? `<div class="model-preview-list" id="${id}">${orders.map((order) => `<button class="model-preview-item model-preview-link" type="button" data-open-model-id="${escapeHtml(order.id)}" aria-label="فتح ${escapeHtml(order.name)} للتعديل"><strong>${escapeHtml(order.name)}</strong><span>${escapeHtml(order.modelNumber || "دون رقم")}</span>${statusTag(order.status)}</button>`).join("")}</div>`
     : `<div class="model-preview-list" id="${id}" role="tooltip"><span>لا توجد موديلات ضمن هذه الفئة.</span></div>`;
   return `<div class="client-account-grid">${clients.map((client) => {
     const summary = clientAccountSummary(client, data);
@@ -819,7 +827,7 @@ function clientDetailsView(client, data) {
       <div><dt>تاريخ الإنشاء</dt><dd>${formatDateTime(order.created_at)}</dd></div>
       ${archived ? `<div><dt>تاريخ الأرشفة</dt><dd>${formatDateTime(order.archivedAt)}</dd></div>` : ""}
     </dl>
-    ${!archived ? `<footer class="order-card-actions"><button class="row-action" type="button" data-edit-client-order="${escapeHtml(order.id)}">تعديل السعر أو بيانات الموديل</button></footer>` : ""}
+    ${!archived ? `<footer class="order-card-actions"><button class="row-action" type="button" data-edit-client-order="${escapeHtml(order.id)}">تعديل السعر أو بيانات الموديل</button>${orderCanBeDeleted(order) ? `<button class="row-action order-delete-action" type="button" data-action="delete-order" data-order-id="${escapeHtml(order.id)}">حذف الموديل</button>` : '<span class="order-delete-protected" title="لا يمكن حذف طلب له تسليمات أو مبالغ مسجلة">محمي بسجل مالي / تسليم</span>'}</footer>` : ""}
   </article>`;
   const clientNotes = data.clientNotes.filter((note) => note.customerId === client.id);
   return `<div class="clients-toolbar client-detail-toolbar"><div><h2>${escapeHtml(client.name)} · تفاصيل الحساب</h2><p>${escapeHtml(client.phone || "لا يوجد رقم هاتف")}${client.notes ? ` · ${escapeHtml(client.notes)}` : ""}</p><p>تاريخ إنشاء ملف العميل: ${formatDateTime(client.created_at)}</p></div><div class="client-detail-actions"><button class="button button-primary" type="button" data-quick-client-payment="${escapeHtml(client.id)}">＋ إضافة دفعة مالية</button><button class="button button-secondary" type="button" data-print-account>طباعة كشف الحساب / PDF</button><button class="row-action" type="button" data-return-clients>العودة إلى العملاء</button></div></div>
@@ -1298,6 +1306,48 @@ function bindActions(session) {
     document.querySelector("#order-modal-title").textContent = "إضافة موديل / طلبية";
     updateOrderTotals();
   };
+  const openOrderEditor = (order) => {
+    const orderIndex = dashboardData.models.findIndex((entry) => entry.id === order.id);
+    if (orderIndex < 0 || order.archivedAt) {
+      window.factoryUI.toast("هذا الطلب غير متاح للتعديل.", "error");
+      return;
+    }
+    orderForm.reset();
+    orderForm.elements.savedOrderId.value = "";
+    orderForm.elements.editIndex.value = String(orderIndex);
+    for (const field of ["customerId", "name", "modelNumber", "pricePerPiece", "paidAmount", "status", "expectedDeliveryDate"]) {
+      orderForm.elements[field].value = order[field] ?? "";
+    }
+    orderForm.elements.quantity.value = order.quantity || "";
+    orderForm.elements.deliveredPieces.value = order.deliveredPieces;
+    setSizePicker(orderForm.querySelector("[data-size-picker]"), order.sizes);
+    setColorPicker(orderForm.querySelector("[data-color-picker]"), order.colors);
+    orderForm.querySelector("[data-model-image-preview]").innerHTML = modelImageMarkup(order.modelImageUrl);
+    orderForm.elements.pricePerPiece.readOnly = order.deliveredPieces > 0;
+    orderForm.querySelector("#model-price-history-note").hidden = order.deliveredPieces <= 0;
+    orderForm.querySelector("#model-delivered-summary").textContent = `${new Intl.NumberFormat("ar-EG").format(order.deliveredPieces)} قطعة`;
+    orderForm.querySelector('[type="submit"]').textContent = "حفظ التعديلات";
+    orderForm.querySelector("[data-cancel-edit]").hidden = false;
+    document.querySelector("#order-modal-title").textContent = "تعديل بيانات الموديل";
+    updateOrderTotals();
+    orderModal.hidden = false;
+    orderForm.elements.pricePerPiece.focus();
+  };
+  document.querySelector("#clients").addEventListener("click", (event) => {
+    const previewButton = event.target.closest("[data-open-model-id]");
+    if (!previewButton) return;
+    const order = dashboardData.models.find((item) => item.id === previewButton.dataset.openModelId);
+    const client = dashboardData.clients.find((item) => item.id === order?.customerId);
+    if (!order || !client) {
+      window.factoryUI.toast("تعذر العثور على الموديل أو ملف العميل.", "error");
+      return;
+    }
+    selectedClientId = client.id;
+    document.querySelector("#client-details").innerHTML = clientDetailsView(client, dashboardData);
+    activateDashboardView("client-details");
+    bindClientDetailActions(session);
+    openOrderEditor(order);
+  });
   document.querySelector("[data-open-order-modal]").addEventListener("click", () => {
     closeOrderModal();
     orderModal.hidden = false;
@@ -1504,30 +1554,12 @@ function bindActions(session) {
     }
     const button = event.target.closest("[data-edit-client-order]");
     if (!button) return;
-    const orderIndex = dashboardData.models.findIndex((order) => order.id === button.dataset.editClientOrder);
-    const order = dashboardData.models[orderIndex];
-    if (!order || order.archivedAt) {
-      window.factoryUI.toast("هذا الطلب غير متاح للتعديل.", "error");
+    const order = dashboardData.models.find((item) => item.id === button.dataset.editClientOrder);
+    if (!order) {
+      window.factoryUI.toast("تعذر العثور على الموديل المطلوب تعديله.", "error");
       return;
     }
-    orderForm.elements.editIndex.value = String(orderIndex);
-    for (const field of ["customerId", "name", "modelNumber", "colors", "sizes", "pricePerPiece", "paidAmount", "status", "expectedDeliveryDate"]) {
-      orderForm.elements[field].value = order[field] ?? "";
-    }
-    orderForm.elements.quantity.value = order.quantity || "";
-    orderForm.elements.deliveredPieces.value = order.deliveredPieces;
-    setSizePicker(orderForm.querySelector("[data-size-picker]"), order.sizes);
-    setColorPicker(orderForm.querySelector("[data-color-picker]"), order.colors);
-    orderForm.querySelector("[data-model-image-preview]").innerHTML = modelImageMarkup(order.modelImageUrl);
-    orderForm.elements.pricePerPiece.readOnly = order.deliveredPieces > 0;
-    orderForm.querySelector("#model-price-history-note").hidden = order.deliveredPieces <= 0;
-    orderForm.querySelector("#model-delivered-summary").textContent = `${new Intl.NumberFormat("ar-EG").format(order.deliveredPieces)} قطعة`;
-    orderForm.querySelector('[type="submit"]').textContent = "حفظ التعديلات";
-    orderForm.querySelector("[data-cancel-edit]").hidden = false;
-    document.querySelector("#order-modal-title").textContent = "تعديل بيانات الموديل";
-    updateOrderTotals();
-    orderModal.hidden = false;
-    orderForm.elements.pricePerPiece.focus();
+    openOrderEditor(order);
   });
   ["deliveredPieces", "pricePerPiece", "paidAmount"].forEach((name) => orderForm.elements[name].addEventListener("input", updateOrderTotals));
   orderForm.elements.customerId.addEventListener("change", updateOrderTotals);
@@ -1656,6 +1688,35 @@ function bindActions(session) {
     }
   });
   document.querySelectorAll("[data-action]").forEach((button) => button.addEventListener("click", async () => {
+    if (button.dataset.action === "delete-order") {
+      const order = dashboardData.models.find((item) => item.id === button.dataset.orderId);
+      if (!order) {
+        window.factoryUI.toast("تعذر العثور على الموديل. حدّث الصفحة وحاول مجددًا.", "error");
+        return;
+      }
+      if (!await window.factoryUI.confirmAction({
+        title: "حذف الموديل",
+        message: `هل تريد حذف الموديل ${order.name || order.modelNumber || "المحدد"}؟ لا يمكن التراجع عن هذا الإجراء. لا يمكن حذف موديل له تسليمات أو مبالغ مسجلة أو موديل مؤرشف.`,
+        confirmLabel: "حذف الموديل",
+        danger: true
+      })) return;
+      button.disabled = true;
+      try {
+        const { error } = await supabaseClient.rpc("delete_factory_order", {
+          requested_order_id: order.id
+        });
+        if (error?.code === "PGRST202") {
+          throw new Error("دالة حذف الموديل غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+        }
+        if (error) throw error;
+        await refreshDashboard(session);
+        window.factoryUI.toast("تم حذف الموديل.");
+      } catch (error) {
+        button.disabled = false;
+        window.factoryUI.toast(`تعذر حذف الموديل: ${error.message}`, "error");
+      }
+      return;
+    }
     if (button.dataset.action === "record-delivery" || button.dataset.action === "close-order") {
       const order = dashboardData.models[Number(button.dataset.index)];
       if (!order) {

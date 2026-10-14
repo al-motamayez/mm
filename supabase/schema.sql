@@ -1085,6 +1085,48 @@ begin
 end;
 $$;
 
+create or replace function public.delete_factory_order(requested_order_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  current_order public.orders%rowtype;
+begin
+  if not public.is_active_factory_admin() then
+    raise exception 'Only active admins can delete factory orders.';
+  end if;
+  if requested_order_id is null then
+    raise exception 'A valid factory order is required.';
+  end if;
+
+  select *
+    into current_order
+  from public.orders
+  where id = requested_order_id
+  for update;
+  if not found then
+    raise exception 'Factory order not found.';
+  end if;
+  if current_order.archived_at is not null then
+    raise exception 'Archived factory orders cannot be deleted.';
+  end if;
+  if current_order.delivered_pieces > 0
+     or current_order.paid_amount > 0
+     or exists (
+       select 1
+       from public.factory_deliveries
+       where order_id = requested_order_id
+     ) then
+    raise exception 'Orders with payment or delivery history cannot be deleted.';
+  end if;
+
+  delete from public.orders
+  where id = requested_order_id;
+end;
+$$;
+
 create or replace function public.save_factory_payment(
   requested_record_id uuid,
   requested_customer_id uuid,
@@ -1392,6 +1434,8 @@ revoke all on function public.record_factory_delivery(uuid, integer, text) from 
 grant execute on function public.record_factory_delivery(uuid, integer, text) to authenticated;
 revoke all on function public.finish_factory_cutting(uuid, jsonb, text, text) from public, anon, authenticated;
 grant execute on function public.finish_factory_cutting(uuid, jsonb, text, text) to authenticated;
+revoke all on function public.delete_factory_order(uuid) from public, anon, authenticated;
+grant execute on function public.delete_factory_order(uuid) to authenticated;
 revoke all on function public.save_factory_payment(uuid, uuid, numeric, date, text, text, text) from public, anon, authenticated;
 grant execute on function public.save_factory_payment(uuid, uuid, numeric, date, text, text, text) to authenticated;
 revoke all on function public.settle_factory_client_account(uuid) from public, anon, authenticated;
