@@ -412,6 +412,7 @@ create table if not exists public.production_stages (
   fabric text,
   bolt_count integer not null default 0 check (bolt_count >= 0),
   layer_count integer not null default 0 check (layer_count >= 0),
+  technical_notes text not null default '',
   line_name text,
   target_quantity integer not null default 0 check (target_quantity >= 0),
   completed_quantity integer not null default 0 check (completed_quantity >= 0 and completed_quantity <= target_quantity),
@@ -425,6 +426,7 @@ alter table public.production_stages
   add column if not exists fabric text,
   add column if not exists bolt_count integer not null default 0,
   add column if not exists layer_count integer not null default 0,
+  add column if not exists technical_notes text not null default '',
   add column if not exists line_name text,
   add column if not exists target_quantity integer not null default 0,
   add column if not exists completed_quantity integer not null default 0;
@@ -745,7 +747,7 @@ begin
     if not found then
       raise exception 'Factory order not found.';
     end if;
-    if current_customer_id is distinct from matched_customer_id then
+    if current_customer_id is not null and current_customer_id is distinct from matched_customer_id then
       raise exception 'An existing factory order cannot be reassigned to another customer.';
     end if;
     if exists (
@@ -1017,7 +1019,102 @@ begin
 end;
 $$;
 
+drop function if exists public.submit_factory_cutting(uuid, text, text, jsonb, text, text, text, integer, integer, text);
+create function public.submit_factory_cutting(
+  requested_order_id uuid,
+  requested_model_name text,
+  requested_model_number text,
+  requested_size_data jsonb,
+  requested_colors text,
+  requested_model_image_url text,
+  requested_fabric text,
+  requested_bolt_count integer,
+  requested_layer_count integer,
+  requested_technical_notes text
+)
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  size_type text;
+  size_counts jsonb;
+  cut_total numeric;
+begin
+  if not public.has_active_factory_role(array['cutting']) then
+    raise exception 'Only active cutting supervisors can submit new cutting orders.';
+  end if;
+  if requested_order_id is null
+     or (length(trim(coalesce(requested_model_name, ''))) = 0
+         and length(trim(coalesce(requested_model_number, ''))) = 0)
+     or requested_size_data is null
+     or coalesce(jsonb_typeof(requested_size_data), '') <> 'object'
+     or length(trim(coalesce(requested_fabric, ''))) = 0
+     or requested_bolt_count is null or requested_bolt_count < 1
+     or requested_layer_count is null or requested_layer_count < 1 then
+    raise exception 'A valid model, size breakdown, fabric, bolt count, and layer count are required.';
+  end if;
+
+  size_type := requested_size_data ->> 'type';
+  size_counts := requested_size_data -> 'counts';
+  if coalesce(size_type, '') not in ('men', 'women', 'children')
+     or coalesce(jsonb_typeof(size_counts), '') <> 'object' then
+    raise exception 'Select a supported size category and at least one size.';
+  end if;
+  if exists (
+    select 1
+    from jsonb_each_text(size_counts) as size_entry(size_name, quantity_text)
+    where quantity_text is null
+       or quantity_text !~ '^[0-9]+$'
+       or (case when quantity_text ~ '^[0-9]+$' then quantity_text::numeric else 0 end) > 2147483647
+       or (size_type in ('men', 'women') and size_name not in ('S', 'M', 'L', 'XL', '2XL', '3XL', '4XL'))
+       or (size_type = 'children' and size_name not in ('2', '4', '6', '8', '10', '12', '14', '16'))
+  ) then
+    raise exception 'The size breakdown contains an invalid size or quantity.';
+  end if;
+  select coalesce(sum(value::numeric), 0)
+    into cut_total
+  from jsonb_each_text(size_counts);
+  if cut_total <= 0 or cut_total > 2147483647 then
+    raise exception 'Enter a positive cut quantity for at least one size.';
+  end if;
+
+  insert into public.orders (
+    id, client_id, customer_id, model_name, model_number, colors, sizes,
+    total_pieces, status, model_image_url
+  )
+  values (
+    requested_order_id, null, null,
+    coalesce(nullif(trim(coalesce(requested_model_name, '')), ''),
+             nullif(trim(coalesce(requested_model_number, '')), '')),
+    coalesce(trim(requested_model_number), ''),
+    coalesce(trim(requested_colors), ''),
+    requested_size_data::text,
+    cut_total::integer,
+    'في الخط',
+    nullif(trim(coalesce(requested_model_image_url, '')), '')
+  );
+
+  update public.production_stages
+  set target_quantity = cut_total::integer,
+      completed_quantity = cut_total::integer,
+      fabric = trim(requested_fabric),
+      bolt_count = requested_bolt_count,
+      layer_count = requested_layer_count,
+      technical_notes = coalesce(trim(requested_technical_notes), ''),
+      status = 'مكتمل',
+      updated_at = now()
+  where order_id = requested_order_id
+    and stage_name = 'cutting';
+
+  return cut_total::integer;
+end;
+$$;
+
 drop function if exists public.finish_factory_cutting(uuid, jsonb, text, text);
+drop function if exists public.finish_factory_cutting(uuid, jsonb, text, text, text, integer, integer);
+drop function if exists public.finish_factory_cutting(uuid, jsonb, text, text, text, integer, integer, text);
 create function public.finish_factory_cutting(
   requested_order_id uuid,
   requested_size_data jsonb,
@@ -1025,7 +1122,8 @@ create function public.finish_factory_cutting(
   requested_model_image_url text,
   requested_fabric text,
   requested_bolt_count integer,
-  requested_layer_count integer
+  requested_layer_count integer,
+  requested_technical_notes text
 )
 returns integer
 language plpgsql
@@ -1096,6 +1194,7 @@ begin
       fabric = trim(requested_fabric),
       bolt_count = requested_bolt_count,
       layer_count = requested_layer_count,
+      technical_notes = coalesce(trim(requested_technical_notes), ''),
       status = 'مكتمل',
       updated_at = now()
   where order_id = requested_order_id
@@ -1453,8 +1552,10 @@ revoke all on function public.save_factory_order(uuid, uuid, text, text, integer
 grant execute on function public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text) to authenticated;
 revoke all on function public.record_factory_delivery(uuid, integer, text) from public, anon, authenticated;
 grant execute on function public.record_factory_delivery(uuid, integer, text) to authenticated;
-revoke all on function public.finish_factory_cutting(uuid, jsonb, text, text, text, integer, integer) from public, anon, authenticated;
-grant execute on function public.finish_factory_cutting(uuid, jsonb, text, text, text, integer, integer) to authenticated;
+revoke all on function public.submit_factory_cutting(uuid, text, text, jsonb, text, text, text, integer, integer, text) from public, anon, authenticated;
+grant execute on function public.submit_factory_cutting(uuid, text, text, jsonb, text, text, text, integer, integer, text) to authenticated;
+revoke all on function public.finish_factory_cutting(uuid, jsonb, text, text, text, integer, integer, text) from public, anon, authenticated;
+grant execute on function public.finish_factory_cutting(uuid, jsonb, text, text, text, integer, integer, text) to authenticated;
 revoke all on function public.delete_factory_order(uuid) from public, anon, authenticated;
 grant execute on function public.delete_factory_order(uuid) to authenticated;
 revoke all on function public.save_factory_payment(uuid, uuid, numeric, date, text, text, text) from public, anon, authenticated;

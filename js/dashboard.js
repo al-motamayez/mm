@@ -32,7 +32,7 @@ const COLOR_OPTIONS = [
 
 const roleInfo = {
   admin: { title: "لوحة تحكم الإدارة", description: "نظرة شاملة على المصنع وإدارة بيانات التشغيل.", icon: "▦" },
-  cutting: { title: "لوحة مشرف القص", description: "متابعة أوامر القص والكميات المطلوبة والمنفذة.", icon: "✂" },
+  cutting: { title: "لوحة مشرف القص", description: "متابعة أوامر الإدارة وتسجيل بيانات الفرش والقص.", icon: "✂" },
   sewing: { title: "لوحة مشرف الخياطة", description: "متابعة خطوط الخياطة والإنتاج اليومي.", icon: "⌁" },
   worker: { title: "مهامي", description: "المهام المسندة إليك وحالة تنفيذها.", icon: "✓" },
   client: { title: "بوابة العميل", description: "موديلاتك وطلباتك والمدفوعات الخاصة بحسابك.", icon: "◇" }
@@ -208,7 +208,7 @@ async function readDashboardData(session) {
   if (session.role === "admin" || orders.length) {
     let stagesQuery = supabaseClient
       .from("production_stages")
-      .select("id, order_id, stage_name, worker_name, fabric, bolt_count, layer_count, line_name, target_quantity, completed_quantity, status, updated_at");
+      .select("id, order_id, stage_name, worker_name, fabric, bolt_count, layer_count, technical_notes, line_name, target_quantity, completed_quantity, status, updated_at");
     if (session.role !== "admin") {
       stagesQuery = stagesQuery.in("order_id", orders.map((order) => order.id));
     }
@@ -269,6 +269,7 @@ async function readDashboardData(session) {
       fabric: cuttingStage?.fabric || "",
       boltCount: Number(cuttingStage?.bolt_count || 0),
       layerCount: Number(cuttingStage?.layer_count || 0),
+      cuttingNotes: cuttingStage?.technical_notes || "",
       line: sewingStage?.line_name || "",
       created_at: order.created_at
     };
@@ -290,6 +291,7 @@ async function readDashboardData(session) {
       fabric: stage.fabric || "—",
       boltCount: Number(stage.bolt_count || 0),
       layerCount: Number(stage.layer_count || 0),
+      technicalNotes: stage.technical_notes || "",
       priority: ordersById.get(stage.order_id)?.priority || "عادي",
       total: stage.target_quantity || ordersById.get(stage.order_id)?.total_pieces || 0,
       cut: stage.completed_quantity || 0,
@@ -671,16 +673,18 @@ function orderCards(models, withActions = false) {
     const index = dashboardData.models.findIndex((order) => order.id === item.id);
     return `<article class="order-card">
     <header class="order-card-heading">${modelImageMarkup(item.modelImageUrl)}<div><p class="order-card-label">الموديل ${item.modelNumber ? `· رقم ${escapeHtml(item.modelNumber)}` : ""} · الأولوية: ${escapeHtml(item.priority || "عادي")}</p><h3>${escapeHtml(item.name || item.modelNumber || "موديل بدون اسم")}</h3></div>${statusTag(item.status)}</header>
-    <p class="order-card-client">العميل: <strong>${escapeHtml(item.client)}</strong></p>
+    <p class="order-card-client">العميل: <strong>${escapeHtml(item.client || "غير مربوط بعميل · بانتظار مراجعة الإدارة")}</strong></p>
     <dl class="order-card-details">
       <div><dt>الألوان</dt><dd>${escapeHtml(item.colors || "—")}</dd></div><div><dt>المقاسات / العدد لكل مقاس</dt><dd>${escapeHtml(sizeSummary(item.sizes))}</dd></div>
       <div><dt>العدد الفعلي بعد القص</dt><dd>${item.quantity ? `${new Intl.NumberFormat("ar-EG").format(item.quantity)} قطعة` : "بانتظار الحصر بعد القص"}</dd></div><div><dt>الكمية المنجزة</dt><dd>${new Intl.NumberFormat("ar-EG").format(item.completedPieces)} قطعة</dd></div>
+      ${item.fabric ? `<div><dt>القماش / الفرشة</dt><dd>${escapeHtml(item.fabric)} · ${new Intl.NumberFormat("ar-EG").format(item.boltCount)} أتواب · ${new Intl.NumberFormat("ar-EG").format(item.layerCount)} طوابق</dd></div>` : ""}
+      ${item.cuttingNotes ? `<div><dt>ملاحظات فنية للقص</dt><dd>${escapeHtml(item.cuttingNotes)}</dd></div>` : ""}
       <div><dt>الكمية المسلّمة فعليًا</dt><dd>${new Intl.NumberFormat("ar-EG").format(item.deliveredPieces)} قطعة</dd></div><div><dt>المتبقي (السالب يعني زيادة تسليم)</dt><dd>${item.quantity ? `${new Intl.NumberFormat("ar-EG").format(item.remainingPieces)} قطعة` : "بانتظار الحصر بعد القص"}</dd></div>
       <div><dt>سعر القطعة</dt><dd>${money(item.pricePerPiece)}</dd></div><div><dt>قيمة الكمية المسلّمة</dt><dd>${money(item.totalAmount)}</dd></div>
       <div><dt>التسليم المتوقع</dt><dd>${formatDateOnly(item.expectedDeliveryDate)}</dd></div><div><dt>تاريخ الإنشاء</dt><dd>${formatDateTime(item.created_at)}</dd></div>
       <div><dt>المدفوع</dt><dd>${money(item.paidAmount)}</dd></div><div><dt>المتبقي من قيمة المسلّم</dt><dd>${money(item.remainingAmount)}</dd></div>
     </dl>
-    ${withActions ? `<footer class="order-card-actions"><button class="row-action" type="button" data-edit-kind="models" data-index="${index}">تعديل الطلبية</button><button class="row-action" type="button" data-action="record-delivery" data-index="${index}">تسجيل تسليم</button>${item.status === "مكتمل" ? '<span class="status">مغلق / مؤرشف</span>' : `<button class="row-action order-close-action" type="button" data-action="close-order" data-index="${index}">اكتمل / إغلاق الطلب</button>`}${orderCanBeDeleted(item) ? `<button class="row-action order-delete-action" type="button" data-action="delete-order" data-order-id="${escapeHtml(item.id)}">حذف الموديل</button>` : '<span class="order-delete-protected" title="لا يمكن حذف طلب له تسليمات أو مبالغ مسجلة أو مؤرشف">محمي بسجل مالي / تسليم</span>'}</footer>` : ""}
+    ${withActions ? `<footer class="order-card-actions"><button class="row-action" type="button" data-edit-kind="models" data-index="${index}">تعديل الطلبية</button>${item.customerId ? `<button class="row-action" type="button" data-action="record-delivery" data-index="${index}">تسجيل تسليم</button>` : '<span class="order-delete-protected">عيّن العميل قبل تسجيل أي تسليم</span>'}${item.status === "مكتمل" ? '<span class="status">مغلق / مؤرشف</span>' : `<button class="row-action order-close-action" type="button" data-action="close-order" data-index="${index}">اكتمل / إغلاق الطلب</button>`}${orderCanBeDeleted(item) ? `<button class="row-action order-delete-action" type="button" data-action="delete-order" data-order-id="${escapeHtml(item.id)}">حذف الموديل</button>` : '<span class="order-delete-protected" title="لا يمكن حذف طلب له تسليمات أو مبالغ مسجلة أو مؤرشف">محمي بسجل مالي / تسليم</span>'}</footer>` : ""}
   </article>`;
   }).join("")}</div>`;
 }
@@ -930,7 +934,6 @@ function cuttingView(data) {
   const activeCutting = data.cutting
     .filter((item) => item.status !== "مكتمل")
     .sort((left, right) => (priorityOrder[left.priority] ?? 3) - (priorityOrder[right.priority] ?? 3));
-  const total = activeCutting.reduce((sum, item) => sum + Number(item.total), 0);
   const cards = activeCutting.length ? `<div class="cutting-order-grid">${activeCutting.map((item) => `<article class="order-card cutting-order-card">
     <header class="order-card-heading">${modelImageMarkup(item.modelImageUrl)}<div><p class="order-card-label">أمر قص · ${escapeHtml(item.order.slice(0, 8))} · الأولوية: ${escapeHtml(item.priority)}</p><h3>${escapeHtml(item.model)}</h3></div>${statusTag(item.status)}</header>
     <p class="cutting-target">العدد الحالي: ${new Intl.NumberFormat("ar-EG").format(item.total)} قطعة</p>
@@ -943,10 +946,37 @@ function cuttingView(data) {
       ${sizePickerMarkup(item.sizes, `cutting-${item.order}`)}
       ${colorPickerMarkup(item.colors, `cutting-${item.order}`)}
       <label class="field"><span>صورة الموديل (اختياري)</span><input type="file" name="modelImage" accept="image/jpeg,image/png,image/webp"><small>الحد الأقصى 5 ميجابايت.</small></label>
+      <label class="field"><span>ملاحظات فنية للفرشة والقص</span><textarea name="technicalNotes" rows="3">${escapeHtml(item.technicalNotes || "")}</textarea></label>
       <div class="form-actions"><button type="submit" class="button button-primary">إنهاء القص</button></div>
     </form>
   </article>`).join("")}</div>` : '<div class="empty-state">لا توجد أوامر قص نشطة حاليًا.</div>';
-  return `<div class="stats-grid">${stat("أوامر الإدارة للقص", activeCutting.length, "مرتبة حسب الأولوية")}${stat("إجمالي العدد الحالي", new Intl.NumberFormat("ar-EG").format(total), "قطعة")}${stat("أوامر منتهية", data.cutting.length - activeCutting.length, "مراحل مكتملة")}</div>${panel("طلبات الإدارة · طاولة الفرش والقص", cards)}`;
+  return panel("طلبات الإدارة · طاولة الفرش والقص", cards, "أوامر العمل المحولة من الإدارة");
+}
+
+function cuttingDashboardView(data) {
+  const active = data.cutting.filter((item) => item.status !== "مكتمل");
+  const activeTotal = active.reduce((sum, item) => sum + Number(item.total), 0);
+  const completed = data.cutting.filter((item) => item.status === "مكتمل");
+  return `<div class="stats-grid">${stat("أوامر الإدارة النشطة", active.length, "بانتظار استكمال القص")}${stat("العدد المطلوب للأوامر النشطة", new Intl.NumberFormat("ar-EG").format(activeTotal), "قطعة")}${stat("عمليات قص مكتملة", completed.length, "مسجلة على أوامر الإنتاج")}</div>${panel("ملخص العمل الحالي", `<div class="empty-state">استخدم صفحة «طلبات الإدارة» لمراجعة الأوامر، تسجيل بيانات الفرشة والقص، أو إرسال قصة جديدة للإدارة.</div>`)}`;
+}
+
+function cuttingRequestsView(data) {
+  return `${cuttingView(data)}
+    ${panel("إرسال قصة جديدة للإدارة", `<form class="cutting-submit-form modal-form" id="cutting-submit-form">
+      <section class="form-section"><h3>بيانات الموديل <span>إجباري</span></h3><div class="form-section-grid">
+        <label class="field"><span>اسم الموديل</span><input name="modelName" autocomplete="off"></label>
+        <label class="field"><span>رقم الموديل</span><input name="modelNumber" autocomplete="off"></label>
+        <label class="field"><span>نوع / قماش الفرشة</span><input name="fabric" required></label>
+        <label class="field"><span>عدد الأتواب</span><input name="boltCount" type="number" min="1" step="1" required></label>
+        <label class="field"><span>عدد الرئات / طوابق الفرش</span><input name="layerCount" type="number" min="1" step="1" required></label>
+      </div></section>
+      ${sizePickerMarkup("", "new-cutting")}
+      ${colorPickerMarkup("", "new-cutting")}
+      <label class="field"><span>صورة الموديل (اختياري)</span><input type="file" name="modelImage" accept="image/jpeg,image/png,image/webp"><small>الحد الأقصى 5 ميجابايت.</small></label>
+      <label class="field"><span>ملاحظات فنية للفرشة والقص</span><textarea name="technicalNotes" rows="4"></textarea></label>
+      <p class="form-help">ستُرسل القصة كطلب غير مربوط بعميل لتراجعها الإدارة وتحدد العميل؛ بعد الربط تظهر بياناتها في حسابه.</p>
+      <div class="form-actions"><button type="submit" class="button button-primary">إرسال / تحويل للإدارة</button></div>
+    </form>`, "تُحفظ الكميات الفعلية وبيانات الفرشة، ثم تعيّن الإدارة العميل من شاشة الموديلات والطلبيات.")}`;
 }
 
 function cuttingPersonalAccountView(data) {
@@ -1026,7 +1056,8 @@ function navigationItems(role, info) {
   if (role === "cutting") {
     return [
       { id: "dashboard", icon: info.icon, label: "لوحة التحكم" },
-      { id: "personal-account", icon: "◷", label: "متابعة الحساب الشخصي", last: true }
+      { id: "admin-requests", icon: "✂", label: "طلبات الإدارة" },
+      { id: "personal-account", icon: "◷", label: "متابعة الحساب والراتب", last: true }
     ];
   }
   return [{ id: "dashboard", icon: info.icon, label: "لوحة التحكم" }];
@@ -1044,7 +1075,7 @@ function render(session, data, accounts) {
     : session.role === "client"
       ? clientView(data, session)
       : session.role === "cutting"
-        ? `<section id="dashboard" class="dashboard-section">${cuttingView(data)}</section><section id="personal-account" class="dashboard-section">${cuttingPersonalAccountView(data)}</section>`
+        ? `<section id="dashboard" class="dashboard-section">${cuttingDashboardView(data)}</section><section id="admin-requests" class="dashboard-section">${cuttingRequestsView(data)}</section><section id="personal-account" class="dashboard-section">${cuttingPersonalAccountView(data)}</section>`
       : `<section id="dashboard" class="dashboard-section">${session.role === "cutting" ? cuttingView(data) : session.role === "sewing" ? sewingView(data) : workerView(data, session)}</section>`;
   document.querySelector("#app").innerHTML = `
     <div class="app-shell${collapsedClass}">
@@ -1184,17 +1215,67 @@ function bindCuttingActions(session) {
         requested_model_image_url: imageUrl,
         requested_fabric: fabric,
         requested_bolt_count: boltCount,
-        requested_layer_count: layerCount
+        requested_layer_count: layerCount,
+        requested_technical_notes: String(form.elements.technicalNotes.value).trim()
       });
       if (error?.code === "PGRST202") throw new Error("دالة إنهاء القص غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
       if (error) throw error;
       await refreshDashboard(session);
-      window.factoryUI.toast(`تم إنهاء القص وتسجيل ${new Intl.NumberFormat("ar-EG").format(data)} قطعة وتحويل الطلب إلى مرحلة الخط.`);
+      window.factoryUI.toast(`تم إرسال القص للإدارة وتسجيل ${new Intl.NumberFormat("ar-EG").format(data)} قطعة وتحويل الطلب إلى مرحلة الخط.`);
     } catch (error) {
       button.disabled = false;
       window.factoryUI.toast(`${imageUploaded ? "تم رفع الصورة لكن لم يُسجل إنهاء القص. " : ""}تعذر إنهاء القص: ${error.message}`, "error");
     }
   }));
+  const submitForm = document.querySelector("#cutting-submit-form");
+  if (submitForm) submitForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const modelName = String(submitForm.elements.modelName.value).trim();
+    const modelNumber = String(submitForm.elements.modelNumber.value).trim();
+    const fabric = String(submitForm.elements.fabric.value).trim();
+    const boltCount = Number(submitForm.elements.boltCount.value);
+    const layerCount = Number(submitForm.elements.layerCount.value);
+    const sizePicker = submitForm.querySelector("[data-size-picker]");
+    updateSizePicker(sizePicker);
+    const sizeData = parseSizeData(sizePicker.querySelector("[data-size-value]").value);
+    const total = Object.values(sizeData.counts).reduce((sum, value) => sum + Number(value || 0), 0);
+    if (!modelName && !modelNumber) {
+      window.factoryUI.toast("أدخل اسم الموديل أو رقمه على الأقل.", "error");
+      return;
+    }
+    if (!fabric || !Number.isSafeInteger(boltCount) || boltCount < 1 || !Number.isSafeInteger(layerCount) || layerCount < 1
+      || !sizeData.type || !Number.isSafeInteger(total) || total <= 0) {
+      window.factoryUI.toast("أكمل بيانات القماش والأتواب والرئات، واختر نوع المقاس وأدخل كمية صحيحة لمقاس واحد على الأقل.", "error");
+      return;
+    }
+    const button = submitForm.querySelector('[type="submit"]');
+    button.disabled = true;
+    let imageUploaded = false;
+    try {
+      const orderId = crypto.randomUUID();
+      const imageUrl = await uploadModelImage(orderId, submitForm.elements.modelImage.files[0]);
+      imageUploaded = Boolean(imageUrl);
+      const { data, error } = await supabaseClient.rpc("submit_factory_cutting", {
+        requested_order_id: orderId,
+        requested_model_name: modelName,
+        requested_model_number: modelNumber,
+        requested_size_data: sizeData,
+        requested_colors: submitForm.querySelector("[data-color-value]").value,
+        requested_model_image_url: imageUrl,
+        requested_fabric: fabric,
+        requested_bolt_count: boltCount,
+        requested_layer_count: layerCount,
+        requested_technical_notes: String(submitForm.elements.technicalNotes.value).trim()
+      });
+      if (error?.code === "PGRST202") throw new Error("دالة إرسال القصة غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+      if (error) throw error;
+      await refreshDashboard(session);
+      window.factoryUI.toast(`تم إرسال القصة للإدارة وتسجيل ${new Intl.NumberFormat("ar-EG").format(data)} قطعة.`);
+    } catch (error) {
+      button.disabled = false;
+      window.factoryUI.toast(`${imageUploaded ? "رُفعت الصورة لكن لم تُسجل القصة. " : ""}تعذر إرسال القصة: ${error.message}`, "error");
+    }
+  });
 }
 
 function bindClientDetailActions(session) {

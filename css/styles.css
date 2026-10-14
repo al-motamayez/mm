@@ -44,6 +44,8 @@ button { cursor: pointer; }
 .card-heading > p:last-child { margin: 0 0 26px; color: var(--muted); font-size: 14px; }
 .form-stack { display: grid; gap: 10px; }
 .form-stack label, .form-grid label { color: #465651; font-size: 13px; font-weight: 600; }
+.remember-login-option { display: flex; align-items: center; gap: 9px; margin: 5px 0 8px; }
+.remember-login-option input { width: 18px; min-height: 18px; margin: 0; accent-color: var(--green); }
 input, select { width: 100%; min-height: 46px; padding: 10px 13px; border: 1px solid #dfe6e1; border-radius: 9px; outline: none; color: #21342f; background: #fff; }
 input:focus, select:focus { border-color: #5e9b83; box-shadow: 0 0 0 3px #5e9b831c; }
 .field-hint { margin: -4px 0 10px; color: var(--muted); font-size: 12px; }
@@ -183,6 +185,8 @@ td { padding: 13px 16px; border-top: 1px solid #f0f2ef; color: #44514b; font-siz
 .cutting-order-card { min-width: 0; }
 .cutting-order-card .cutting-finish-form { display: grid; gap: 16px; margin-top: 14px; }
 .cutting-bed-inputs { grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); }
+.cutting-submit-form { max-width: 1100px; padding: 20px; }
+.form-help { margin: 0; color: var(--muted); line-height: 1.8; }
 .cutting-target { color: var(--green-dark); font-weight: 700; }
 .client-note-list { display: grid; gap: 10px; margin-bottom: 16px; }
 .client-note-list article { padding: 12px; border: 1px solid var(--line); border-right: 4px solid #ba9140; border-radius: 8px; background: #fffdf7; }

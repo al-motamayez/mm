@@ -242,6 +242,7 @@ loginForm.addEventListener("submit", async (event) => {
   }
 
   try {
+    window.setAuthPersistence(loginForm.elements.remember.checked);
     const email = await loginEmailFor(username);
     const { data, error } = await supabaseClient.auth.signInWithPassword({
       email,
@@ -280,6 +281,12 @@ loginForm.addEventListener("submit", async (event) => {
 
 async function initializeAuth() {
   showAuthMode("login");
+  const { data: { session }, error: sessionError } = await supabaseClient.auth.getSession();
+  if (sessionError) throw sessionError;
+  if (session?.user) {
+    await routeAuthenticatedUser(session.user);
+    return;
+  }
   const response = await fetch(`${supabaseClient.supabaseUrl}/auth/v1/settings`, {
     headers: { apikey: supabaseClient.supabaseKey }
   });
