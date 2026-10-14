@@ -182,6 +182,7 @@ td { padding: 13px 16px; border-top: 1px solid #f0f2ef; color: #44514b; font-siz
 .cutting-order-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 16px; padding: 18px; }
 .cutting-order-card { min-width: 0; }
 .cutting-order-card .cutting-finish-form { display: grid; gap: 16px; margin-top: 14px; }
+.cutting-bed-inputs { grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); }
 .cutting-target { color: var(--green-dark); font-weight: 700; }
 .client-note-list { display: grid; gap: 10px; margin-bottom: 16px; }
 .client-note-list article { padding: 12px; border: 1px solid var(--line); border-right: 4px solid #ba9140; border-radius: 8px; background: #fffdf7; }

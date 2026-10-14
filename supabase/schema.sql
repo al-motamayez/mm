@@ -390,6 +390,7 @@ alter table public.orders
   add column if not exists paid_amount numeric(12, 2) not null default 0,
   add column if not exists expected_delivery_date date,
   add column if not exists model_image_url text,
+  add column if not exists priority text not null default 'عادي',
   add column if not exists archived_at timestamptz;
 
 alter table public.orders
@@ -409,6 +410,8 @@ create table if not exists public.production_stages (
   worker_id uuid references auth.users (id) on delete set null,
   worker_name text,
   fabric text,
+  bolt_count integer not null default 0 check (bolt_count >= 0),
+  layer_count integer not null default 0 check (layer_count >= 0),
   line_name text,
   target_quantity integer not null default 0 check (target_quantity >= 0),
   completed_quantity integer not null default 0 check (completed_quantity >= 0 and completed_quantity <= target_quantity),
@@ -420,6 +423,8 @@ create table if not exists public.production_stages (
 alter table public.production_stages
   add column if not exists worker_id uuid references auth.users (id) on delete set null,
   add column if not exists fabric text,
+  add column if not exists bolt_count integer not null default 0,
+  add column if not exists layer_count integer not null default 0,
   add column if not exists line_name text,
   add column if not exists target_quantity integer not null default 0,
   add column if not exists completed_quantity integer not null default 0;
@@ -645,6 +650,7 @@ $$;
 drop function if exists public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric);
 drop function if exists public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date);
 drop function if exists public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text);
+drop function if exists public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text);
 create function public.save_factory_order(
   requested_order_id uuid,
   requested_customer_id uuid,
@@ -660,7 +666,8 @@ create function public.save_factory_order(
   requested_price_per_piece numeric,
   requested_paid_amount numeric,
   requested_expected_delivery_date date,
-  requested_model_image_url text
+  requested_model_image_url text,
+  requested_priority text
 )
 returns uuid
 language plpgsql
@@ -690,6 +697,8 @@ begin
     or requested_price_per_piece < 0
     or requested_paid_amount is null
     or requested_paid_amount < 0
+    or requested_priority is null
+    or requested_priority not in ('عادي', 'مرتفع', 'عاجل')
     or requested_status is null
     or requested_status not in ('قيد الانتظار', 'معلق', 'تحت الإنشاء', 'في الخط', 'تحت التصنيع', 'قيد الإنتاج', 'جاهز للتسليم', 'مكتمل') then
     raise exception 'Invalid factory order data.';
@@ -713,14 +722,14 @@ begin
   if requested_order_id is null then
     insert into public.orders (
       client_id, customer_id, model_name, model_number, colors, sizes,
-      total_pieces, delivered_pieces, price_per_piece, paid_amount, expected_delivery_date, model_image_url, status
+      total_pieces, delivered_pieces, price_per_piece, paid_amount, expected_delivery_date, model_image_url, priority, status
     )
     values (
       matched_client_id, matched_customer_id, resolved_model_name,
       coalesce(trim(requested_model_number), ''),
       coalesce(trim(requested_colors), ''), coalesce(trim(requested_sizes), ''),
       requested_quantity, requested_delivered_pieces,
-      requested_price_per_piece, requested_paid_amount, requested_expected_delivery_date, requested_model_image_url, trim(requested_status)
+      requested_price_per_piece, requested_paid_amount, requested_expected_delivery_date, requested_model_image_url, trim(requested_priority), trim(requested_status)
     )
     returning id into saved_order_id;
     update public.production_stages
@@ -786,6 +795,7 @@ begin
         paid_amount = requested_paid_amount,
         expected_delivery_date = requested_expected_delivery_date,
         model_image_url = requested_model_image_url,
+        priority = trim(requested_priority),
         status = trim(requested_status)
     where id = requested_order_id;
     saved_order_id := requested_order_id;
@@ -1007,11 +1017,15 @@ begin
 end;
 $$;
 
-create or replace function public.finish_factory_cutting(
+drop function if exists public.finish_factory_cutting(uuid, jsonb, text, text);
+create function public.finish_factory_cutting(
   requested_order_id uuid,
   requested_size_data jsonb,
   requested_colors text,
-  requested_model_image_url text
+  requested_model_image_url text,
+  requested_fabric text,
+  requested_bolt_count integer,
+  requested_layer_count integer
 )
 returns integer
 language plpgsql
@@ -1028,8 +1042,11 @@ begin
     raise exception 'Only active cutting supervisors can finish cutting.';
   end if;
   if requested_order_id is null or requested_size_data is null
-     or coalesce(jsonb_typeof(requested_size_data), '') <> 'object' then
-    raise exception 'A valid order and size breakdown are required.';
+     or coalesce(jsonb_typeof(requested_size_data), '') <> 'object'
+     or length(trim(coalesce(requested_fabric, ''))) = 0
+     or requested_bolt_count is null or requested_bolt_count < 1
+     or requested_layer_count is null or requested_layer_count < 1 then
+    raise exception 'A valid order, size breakdown, fabric, bolt count, and layer count are required.';
   end if;
 
   size_type := requested_size_data ->> 'type';
@@ -1076,6 +1093,9 @@ begin
   update public.production_stages
   set target_quantity = cut_total,
       completed_quantity = cut_total,
+      fabric = trim(requested_fabric),
+      bolt_count = requested_bolt_count,
+      layer_count = requested_layer_count,
       status = 'مكتمل',
       updated_at = now()
   where order_id = requested_order_id
@@ -1385,6 +1405,7 @@ create policy "Users read their own factory records"
       or (collection = 'settlements' and public.has_active_factory_role(array['client']))
       or (collection = 'leaves' and public.has_active_factory_role(array['worker', 'cutting', 'sewing']))
       or (collection = 'tasks' and public.has_active_factory_role(array['worker']))
+      or (collection in ('attendance', 'advances', 'payroll') and public.has_active_factory_role(array['cutting']))
     )
   );
 
@@ -1413,7 +1434,7 @@ revoke all on public.factory_clients from public, anon, authenticated;
 grant select on public.factory_clients to authenticated;
 grant insert (name, phone, notes) on public.factory_clients to authenticated;
 grant update (name, phone, notes, updated_at) on public.factory_clients to authenticated;
-grant select (id, client_id, customer_id, model_name, model_number, colors, sizes, total_pieces, delivered_pieces, archived_at, status, created_at)
+grant select (id, client_id, customer_id, model_name, model_number, colors, sizes, total_pieces, delivered_pieces, archived_at, status, priority, created_at)
   on public.orders to authenticated;
 grant select (model_image_url) on public.orders to authenticated;
 grant select on public.production_stages to authenticated;
@@ -1428,12 +1449,12 @@ revoke all on function public.read_factory_orders_admin() from public, anon, aut
 grant execute on function public.read_factory_orders_admin() to authenticated;
 revoke all on function public.read_factory_orders_client() from public, anon, authenticated;
 grant execute on function public.read_factory_orders_client() to authenticated;
-revoke all on function public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text) from public, anon, authenticated;
-grant execute on function public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text) to authenticated;
+revoke all on function public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text) from public, anon, authenticated;
+grant execute on function public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text) to authenticated;
 revoke all on function public.record_factory_delivery(uuid, integer, text) from public, anon, authenticated;
 grant execute on function public.record_factory_delivery(uuid, integer, text) to authenticated;
-revoke all on function public.finish_factory_cutting(uuid, jsonb, text, text) from public, anon, authenticated;
-grant execute on function public.finish_factory_cutting(uuid, jsonb, text, text) to authenticated;
+revoke all on function public.finish_factory_cutting(uuid, jsonb, text, text, text, integer, integer) from public, anon, authenticated;
+grant execute on function public.finish_factory_cutting(uuid, jsonb, text, text, text, integer, integer) to authenticated;
 revoke all on function public.delete_factory_order(uuid) from public, anon, authenticated;
 grant execute on function public.delete_factory_order(uuid) to authenticated;
 revoke all on function public.save_factory_payment(uuid, uuid, numeric, date, text, text, text) from public, anon, authenticated;

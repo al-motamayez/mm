@@ -92,7 +92,10 @@ function emptyDashboardData() {
     cutting: [],
     sewing: [],
     tasks: [],
-    clientNotes: []
+    clientNotes: [],
+    personalAttendance: [],
+    personalAdvances: [],
+    personalPayroll: []
   };
 }
 
@@ -134,12 +137,15 @@ async function readDashboardData(session) {
       .select("id, order_id, customer_id, quantity, price_per_piece, amount, recipient_name, expected_delivery_date, delivered_at, legacy_import")
       .order("delivered_at", { ascending: false })
     : Promise.resolve({ data: [], error: null });
-  const [payments, leaves, tasks, settlements, deliveriesResult] = await Promise.all([
+  const [payments, leaves, tasks, settlements, deliveriesResult, personalAttendance, personalAdvances, personalPayroll] = await Promise.all([
     readFlexibleRecords("payments"),
     readFlexibleRecords("leaves"),
     readFlexibleRecords("tasks"),
     readFlexibleRecords("settlements"),
-    deliveriesPromise
+    deliveriesPromise,
+    session.role === "cutting" ? readFlexibleRecords("attendance") : Promise.resolve([]),
+    session.role === "cutting" ? readFlexibleRecords("advances") : Promise.resolve([]),
+    session.role === "cutting" ? readFlexibleRecords("payroll") : Promise.resolve([])
   ]);
   if (["42P01", "PGRST205"].includes(deliveriesResult.error?.code)) {
     throw new Error("سجل التسليمات غير موجود في قاعدة البيانات. شغّل supabase/schema.sql كاملًا في SQL Editor.");
@@ -148,6 +154,9 @@ async function readDashboardData(session) {
   data.payments = payments;
   data.settlements = settlements;
   data.deliveries = deliveriesResult.data || [];
+  data.personalAttendance = personalAttendance;
+  data.personalAdvances = personalAdvances;
+  data.personalPayroll = personalPayroll;
   data.leaves = leaves;
   data.tasks = tasks;
   data.clientNotes = session.role === "admin" ? await readFlexibleRecords("client_notes") : [];
@@ -166,14 +175,14 @@ async function readDashboardData(session) {
   } else {
     let ordersQuery = supabaseClient
       .from("orders")
-      .select("id, model_name, model_number, colors, sizes, total_pieces, model_image_url, archived_at, status, created_at")
+      .select("id, model_name, model_number, colors, sizes, total_pieces, model_image_url, priority, archived_at, status, created_at")
       .is("archived_at", null)
       .order("created_at", { ascending: false });
     ({ data: orders, error: ordersError } = await ordersQuery);
     if (ordersError?.code === "42703") {
       ordersQuery = supabaseClient
         .from("orders")
-        .select("id, model_name, model_number, colors, sizes, total_pieces, model_image_url, status, created_at")
+        .select("id, model_name, model_number, colors, sizes, total_pieces, model_image_url, priority, status, created_at")
         .order("created_at", { ascending: false });
       ({ data: orders, error: ordersError } = await ordersQuery);
     }
@@ -199,7 +208,7 @@ async function readDashboardData(session) {
   if (session.role === "admin" || orders.length) {
     let stagesQuery = supabaseClient
       .from("production_stages")
-      .select("id, order_id, stage_name, worker_name, fabric, line_name, target_quantity, completed_quantity, status, updated_at");
+      .select("id, order_id, stage_name, worker_name, fabric, bolt_count, layer_count, line_name, target_quantity, completed_quantity, status, updated_at");
     if (session.role !== "admin") {
       stagesQuery = stagesQuery.in("order_id", orders.map((order) => order.id));
     }
@@ -247,6 +256,7 @@ async function readDashboardData(session) {
       colors: order.colors || "",
       sizes: order.sizes || "",
       modelImageUrl: order.model_image_url || "",
+      priority: order.priority || "عادي",
       deliveredPieces: Number(order.delivered_pieces || 0),
       archivedAt: order.archived_at || null,
       remainingPieces: Number(order.total_pieces) - Number(order.delivered_pieces || 0),
@@ -257,6 +267,8 @@ async function readDashboardData(session) {
       expectedDeliveryDate: order.expected_delivery_date || "",
       status: order.status,
       fabric: cuttingStage?.fabric || "",
+      boltCount: Number(cuttingStage?.bolt_count || 0),
+      layerCount: Number(cuttingStage?.layer_count || 0),
       line: sewingStage?.line_name || "",
       created_at: order.created_at
     };
@@ -276,6 +288,9 @@ async function readDashboardData(session) {
       colors: ordersById.get(stage.order_id)?.colors || "",
       modelImageUrl: ordersById.get(stage.order_id)?.model_image_url || "",
       fabric: stage.fabric || "—",
+      boltCount: Number(stage.bolt_count || 0),
+      layerCount: Number(stage.layer_count || 0),
+      priority: ordersById.get(stage.order_id)?.priority || "عادي",
       total: stage.target_quantity || ordersById.get(stage.order_id)?.total_pieces || 0,
       cut: stage.completed_quantity || 0,
       status: stage.status
@@ -655,7 +670,7 @@ function orderCards(models, withActions = false) {
   return `<div class="order-cards">${models.map((item) => {
     const index = dashboardData.models.findIndex((order) => order.id === item.id);
     return `<article class="order-card">
-    <header class="order-card-heading">${modelImageMarkup(item.modelImageUrl)}<div><p class="order-card-label">الموديل ${item.modelNumber ? `· رقم ${escapeHtml(item.modelNumber)}` : ""}</p><h3>${escapeHtml(item.name || item.modelNumber || "موديل بدون اسم")}</h3></div>${statusTag(item.status)}</header>
+    <header class="order-card-heading">${modelImageMarkup(item.modelImageUrl)}<div><p class="order-card-label">الموديل ${item.modelNumber ? `· رقم ${escapeHtml(item.modelNumber)}` : ""} · الأولوية: ${escapeHtml(item.priority || "عادي")}</p><h3>${escapeHtml(item.name || item.modelNumber || "موديل بدون اسم")}</h3></div>${statusTag(item.status)}</header>
     <p class="order-card-client">العميل: <strong>${escapeHtml(item.client)}</strong></p>
     <dl class="order-card-details">
       <div><dt>الألوان</dt><dd>${escapeHtml(item.colors || "—")}</dd></div><div><dt>المقاسات / العدد لكل مقاس</dt><dd>${escapeHtml(sizeSummary(item.sizes))}</dd></div>
@@ -880,6 +895,7 @@ function adminView(data, accounts) {
           <div class="field"><label for="model-expected-delivery">تاريخ التسليم المتوقع (اختياري)</label><input id="model-expected-delivery" name="expectedDeliveryDate" type="date"></div>
           <input type="hidden" name="deliveredPieces" value="0"><div class="field"><label>إجمالي الكمية المسلّمة</label><output id="model-delivered-summary" class="calculated-value">0 قطعة</output></div>
           <div class="field"><label for="model-status">حالة الطلب</label><select id="model-status" name="status"><option>قيد الانتظار</option><option>معلق</option><option>تحت الإنشاء</option><option>في الخط</option><option>تحت التصنيع</option><option>قيد الإنتاج</option><option>جاهز للتسليم</option><option>مكتمل</option></select></div>
+          <div class="field"><label for="model-priority">أولوية التنفيذ</label><select id="model-priority" name="priority"><option>عادي</option><option>مرتفع</option><option>عاجل</option></select></div>
         </div></section>
         <section class="form-section"><h3>التفاصيل المالية <span>اختياري</span></h3><div class="form-section-grid">
           <div class="field"><label for="model-price">سعر القطعة (ج.م)</label><input id="model-price" name="pricePerPiece" type="number" min="0" step="0.01" value="0"><small id="model-price-history-note" hidden>تم تسجيل تسليمات بهذا السعر؛ لا يمكن تغييره حفاظًا على قيمة السجل المالي.</small></div>
@@ -910,19 +926,49 @@ function adminView(data, accounts) {
 }
 
 function cuttingView(data) {
-  const activeCutting = data.cutting.filter((item) => item.status !== "مكتمل");
+  const priorityOrder = { عاجل: 0, مرتفع: 1, عادي: 2 };
+  const activeCutting = data.cutting
+    .filter((item) => item.status !== "مكتمل")
+    .sort((left, right) => (priorityOrder[left.priority] ?? 3) - (priorityOrder[right.priority] ?? 3));
   const total = activeCutting.reduce((sum, item) => sum + Number(item.total), 0);
   const cards = activeCutting.length ? `<div class="cutting-order-grid">${activeCutting.map((item) => `<article class="order-card cutting-order-card">
-    <header class="order-card-heading">${modelImageMarkup(item.modelImageUrl)}<div><p class="order-card-label">أمر قص · ${escapeHtml(item.order.slice(0, 8))}</p><h3>${escapeHtml(item.model)}</h3></div>${statusTag(item.status)}</header>
+    <header class="order-card-heading">${modelImageMarkup(item.modelImageUrl)}<div><p class="order-card-label">أمر قص · ${escapeHtml(item.order.slice(0, 8))} · الأولوية: ${escapeHtml(item.priority)}</p><h3>${escapeHtml(item.model)}</h3></div>${statusTag(item.status)}</header>
     <p class="cutting-target">العدد الحالي: ${new Intl.NumberFormat("ar-EG").format(item.total)} قطعة</p>
     <form class="cutting-finish-form" data-finish-cutting="${escapeHtml(item.order)}">
+      <div class="form-section-grid cutting-bed-inputs">
+        <label class="field"><span>نوع / قماش الفرشة</span><input name="fabric" value="${escapeHtml(item.fabric === "—" ? "" : item.fabric)}" required></label>
+        <label class="field"><span>عدد الأتواب</span><input name="boltCount" type="number" min="1" step="1" value="${item.boltCount || ""}" required></label>
+        <label class="field"><span>عدد الرئات / طوابق الفرش</span><input name="layerCount" type="number" min="1" step="1" value="${item.layerCount || ""}" required></label>
+      </div>
       ${sizePickerMarkup(item.sizes, `cutting-${item.order}`)}
       ${colorPickerMarkup(item.colors, `cutting-${item.order}`)}
       <label class="field"><span>صورة الموديل (اختياري)</span><input type="file" name="modelImage" accept="image/jpeg,image/png,image/webp"><small>الحد الأقصى 5 ميجابايت.</small></label>
       <div class="form-actions"><button type="submit" class="button button-primary">إنهاء القص</button></div>
     </form>
   </article>`).join("")}</div>` : '<div class="empty-state">لا توجد أوامر قص نشطة حاليًا.</div>';
-  return `<div class="stats-grid">${stat("أوامر القص", activeCutting.length, "أوامر نشطة")}${stat("إجمالي العدد الحالي", new Intl.NumberFormat("ar-EG").format(total), "قطعة")}${stat("أوامر منتهية", data.cutting.length - activeCutting.length, "مراحل مكتملة")}</div>${panel("طاولة الفرش والقص", cards)}`;
+  return `<div class="stats-grid">${stat("أوامر الإدارة للقص", activeCutting.length, "مرتبة حسب الأولوية")}${stat("إجمالي العدد الحالي", new Intl.NumberFormat("ar-EG").format(total), "قطعة")}${stat("أوامر منتهية", data.cutting.length - activeCutting.length, "مراحل مكتملة")}</div>${panel("طلبات الإدارة · طاولة الفرش والقص", cards)}`;
+}
+
+function cuttingPersonalAccountView(data) {
+  const amountOf = (record) => Number(record.amount ?? record.salary ?? record.netAmount ?? record.value ?? 0);
+  const datedRows = (records, columns) => records.map((record) =>
+    `<tr>${columns(record).map((cell) => `<td>${escapeHtml(cell)}</td>`).join("")}<td>${formatDateTime(record._createdAt || record.created_at || record.date)}</td></tr>`
+  );
+  const advances = data.personalAdvances;
+  const payroll = data.personalPayroll;
+  const attendance = data.personalAttendance;
+  const totalAdvances = advances.reduce((sum, record) => sum + amountOf(record), 0);
+  const lastPayroll = payroll[0] || null;
+  return `<div class="stats-grid">${stat("سجلات الحضور", attendance.length, "سجل خاص بحسابك")}${stat("إجمالي السُلف المسجلة", money(totalAdvances), "حسب السجلات المتاحة")}${stat("آخر مرتب مسجل", lastPayroll ? money(amountOf(lastPayroll)) : "—", lastPayroll?.period || lastPayroll?.month || "")}</div>
+    ${panel("سجل الحضور والغياب", attendance.length
+      ? table(["التاريخ","الحالة","ملاحظات","تاريخ التسجيل"], datedRows(attendance, (record) => [formatRecordDate(record.date || record.day || record._createdAt), record.status || record.type || "—", record.notes || record.note || "—"]))
+      : '<div class="empty-state">لا توجد سجلات حضور أو غياب مرتبطة بحسابك حاليًا.</div>')}
+    ${panel("سجل السُلف", advances.length
+      ? table(["المبلغ","البيان","ملاحظات","تاريخ التسجيل"], datedRows(advances, (record) => [money(amountOf(record)), record.description || record.reason || record.reference || "—", record.notes || record.note || "—"]))
+      : '<div class="empty-state">لا توجد سُلف مسجلة لحسابك حاليًا.</div>')}
+    ${panel("سجل المرتب", payroll.length
+      ? table(["الفترة","المرتب","المدفوع","المتبقي","تاريخ التسجيل"], payroll.map((record) => `<tr><td>${escapeHtml(record.period || record.month || record.date || "—")}</td><td>${money(Number(record.salary ?? record.amount ?? 0))}</td><td>${money(Number(record.paidAmount ?? record.paid ?? 0))}</td><td>${money(Number(record.remainingAmount ?? record.remaining ?? 0))}</td><td>${formatDateTime(record._createdAt || record.created_at || record.date)}</td></tr>`))
+      : '<div class="empty-state">لا توجد سجلات مرتب مسجلة لحسابك حاليًا.</div>')}`;
 }
 
 function sewingView(data) {
@@ -977,6 +1023,12 @@ function navigationItems(role, info) {
       { id: "finance", icon: "ج.م", label: "الدفعات المالية" }
     ];
   }
+  if (role === "cutting") {
+    return [
+      { id: "dashboard", icon: info.icon, label: "لوحة التحكم" },
+      { id: "personal-account", icon: "◷", label: "متابعة الحساب الشخصي", last: true }
+    ];
+  }
   return [{ id: "dashboard", icon: info.icon, label: "لوحة التحكم" }];
 }
 
@@ -991,6 +1043,8 @@ function render(session, data, accounts) {
     ? adminView(data, accounts)
     : session.role === "client"
       ? clientView(data, session)
+      : session.role === "cutting"
+        ? `<section id="dashboard" class="dashboard-section">${cuttingView(data)}</section><section id="personal-account" class="dashboard-section">${cuttingPersonalAccountView(data)}</section>`
       : `<section id="dashboard" class="dashboard-section">${session.role === "cutting" ? cuttingView(data) : session.role === "sewing" ? sewingView(data) : workerView(data, session)}</section>`;
   document.querySelector("#app").innerHTML = `
     <div class="app-shell${collapsedClass}">
@@ -1088,7 +1142,8 @@ async function persistFactoryOrder(order, changes = {}) {
     requested_price_per_piece: Number(updated.pricePerPiece || 0),
     requested_paid_amount: Number(updated.paidAmount || 0),
     requested_expected_delivery_date: updated.expectedDeliveryDate || null,
-    requested_model_image_url: updated.modelImageUrl || null
+    requested_model_image_url: updated.modelImageUrl || null,
+    requested_priority: updated.priority || "عادي"
   });
   if (error?.code === "PGRST202") {
     throw new Error("دالة حفظ الطلبات المحدّثة غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
@@ -1104,6 +1159,13 @@ function bindCuttingActions(session) {
     updateSizePicker(sizePicker);
     const sizeData = parseSizeData(sizePicker.querySelector("[data-size-value]").value);
     const total = Object.values(sizeData.counts).reduce((sum, value) => sum + Number(value || 0), 0);
+    const boltCount = Number(form.elements.boltCount.value);
+    const layerCount = Number(form.elements.layerCount.value);
+    const fabric = String(form.elements.fabric.value).trim();
+    if (!fabric || !Number.isSafeInteger(boltCount) || boltCount < 1 || !Number.isSafeInteger(layerCount) || layerCount < 1) {
+      window.factoryUI.toast("أدخل نوع القماش وعدد الأتواب وعدد الرئات/طوابق الفرش بأعداد صحيحة موجبة.", "error");
+      return;
+    }
     if (!sizeData.type || !Number.isSafeInteger(total) || total <= 0) {
       window.factoryUI.toast("اختر نوع المقاسات وأدخل عددًا صحيحًا موجبًا لمقاس واحد على الأقل.", "error");
       return;
@@ -1119,7 +1181,10 @@ function bindCuttingActions(session) {
         requested_order_id: form.dataset.finishCutting,
         requested_size_data: sizeData,
         requested_colors: form.querySelector("[data-color-value]").value,
-        requested_model_image_url: imageUrl
+        requested_model_image_url: imageUrl,
+        requested_fabric: fabric,
+        requested_bolt_count: boltCount,
+        requested_layer_count: layerCount
       });
       if (error?.code === "PGRST202") throw new Error("دالة إنهاء القص غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
       if (error) throw error;
@@ -1244,7 +1309,7 @@ function bindActions(session) {
   const orderModal = document.querySelector("#order-modal");
   document.body.append(orderModal);
   const editConfigs = {
-    models: { form: "model-form", collection: "models", fields: ["customerId", "name", "modelNumber", "colors", "sizes", "quantity", "expectedDeliveryDate", "pricePerPiece", "paidAmount", "status"] },
+    models: { form: "model-form", collection: "models", fields: ["customerId", "name", "modelNumber", "colors", "sizes", "quantity", "expectedDeliveryDate", "pricePerPiece", "paidAmount", "status", "priority"] },
     payments: { form: "payment-form", collection: "payments", fields: ["customerId", "amount", "date", "method", "reference", "notes"] }
   };
   document.querySelectorAll("[data-edit-kind]").forEach((button) => button.addEventListener("click", () => {
@@ -1315,7 +1380,7 @@ function bindActions(session) {
     orderForm.reset();
     orderForm.elements.savedOrderId.value = "";
     orderForm.elements.editIndex.value = String(orderIndex);
-    for (const field of ["customerId", "name", "modelNumber", "pricePerPiece", "paidAmount", "status", "expectedDeliveryDate"]) {
+    for (const field of ["customerId", "name", "modelNumber", "pricePerPiece", "paidAmount", "status", "priority", "expectedDeliveryDate"]) {
       orderForm.elements[field].value = order[field] ?? "";
     }
     orderForm.elements.quantity.value = order.quantity || "";
@@ -1611,6 +1676,7 @@ function bindActions(session) {
         pricePerPiece,
         paidAmount,
         status: String(formData.get("status")),
+        priority: String(formData.get("priority")),
         fabric: String(formData.get("fabric") || "").trim(),
         line: String(formData.get("line") || "").trim(),
         colors: String(formData.get("colors") || "").trim(),
