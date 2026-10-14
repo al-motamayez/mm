@@ -35,6 +35,9 @@ button { cursor: pointer; }
 .brand-copy strong { font-size: 15px; }
 .brand-copy span { color: var(--muted); font-size: 11px; font-weight: 500; }
 .brand-light .brand-copy span { color: #c6d8d0; }
+.live-notification-button { position: relative; display: grid; width: 38px; height: 38px; place-items: center; border: 1px solid var(--line); border-radius: 10px; color: var(--green-dark); background: #fff; font-size: 19px; }
+.live-notification-button:hover { background: var(--green-pale); }
+.live-notification-badge { position: absolute; top: -7px; right: -7px; display: grid; min-width: 19px; height: 19px; place-items: center; padding: 0 5px; border: 2px solid #fff; border-radius: 20px; color: #fff; background: #b63838; font-size: 10px; font-weight: 700; }
 .eyebrow { margin: 0 0 10px; color: #568675; font-size: 13px; font-weight: 600; }
 .login-logo { display: block; width: clamp(170px, 21vw, 250px); height: clamp(176px, 23vw, 260px); object-fit: contain; filter: brightness(0) invert(1); }
 .login-brand-title { margin: 0; color: #fff; font-family: Arial, sans-serif; font-size: clamp(27px, 3.5vw, 42px); font-weight: 700; letter-spacing: .035em; line-height: 1.2; }
@@ -164,6 +167,13 @@ td { padding: 13px 16px; border-top: 1px solid #f0f2ef; color: #44514b; font-siz
 .client-detail-actions { display: flex; flex-wrap: wrap; gap: 10px; }
 .client-detail-section, .client-detail-section > .panel { width: 100%; }
 .client-detail-section { max-width: none; }
+.fabric-admin-tools { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.fabric-admin-tools > .panel { min-width: 0; }
+.fabric-form { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 16px; }
+.fabric-form .form-actions { grid-column: 1 / -1; }
+.fabric-color { display: inline-flex; align-items: center; gap: 6px; }
+.fabric-color i { display: inline-block; width: 18px; height: 18px; border: 1px solid #8c9991; border-radius: 50%; background: var(--fabric-color); }
+.fabric-form input[type="color"] { width: 100%; min-height: 44px; padding: 5px; }
 .dashboard-section#clients > .panel { overflow: visible; }
 .dashboard-section#clients .client-account-grid { padding-top: 20px; }
 .order-card-heading .model-thumbnail { flex: 0 0 68px; }
@@ -410,6 +420,9 @@ input, select, .modal-form textarea { color: #1d3028; font-size: 16px; }
   .client-form { grid-template-columns: minmax(0, 1fr); }
   .client-form .client-notes-field, .client-form .form-actions { grid-column: auto; }
   .client-account-grid { grid-template-columns: minmax(0, 1fr); padding: 12px; }
+  .fabric-admin-tools { grid-template-columns: minmax(0, 1fr); }
+  .fabric-form { grid-template-columns: minmax(0, 1fr); }
+  .fabric-form .form-actions { grid-column: auto; }
   .client-balance-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
   .client-balance-grid div { padding: 8px; }
   .client-activity-grid { grid-template-columns: 1fr; }

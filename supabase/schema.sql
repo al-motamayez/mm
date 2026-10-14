@@ -431,6 +431,8 @@ create table if not exists public.production_stages (
 alter table public.production_stages
   add column if not exists worker_id uuid references auth.users (id) on delete set null,
   add column if not exists fabric text,
+  add column if not exists fabric_id uuid,
+  add column if not exists fabric_quantity numeric(14, 3) not null default 0 check (fabric_quantity >= 0),
   add column if not exists bolt_count integer not null default 0,
   add column if not exists layer_count integer not null default 0,
   add column if not exists color_ply_data jsonb not null default '{}'::jsonb,
@@ -1033,6 +1035,458 @@ alter table public.factory_deliveries
   add column if not exists recipient_name text not null default '',
   add column if not exists expected_delivery_date date;
 
+create table if not exists public.factory_fabrics (
+  id uuid primary key default gen_random_uuid(),
+  name text not null check (length(trim(name)) between 1 and 120),
+  fabric_type text not null default '',
+  color_name text not null default '',
+  color_hex text not null default '#FFFFFF' check (color_hex ~ '^#[0-9A-Fa-f]{6}$'),
+  unit text not null check (unit in ('متر', 'ثوب', 'لفة')),
+  quantity_available numeric(14, 3) not null default 0 check (quantity_available >= 0),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.factory_fabric_transactions (
+  id uuid primary key default gen_random_uuid(),
+  fabric_id uuid not null references public.factory_fabrics (id) on delete restrict,
+  order_id uuid references public.orders (id) on delete set null,
+  transaction_type text not null check (transaction_type in ('receipt', 'withdrawal', 'return', 'adjustment_in', 'adjustment_out')),
+  quantity numeric(14, 3) not null check (quantity > 0),
+  notes text not null default '',
+  actor_id uuid references auth.users (id) on delete set null,
+  created_at timestamptz not null default now()
+);
+
+alter table public.factory_fabric_transactions
+  drop constraint if exists factory_fabric_transactions_transaction_type_check,
+  add constraint factory_fabric_transactions_transaction_type_check
+    check (transaction_type in ('receipt', 'withdrawal', 'return', 'adjustment_in', 'adjustment_out'));
+
+create table if not exists public.factory_live_signals (
+  id text primary key,
+  order_id uuid not null,
+  client_id uuid,
+  worker_id uuid,
+  signal_type text not null check (signal_type in ('order', 'stage')),
+  changed_at timestamptz not null default now()
+);
+
+alter table public.factory_live_signals
+  add column if not exists client_id uuid,
+  add column if not exists worker_id uuid;
+
+alter table public.factory_fabrics enable row level security;
+alter table public.factory_fabric_transactions enable row level security;
+alter table public.factory_live_signals enable row level security;
+revoke all on public.factory_fabrics, public.factory_fabric_transactions from public, anon, authenticated;
+revoke all on public.factory_live_signals from public, anon, authenticated;
+
+create index if not exists factory_fabrics_name_color_idx
+  on public.factory_fabrics (name, color_hex);
+create index if not exists factory_fabric_transactions_fabric_date_idx
+  on public.factory_fabric_transactions (fabric_id, created_at desc);
+create index if not exists factory_fabric_transactions_order_idx
+  on public.factory_fabric_transactions (order_id, created_at desc);
+create index if not exists factory_live_signals_order_idx
+  on public.factory_live_signals (order_id);
+create index if not exists factory_live_signals_client_idx
+  on public.factory_live_signals (client_id)
+  where client_id is not null;
+create index if not exists factory_live_signals_worker_idx
+  on public.factory_live_signals (worker_id)
+  where worker_id is not null;
+
+update public.factory_live_signals as signal
+set client_id = factory_order.client_id
+from public.orders as factory_order
+where signal.client_id is null
+  and signal.order_id = factory_order.id;
+
+update public.factory_live_signals as signal
+set worker_id = production_stage.worker_id
+from public.production_stages as production_stage
+where signal.signal_type = 'stage'
+  and signal.worker_id is null
+  and signal.id = 'stage:' || production_stage.id::text;
+
+create or replace function public.emit_factory_live_signal()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  changed_order_id uuid;
+  changed_client_id uuid;
+  changed_worker_id uuid;
+  signal_key text;
+  changed_type text;
+begin
+  if tg_op = 'DELETE' then
+    if tg_table_name = 'orders' then
+      changed_order_id := old.id;
+      changed_client_id := old.client_id;
+      signal_key := 'order:' || old.id::text;
+      changed_type := 'order';
+    else
+      changed_order_id := old.order_id;
+      changed_worker_id := old.worker_id;
+      select factory_order.client_id
+        into changed_client_id
+      from public.orders as factory_order
+      where factory_order.id = changed_order_id;
+      signal_key := 'stage:' || old.id::text;
+      changed_type := 'stage';
+    end if;
+  else
+    if tg_table_name = 'orders' then
+      changed_order_id := new.id;
+      changed_client_id := new.client_id;
+      signal_key := 'order:' || new.id::text;
+      changed_type := 'order';
+    else
+      changed_order_id := new.order_id;
+      changed_worker_id := new.worker_id;
+      select factory_order.client_id
+        into changed_client_id
+      from public.orders as factory_order
+      where factory_order.id = changed_order_id;
+      signal_key := 'stage:' || new.id::text;
+      changed_type := 'stage';
+    end if;
+  end if;
+
+  insert into public.factory_live_signals (id, order_id, client_id, worker_id, signal_type, changed_at)
+  values (signal_key, changed_order_id, changed_client_id, changed_worker_id, changed_type, now())
+  on conflict (id) do update
+  set order_id = excluded.order_id,
+      client_id = excluded.client_id,
+      worker_id = excluded.worker_id,
+      signal_type = excluded.signal_type,
+      changed_at = excluded.changed_at;
+  if tg_op = 'DELETE' then
+    return old;
+  end if;
+  return new;
+end;
+$$;
+
+revoke all on function public.emit_factory_live_signal() from public, anon, authenticated;
+
+drop trigger if exists emit_factory_order_live_signal on public.orders;
+create trigger emit_factory_order_live_signal
+  after insert or update or delete on public.orders
+  for each row execute procedure public.emit_factory_live_signal();
+
+drop trigger if exists emit_factory_stage_live_signal on public.production_stages;
+create trigger emit_factory_stage_live_signal
+  after insert or update or delete on public.production_stages
+  for each row execute procedure public.emit_factory_live_signal();
+
+alter table public.production_stages
+  drop constraint if exists production_stages_fabric_id_fkey,
+  add constraint production_stages_fabric_id_fkey
+    foreign key (fabric_id) references public.factory_fabrics (id) on delete set null;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.production_stages'::regclass
+      and conname = 'production_stages_fabric_quantity_nonnegative'
+  ) then
+    alter table public.production_stages
+      add constraint production_stages_fabric_quantity_nonnegative
+      check (fabric_quantity >= 0);
+  end if;
+end;
+$$;
+
+create or replace function public.save_factory_fabric(
+  requested_fabric_id uuid,
+  requested_name text,
+  requested_type text,
+  requested_color_name text,
+  requested_color_hex text,
+  requested_unit text
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  saved_fabric_id uuid;
+  current_unit text;
+begin
+  if not public.is_active_factory_admin() then
+    raise exception 'Only active admins can manage fabric items.';
+  end if;
+  if length(trim(coalesce(requested_name, ''))) not between 1 and 120
+     or length(coalesce(requested_type, '')) > 120
+     or length(coalesce(requested_color_name, '')) > 64
+     or upper(coalesce(requested_color_hex, '')) !~ '^#[0-9A-F]{6}$'
+     or requested_unit is null
+     or requested_unit not in ('متر', 'ثوب', 'لفة') then
+    raise exception 'Enter a valid fabric name, type, color, HEX value, and stock unit.';
+  end if;
+
+  if requested_fabric_id is null then
+    insert into public.factory_fabrics (name, fabric_type, color_name, color_hex, unit)
+    values (trim(requested_name), trim(coalesce(requested_type, '')),
+            trim(coalesce(requested_color_name, '')), upper(requested_color_hex), requested_unit)
+    returning id into saved_fabric_id;
+  else
+    select unit into current_unit
+    from public.factory_fabrics
+    where id = requested_fabric_id
+    for update;
+    if not found then
+      raise exception 'Fabric stock item not found.';
+    end if;
+    if current_unit is distinct from requested_unit and exists (
+      select 1 from public.factory_fabric_transactions
+      where fabric_id = requested_fabric_id
+    ) then
+      raise exception 'The stock unit cannot be changed after inventory transactions exist.';
+    end if;
+    update public.factory_fabrics
+    set name = trim(requested_name),
+        fabric_type = trim(coalesce(requested_type, '')),
+        color_name = trim(coalesce(requested_color_name, '')),
+        color_hex = upper(requested_color_hex),
+        unit = requested_unit,
+        updated_at = now()
+    where id = requested_fabric_id;
+    saved_fabric_id := requested_fabric_id;
+  end if;
+  return saved_fabric_id;
+end;
+$$;
+
+revoke all on function public.save_factory_fabric(uuid, text, text, text, text, text) from public, anon, authenticated;
+
+create or replace function public.record_factory_fabric_receipt(
+  requested_fabric_id uuid,
+  requested_quantity numeric,
+  requested_received_at timestamptz,
+  requested_notes text
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  saved_transaction_id uuid;
+begin
+  if not public.is_active_factory_admin() then
+    raise exception 'Only active admins can record incoming fabric stock.';
+  end if;
+  if requested_fabric_id is null or requested_quantity is null
+     or requested_quantity <= 0 or requested_quantity > 99999999999.999 then
+    raise exception 'Select a fabric and enter a positive incoming quantity.';
+  end if;
+
+  update public.factory_fabrics
+  set quantity_available = quantity_available + requested_quantity,
+      updated_at = now()
+  where id = requested_fabric_id;
+  if not found then
+    raise exception 'Fabric stock item not found.';
+  end if;
+
+  insert into public.factory_fabric_transactions (
+    fabric_id, transaction_type, quantity, notes, actor_id, created_at
+  )
+  values (
+    requested_fabric_id, 'receipt', requested_quantity,
+    coalesce(trim(requested_notes), ''), auth.uid(),
+    coalesce(requested_received_at, now())
+  )
+  returning id into saved_transaction_id;
+  return saved_transaction_id;
+end;
+$$;
+
+revoke all on function public.record_factory_fabric_receipt(uuid, numeric, timestamptz, text) from public, anon, authenticated;
+
+create or replace function public.adjust_factory_fabric_stock(
+  requested_fabric_id uuid,
+  requested_adjustment numeric,
+  requested_adjusted_at timestamptz,
+  requested_notes text
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  saved_transaction_id uuid;
+  adjustment_type text;
+begin
+  if not public.is_active_factory_admin() then
+    raise exception 'Only active admins can adjust fabric stock.';
+  end if;
+  if requested_fabric_id is null or requested_adjustment is null
+     or requested_adjustment = 0
+     or abs(requested_adjustment) > 99999999999.999 then
+    raise exception 'Select a fabric and enter a non-zero stock adjustment.';
+  end if;
+
+  update public.factory_fabrics
+  set quantity_available = quantity_available + requested_adjustment,
+      updated_at = now()
+  where id = requested_fabric_id
+    and quantity_available + requested_adjustment >= 0;
+  if not found then
+    raise exception 'Fabric item not found or the adjustment would make stock negative.';
+  end if;
+
+  adjustment_type := case when requested_adjustment > 0 then 'adjustment_in' else 'adjustment_out' end;
+  insert into public.factory_fabric_transactions (
+    fabric_id, transaction_type, quantity, notes, actor_id, created_at
+  )
+  values (
+    requested_fabric_id, adjustment_type, abs(requested_adjustment),
+    coalesce(trim(requested_notes), ''), auth.uid(),
+    coalesce(requested_adjusted_at, now())
+  )
+  returning id into saved_transaction_id;
+  return saved_transaction_id;
+end;
+$$;
+
+revoke all on function public.adjust_factory_fabric_stock(uuid, numeric, timestamptz, text) from public, anon, authenticated;
+
+create or replace function public.delete_factory_fabric(requested_fabric_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not public.is_active_factory_admin() then
+    raise exception 'Only active admins can delete fabric stock items.';
+  end if;
+  if requested_fabric_id is null then
+    raise exception 'A valid fabric stock item is required.';
+  end if;
+  if exists (
+    select 1 from public.factory_fabric_transactions
+    where fabric_id = requested_fabric_id
+  ) then
+    raise exception 'Fabric items with inventory history cannot be deleted.';
+  end if;
+  delete from public.factory_fabrics
+  where id = requested_fabric_id and quantity_available = 0;
+  if not found then
+    raise exception 'Only an unused fabric item with zero stock can be deleted.';
+  end if;
+end;
+$$;
+
+revoke all on function public.delete_factory_fabric(uuid) from public, anon, authenticated;
+
+create or replace function public.reconcile_factory_fabric_usage(
+  requested_order_id uuid,
+  requested_fabric_id uuid,
+  requested_quantity numeric
+)
+returns text
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  prior_fabric_id uuid;
+  prior_quantity numeric(14, 3);
+  resolved_fabric public.factory_fabrics%rowtype;
+  quantity_delta numeric(14, 3);
+begin
+  if requested_order_id is null or requested_fabric_id is null
+     or requested_quantity is null or requested_quantity <= 0
+     or requested_quantity > 99999999999.999 then
+    raise exception 'Select a fabric stock item and enter a positive amount to withdraw.';
+  end if;
+
+  select fabric_id, fabric_quantity
+    into prior_fabric_id, prior_quantity
+  from public.production_stages
+  where order_id = requested_order_id and stage_name = 'cutting'
+  for update;
+  if not found then
+    raise exception 'The cutting stage for this order does not exist.';
+  end if;
+
+  select * into resolved_fabric
+  from public.factory_fabrics
+  where id = requested_fabric_id
+  for update;
+  if not found then
+    raise exception 'Selected fabric stock item not found.';
+  end if;
+
+  prior_quantity := coalesce(prior_quantity, 0);
+  if prior_fabric_id = requested_fabric_id then
+    quantity_delta := requested_quantity - prior_quantity;
+    if quantity_delta > 0 then
+      update public.factory_fabrics
+      set quantity_available = quantity_available - quantity_delta,
+          updated_at = now()
+      where id = requested_fabric_id and quantity_available >= quantity_delta;
+      if not found then
+        raise exception 'Not enough fabric remains in stock for this withdrawal.';
+      end if;
+      insert into public.factory_fabric_transactions (
+        fabric_id, order_id, transaction_type, quantity, notes, actor_id
+      )
+      values (requested_fabric_id, requested_order_id, 'withdrawal', quantity_delta,
+              'سحب قماش لطلب القص', auth.uid());
+    elsif quantity_delta < 0 then
+      update public.factory_fabrics
+      set quantity_available = quantity_available + abs(quantity_delta),
+          updated_at = now()
+      where id = requested_fabric_id;
+      insert into public.factory_fabric_transactions (
+        fabric_id, order_id, transaction_type, quantity, notes, actor_id
+      )
+      values (requested_fabric_id, requested_order_id, 'return', abs(quantity_delta),
+              'تسوية كمية قماش مستخدمة لطلب القص', auth.uid());
+    end if;
+  else
+    if prior_fabric_id is not null and prior_quantity > 0 then
+      update public.factory_fabrics
+      set quantity_available = quantity_available + prior_quantity,
+          updated_at = now()
+      where id = prior_fabric_id;
+      insert into public.factory_fabric_transactions (
+        fabric_id, order_id, transaction_type, quantity, notes, actor_id
+      )
+      values (prior_fabric_id, requested_order_id, 'return', prior_quantity,
+              'إرجاع قماش عند تغيير خامة طلب القص', auth.uid());
+    end if;
+    update public.factory_fabrics
+    set quantity_available = quantity_available - requested_quantity,
+        updated_at = now()
+    where id = requested_fabric_id and quantity_available >= requested_quantity;
+    if not found then
+      raise exception 'Not enough fabric remains in stock for this withdrawal.';
+    end if;
+    insert into public.factory_fabric_transactions (
+      fabric_id, order_id, transaction_type, quantity, notes, actor_id
+    )
+    values (requested_fabric_id, requested_order_id, 'withdrawal', requested_quantity,
+            'سحب قماش لطلب القص', auth.uid());
+  end if;
+  return resolved_fabric.name;
+end;
+$$;
+
+revoke all on function public.reconcile_factory_fabric_usage(uuid, uuid, numeric) from public, anon, authenticated;
+
 create index if not exists factory_deliveries_customer_date_idx
   on public.factory_deliveries (customer_id, delivered_at desc);
 create index if not exists factory_deliveries_order_date_idx
@@ -1232,6 +1686,7 @@ $$;
 drop function if exists public.submit_factory_cutting(uuid, text, text, jsonb, text, text, text, integer, integer, text);
 drop function if exists public.submit_factory_cutting(uuid, uuid, text, text, jsonb, text, text, text, integer, integer, text);
 drop function if exists public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, integer, text);
+drop function if exists public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, integer, text, uuid, numeric);
 drop function if exists public.read_factory_cutting_clients();
 create function public.read_factory_cutting_clients()
 returns table (id uuid, name text)
@@ -1262,7 +1717,9 @@ create function public.submit_factory_cutting(
   requested_model_image_url text,
   requested_fabric text,
   requested_bolt_count integer,
-  requested_technical_notes text
+  requested_technical_notes text,
+  requested_fabric_id uuid,
+  requested_fabric_quantity numeric
 )
 returns integer
 language plpgsql
@@ -1276,6 +1733,7 @@ declare
   normalized_colors text;
   cut_total integer;
   total_plys integer;
+  resolved_fabric_name text;
 begin
   if not public.has_active_factory_role(array['cutting']) then
     raise exception 'Only active cutting supervisors can submit new cutting orders.';
@@ -1337,31 +1795,39 @@ begin
     nullif(trim(coalesce(requested_model_image_url, '')), '')
   );
 
+  resolved_fabric_name := public.reconcile_factory_fabric_usage(
+    requested_order_id, requested_fabric_id, requested_fabric_quantity
+  );
+
   update public.production_stages
   set target_quantity = 0,
       completed_quantity = 0,
-      fabric = trim(requested_fabric),
+      fabric = resolved_fabric_name,
+      fabric_id = requested_fabric_id,
+      fabric_quantity = requested_fabric_quantity,
       bolt_count = requested_bolt_count,
       layer_count = total_plys,
       color_ply_data = requested_color_ply_data,
       technical_notes = coalesce(trim(requested_technical_notes), ''),
       status = 'قيد الفرش',
       updated_at = now()
-  where order_id = requested_order_id
-    and stage_name = 'cutting';
+  where order_id = requested_order_id and stage_name = 'cutting';
 
   return total_plys;
 end;
 $$;
 
 drop function if exists public.update_factory_cutting_progress(uuid, jsonb, jsonb, text, integer, text);
+drop function if exists public.update_factory_cutting_progress(uuid, jsonb, jsonb, text, integer, text, uuid, numeric);
 create function public.update_factory_cutting_progress(
   requested_order_id uuid,
   requested_size_data jsonb,
   requested_color_ply_data jsonb,
   requested_fabric text,
   requested_bolt_count integer,
-  requested_technical_notes text
+  requested_technical_notes text,
+  requested_fabric_id uuid,
+  requested_fabric_quantity numeric
 )
 returns integer
 language plpgsql
@@ -1374,6 +1840,7 @@ declare
   normalized_colors text;
   calculated_total integer;
   total_plys integer;
+  resolved_fabric_name text;
 begin
   if not public.has_active_factory_role(array['cutting']) then
     raise exception 'Only active cutting supervisors can update cutting progress.';
@@ -1399,6 +1866,10 @@ begin
     into normalized_sizes, normalized_colors, calculated_total, total_plys
   from public.calculate_factory_cutting_breakdown(requested_size_data, requested_color_ply_data) as breakdown;
 
+  resolved_fabric_name := public.reconcile_factory_fabric_usage(
+    requested_order_id, requested_fabric_id, requested_fabric_quantity
+  );
+
   update public.orders
   set colors = normalized_colors,
       color_names = coalesce((
@@ -1411,7 +1882,9 @@ begin
   where id = requested_order_id;
 
   update public.production_stages
-  set fabric = trim(requested_fabric),
+  set fabric = resolved_fabric_name,
+      fabric_id = requested_fabric_id,
+      fabric_quantity = requested_fabric_quantity,
       bolt_count = requested_bolt_count,
       layer_count = total_plys,
       color_ply_data = requested_color_ply_data,
@@ -1481,6 +1954,7 @@ drop function if exists public.finish_factory_cutting(uuid, jsonb, text, text);
 drop function if exists public.finish_factory_cutting(uuid, jsonb, text, text, text, integer, integer);
 drop function if exists public.finish_factory_cutting(uuid, jsonb, text, text, text, integer, integer, text);
 drop function if exists public.finish_factory_cutting(uuid, jsonb, jsonb, text, text, integer, text);
+drop function if exists public.finish_factory_cutting(uuid, jsonb, jsonb, text, text, integer, text, uuid, numeric);
 create function public.finish_factory_cutting(
   requested_order_id uuid,
   requested_size_data jsonb,
@@ -1488,7 +1962,9 @@ create function public.finish_factory_cutting(
   requested_model_image_url text,
   requested_fabric text,
   requested_bolt_count integer,
-  requested_technical_notes text
+  requested_technical_notes text,
+  requested_fabric_id uuid,
+  requested_fabric_quantity numeric
 )
 returns integer
 language plpgsql
@@ -1501,6 +1977,7 @@ declare
   normalized_colors text;
   cut_total integer;
   total_plys integer;
+  resolved_fabric_name text;
 begin
   if not public.has_active_factory_role(array['cutting']) then
     raise exception 'Only active cutting supervisors can finish cutting.';
@@ -1529,6 +2006,10 @@ begin
     raise exception 'Mark the bed ready for cutting before recording its final piece count.';
   end if;
 
+  resolved_fabric_name := public.reconcile_factory_fabric_usage(
+    requested_order_id, requested_fabric_id, requested_fabric_quantity
+  );
+
   update public.orders
   set sizes = normalized_sizes::text,
       colors = normalized_colors,
@@ -1545,7 +2026,9 @@ begin
   update public.production_stages
   set target_quantity = cut_total,
       completed_quantity = cut_total,
-      fabric = trim(requested_fabric),
+      fabric = resolved_fabric_name,
+      fabric_id = requested_fabric_id,
+      fabric_quantity = requested_fabric_quantity,
       bolt_count = requested_bolt_count,
       layer_count = total_plys,
       color_ply_data = requested_color_ply_data,
@@ -1789,6 +2272,8 @@ alter table public.orders enable row level security;
 alter table public.production_stages enable row level security;
 alter table public.factory_records enable row level security;
 alter table public.factory_deliveries enable row level security;
+alter table public.factory_fabrics enable row level security;
+alter table public.factory_fabric_transactions enable row level security;
 
 drop policy if exists "Factory roles read relevant orders" on public.orders;
 create policy "Factory roles read relevant orders"
@@ -1885,7 +2370,33 @@ create policy "Users read their own factory deliveries"
     )
   );
 
-revoke all on public.orders, public.production_stages, public.factory_records, public.factory_deliveries from public, anon, authenticated;
+drop policy if exists "Factory staff read fabric stock" on public.factory_fabrics;
+create policy "Factory staff read fabric stock"
+  on public.factory_fabrics for select to authenticated
+  using (public.has_active_factory_role(array['admin', 'cutting']));
+
+drop policy if exists "Admins read fabric transactions" on public.factory_fabric_transactions;
+create policy "Admins read fabric transactions"
+  on public.factory_fabric_transactions for select to authenticated
+  using (public.is_active_factory_admin());
+
+drop policy if exists "Factory roles read safe live signals" on public.factory_live_signals;
+create policy "Factory roles read safe live signals"
+  on public.factory_live_signals for select to authenticated
+  using (
+    public.has_active_factory_role(array['admin', 'cutting', 'sewing'])
+    or (
+      client_id = auth.uid()
+      and public.has_active_factory_role(array['client'])
+    )
+    or (
+      worker_id = auth.uid()
+      and public.has_active_factory_role(array['worker'])
+    )
+  );
+
+revoke all on public.orders, public.production_stages, public.factory_records, public.factory_deliveries,
+  public.factory_fabrics, public.factory_fabric_transactions, public.factory_live_signals from public, anon, authenticated;
 alter table public.factory_clients enable row level security;
 drop policy if exists "Admins manage factory clients" on public.factory_clients;
 create policy "Admins manage factory clients"
@@ -1903,6 +2414,9 @@ grant select (model_image_url) on public.orders to authenticated;
 grant select on public.production_stages to authenticated;
 grant select, insert, update on public.factory_records to authenticated;
 grant select on public.factory_deliveries to authenticated;
+grant select on public.factory_fabrics to authenticated;
+grant select on public.factory_fabric_transactions to authenticated;
+grant select on public.factory_live_signals to authenticated;
 grant update (completed_quantity, status, updated_at) on public.production_stages to authenticated;
 revoke all on function public.has_active_factory_role(text[]) from public, anon, authenticated;
 grant execute on function public.has_active_factory_role(text[]) to authenticated;
@@ -1919,14 +2433,25 @@ grant execute on function public.save_factory_order(uuid, uuid, text, text, inte
 revoke all on function public.record_factory_delivery(uuid, integer, text) from public, anon, authenticated;
 grant execute on function public.record_factory_delivery(uuid, integer, text) to authenticated;
 revoke all on function public.calculate_factory_cutting_breakdown(jsonb, jsonb) from public, anon, authenticated;
-revoke all on function public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, integer, text) from public, anon, authenticated;
-grant execute on function public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, integer, text) to authenticated;
-revoke all on function public.update_factory_cutting_progress(uuid, jsonb, jsonb, text, integer, text) from public, anon, authenticated;
-grant execute on function public.update_factory_cutting_progress(uuid, jsonb, jsonb, text, integer, text) to authenticated;
+revoke all on function public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, integer, text, uuid, numeric) from public, anon, authenticated;
+grant execute on function public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, integer, text, uuid, numeric) to authenticated;
+revoke all on function public.update_factory_cutting_progress(uuid, jsonb, jsonb, text, integer, text, uuid, numeric) from public, anon, authenticated;
+grant execute on function public.update_factory_cutting_progress(uuid, jsonb, jsonb, text, integer, text, uuid, numeric) to authenticated;
+revoke all on function public.save_factory_fabric(uuid, text, text, text, text, text) from public, anon, authenticated;
+grant execute on function public.save_factory_fabric(uuid, text, text, text, text, text) to authenticated;
+revoke all on function public.record_factory_fabric_receipt(uuid, numeric, timestamptz, text) from public, anon, authenticated;
+grant execute on function public.record_factory_fabric_receipt(uuid, numeric, timestamptz, text) to authenticated;
+revoke all on function public.adjust_factory_fabric_stock(uuid, numeric, timestamptz, text) from public, anon, authenticated;
+grant execute on function public.adjust_factory_fabric_stock(uuid, numeric, timestamptz, text) to authenticated;
+revoke all on function public.delete_factory_fabric(uuid) from public, anon, authenticated;
+grant execute on function public.delete_factory_fabric(uuid) to authenticated;
+revoke all on function public.reconcile_factory_fabric_usage(uuid, uuid, numeric) from public, anon, authenticated;
+revoke all on function public.guard_factory_financial_history() from public, anon, authenticated;
+revoke all on function public.emit_factory_live_signal() from public, anon, authenticated;
 revoke all on function public.mark_factory_cutting_ready(uuid) from public, anon, authenticated;
 grant execute on function public.mark_factory_cutting_ready(uuid) to authenticated;
-revoke all on function public.finish_factory_cutting(uuid, jsonb, jsonb, text, text, integer, text) from public, anon, authenticated;
-grant execute on function public.finish_factory_cutting(uuid, jsonb, jsonb, text, text, integer, text) to authenticated;
+revoke all on function public.finish_factory_cutting(uuid, jsonb, jsonb, text, text, integer, text, uuid, numeric) from public, anon, authenticated;
+grant execute on function public.finish_factory_cutting(uuid, jsonb, jsonb, text, text, integer, text, uuid, numeric) to authenticated;
 revoke all on function public.delete_factory_order(uuid) from public, anon, authenticated;
 grant execute on function public.delete_factory_order(uuid) to authenticated;
 revoke all on function public.save_factory_payment(uuid, uuid, numeric, date, text, text, text) from public, anon, authenticated;
@@ -1977,5 +2502,53 @@ set name = excluded.name,
     role = excluded.role,
     status = excluded.status,
     updated_at = now();
+
+do $$
+declare
+  table_name text;
+  publication_covers_all boolean;
+begin
+  if not exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
+    execute 'create publication supabase_realtime';
+  end if;
+
+  select puballtables into publication_covers_all
+  from pg_publication
+  where pubname = 'supabase_realtime';
+  if not publication_covers_all then
+    foreach table_name in array array['orders', 'production_stages'] loop
+      if exists (
+        select 1 from pg_publication_tables
+        where pubname = 'supabase_realtime'
+          and schemaname = 'public'
+          and tablename = table_name
+      ) then
+        execute format('alter publication supabase_realtime drop table public.%I', table_name);
+      end if;
+    end loop;
+  end if;
+
+  foreach table_name in array array[
+    'factory_live_signals',
+    'factory_fabrics',
+    'factory_fabric_transactions'
+  ] loop
+    if not exists (
+      select 1
+      from pg_publication_tables
+      where pubname = 'supabase_realtime'
+        and schemaname = 'public'
+        and tablename = table_name
+    ) then
+      execute format('alter publication supabase_realtime add table public.%I', table_name);
+    end if;
+  end loop;
+end;
+$$;
+
+alter table public.orders replica identity full;
+alter table public.production_stages replica identity full;
+alter table public.factory_fabrics replica identity full;
+alter table public.factory_fabric_transactions replica identity full;
 
 notify pgrst, 'reload schema';
