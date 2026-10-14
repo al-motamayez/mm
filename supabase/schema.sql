@@ -1525,6 +1525,7 @@ declare
   saved_record_id uuid := coalesce(requested_record_id, gen_random_uuid());
   existing_record public.factory_records%rowtype;
   payment_payload jsonb;
+  normalized_amount numeric(14, 2);
 begin
   if not public.is_active_factory_admin() then
     raise exception 'Only active admins can record factory payments.';
@@ -1534,6 +1535,10 @@ begin
      or requested_amount <= 0
      or requested_date is null then
     raise exception 'A valid customer, positive amount, and payment date are required.';
+  end if;
+  normalized_amount := round(requested_amount, 2);
+  if normalized_amount <= 0 then
+    raise exception 'The payment amount must be at least one piastre.';
   end if;
 
   select *
@@ -1549,7 +1554,7 @@ begin
     'customerId', matched_client.id,
     'clientId', matched_client.user_id,
     'clientName', matched_client.name,
-    'amount', requested_amount,
+    'amount', normalized_amount,
     'date', requested_date,
     'method', coalesce(nullif(trim(requested_method), ''), 'غير محدد'),
     'reference', coalesce(trim(requested_reference), ''),
@@ -1619,7 +1624,7 @@ begin
   end if;
   settlement_time := clock_timestamp();
 
-  select coalesce((payload ->> 'balance')::numeric, 0)
+  select round(coalesce((payload ->> 'balance')::numeric, 0), 2)
     into opening_balance
   from public.factory_records
   where collection = 'settlements'
@@ -1628,14 +1633,14 @@ begin
   limit 1;
   opening_balance := coalesce(opening_balance, 0);
 
-  select coalesce(sum(total_amount), 0),
-         coalesce(sum(paid_amount), 0)
+  select round(coalesce(sum(total_amount), 0), 2),
+         round(coalesce(sum(paid_amount), 0), 2)
     into delivered_total, order_paid_total
   from public.orders
   where customer_id = matched_client.id
     and archived_at is null;
 
-  select coalesce(sum((payload ->> 'amount')::numeric), 0)
+  select coalesce(sum(round((payload ->> 'amount')::numeric, 2)), 0)
     into payments_total
   from public.factory_records
   where collection = 'payments'
@@ -1645,7 +1650,10 @@ begin
       or created_at >= matched_client.account_period_started_at
     );
 
-  closing_balance := opening_balance + delivered_total - order_paid_total - payments_total;
+  closing_balance := round(
+    opening_balance + delivered_total - order_paid_total - payments_total,
+    2
+  );
 
   update public.orders
   set archived_at = settlement_time

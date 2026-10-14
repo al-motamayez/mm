@@ -895,17 +895,17 @@ function clientAccountSummary(client, data) {
   const latestSettlement = settlements[0] || null;
   const openingBalance = roundMoney(latestSettlement?.balance || 0);
   const orders = data.models.filter((order) => order.customerId === client.id && !order.archivedAt);
-  const deliveredTotal = roundMoney(orders.reduce((sum, order) => sum + Number(order.totalAmount || 0), 0));
-  const orderPaid = roundMoney(orders.reduce((sum, order) => sum + Number(order.paidAmount || 0), 0));
+  const deliveredTotal = sumMoney(orders.map((order) => order.totalAmount));
+  const orderPaid = sumMoney(orders.map((order) => order.paidAmount));
   const periodStart = client.account_period_started_at || latestSettlement?.date || null;
   const payments = data.payments.filter((payment) =>
     payment.customerId === client.id
     && (!periodStart || new Date(payment._createdAt || payment.created_at).getTime() >= new Date(periodStart).getTime())
   );
-  const paymentsTotal = roundMoney(payments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0));
-  const due = roundMoney(openingBalance + deliveredTotal);
-  const paid = roundMoney(orderPaid + paymentsTotal);
-  const balance = roundMoney(due - paid);
+  const paymentsTotal = sumMoney(payments.map((payment) => payment.amount));
+  const due = addMoney(openingBalance, deliveredTotal);
+  const paid = addMoney(orderPaid, paymentsTotal);
+  const balance = subtractMoney(due, paid);
   return {
     settlements,
     latestSettlement,
@@ -923,8 +923,26 @@ function clientAccountSummary(client, data) {
   };
 }
 
+function moneyCents(value) {
+  const amount = Number(value ?? 0);
+  if (!Number.isFinite(amount)) throw new Error("قيمة مالية غير صالحة.");
+  return Math.round(amount * 100);
+}
+
 function roundMoney(value) {
-  return Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+  return moneyCents(value) / 100;
+}
+
+function sumMoney(values) {
+  return values.reduce((totalCents, value) => totalCents + moneyCents(value), 0) / 100;
+}
+
+function addMoney(left, right) {
+  return (moneyCents(left) + moneyCents(right)) / 100;
+}
+
+function subtractMoney(left, right) {
+  return (moneyCents(left) - moneyCents(right)) / 100;
 }
 
 function clientAccountCards(data) {
@@ -1191,12 +1209,12 @@ function clientView(data, session) {
     ((item.clientId || item._ownerId) === session.accountId || item.client === session.username)
     && (!latestSettlement || new Date(item._createdAt || item.created_at).getTime() >= new Date(latestSettlement.date || latestSettlement._createdAt).getTime())
   );
-  const totalAmount = roundMoney(currentOrders.reduce((sum, item) => sum + Number(item.totalAmount || 0), 0));
-  const paymentsTotal = roundMoney(payments.reduce((sum, item) => sum + Number(item.amount || 0), 0));
-  const orderPaid = roundMoney(currentOrders.reduce((sum, item) => sum + Number(item.paidAmount || 0), 0));
-  const totalPaid = roundMoney(paymentsTotal + orderPaid);
-  const due = roundMoney(openingBalance + totalAmount);
-  const remaining = roundMoney(due - totalPaid);
+  const totalAmount = sumMoney(currentOrders.map((item) => item.totalAmount));
+  const paymentsTotal = sumMoney(payments.map((item) => item.amount));
+  const orderPaid = sumMoney(currentOrders.map((item) => item.paidAmount));
+  const totalPaid = addMoney(paymentsTotal, orderPaid);
+  const due = addMoney(openingBalance, totalAmount);
+  const remaining = subtractMoney(due, totalPaid);
   const deliveredUnits = currentOrders.reduce((sum, item) => sum + Number(item.quantity), 0);
   return `<section id="dashboard" class="dashboard-section"><div class="stats-grid">${stat("موديلاتي الحالية", currentOrders.length, "ضمن الفترة الحالية")}${stat("العدد الفعلي", new Intl.NumberFormat("ar-EG").format(deliveredUnits), "قطعة بعد القص")}${latestSettlement ? stat("رصيد سابق مرحّل", money(openingBalance), "افتتاح الفترة الحالية") : ""}${stat("المطلوب بعد التسليم", money(totalAmount), "قيمة البضاعة المستلمة")}${stat("إجمالي المطلوب", money(due), "الرصيد السابق + المطلوب الحالي")}${stat("إجمالي المدفوع", money(totalPaid))}${stat("الرصيد المتبقي", money(remaining), remaining === 0 ? "تم السداد بالكامل" : remaining < 0 ? "رصيد دائن للعميل" : "مستحق على العميل")}</div></section><section id="orders" class="dashboard-section">${panel("موديلاتي والطلبيات الحالية", clientOrderCards(currentOrders))}${archivedOrders.length ? panel("الطلبات المؤرشفة", clientOrderCards(archivedOrders)) : ""}</section><section id="finance" class="dashboard-section">${panel("دفعاتي المالية", table(["المبلغ","تاريخ ووقت التسجيل","طريقة الدفع"], payments.map((item) => `<tr><td>${money(item.amount)}</td><td>${formatDateTime(item._createdAt || item.created_at || item.date)}</td><td>${escapeHtml(item.method)}</td></tr>`)))}</section>`;
 }
@@ -1879,7 +1897,7 @@ function bindActions(session) {
     orderForm.querySelector("#model-delivered-summary").textContent = `${new Intl.NumberFormat("ar-EG").format(delivered)} قطعة`;
     orderForm.elements.paidAmount.removeAttribute("max");
     orderForm.querySelector("#model-total").textContent = formatAmount(total);
-    orderForm.querySelector("#model-remaining").textContent = formatAmount(roundMoney(total - paid));
+    orderForm.querySelector("#model-remaining").textContent = formatAmount(subtractMoney(total, paid));
     const selectedClient = dashboardData.clients.find((client) => client.id === orderForm.elements.customerId.value);
     const preview = orderForm.querySelector("#client-balance-preview");
     if (!selectedClient) {
@@ -1888,10 +1906,10 @@ function bindActions(session) {
       const editIndex = orderForm.elements.editIndex.value;
       const existingOrder = editIndex ? dashboardData.models[Number(editIndex)] : null;
       const previousImpact = existingOrder
-        ? Number(existingOrder.totalAmount || 0) - Number(existingOrder.paidAmount || 0)
+        ? subtractMoney(existingOrder.totalAmount, existingOrder.paidAmount)
         : 0;
       preview.textContent = formatAmount(
-        roundMoney(clientAccountSummary(selectedClient, dashboardData).balance - previousImpact + total - paid)
+        addMoney(subtractMoney(clientAccountSummary(selectedClient, dashboardData).balance, previousImpact), subtractMoney(total, paid))
       );
     }
   };
