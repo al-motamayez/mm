@@ -24,12 +24,6 @@ const SIZE_OPTIONS = {
   children: ["2", "4", "6", "8", "10", "12", "14", "16"]
 };
 const SIZE_TYPE_LABELS = { men: "رجالي", women: "حريمي", children: "أطفال" };
-const COLOR_OPTIONS = [
-  ["أسود", "#222222"], ["أبيض", "#ffffff"], ["أحمر", "#c62828"], ["أزرق", "#1565c0"],
-  ["كحلي", "#172a55"], ["أخضر", "#2e7d32"], ["زيتي", "#667c35"], ["بيج", "#d8c3a5"],
-  ["رمادي", "#7b8587"], ["بني", "#795548"], ["وردي", "#e78ca5"], ["أصفر", "#f5c842"]
-];
-
 const roleInfo = {
   admin: { title: "لوحة تحكم الإدارة", description: "نظرة شاملة على المصنع وإدارة بيانات التشغيل.", icon: "▦" },
   cutting: { title: "لوحة مشرف القص", description: "متابعة أوامر الإدارة وتسجيل بيانات الفرش والقص.", icon: "✂" },
@@ -157,6 +151,14 @@ async function readDashboardData(session) {
   data.personalAttendance = personalAttendance;
   data.personalAdvances = personalAdvances;
   data.personalPayroll = personalPayroll;
+  if (session.role === "cutting") {
+    const { data: cuttingClients, error: cuttingClientsError } = await supabaseClient.rpc("read_factory_cutting_clients");
+    if (cuttingClientsError?.code === "PGRST202") {
+      throw new Error("دالة قراءة قائمة العملاء لمشرف القص غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+    }
+    if (cuttingClientsError) throw cuttingClientsError;
+    data.clients = cuttingClients || [];
+  }
   data.leaves = leaves;
   data.tasks = tasks;
   data.clientNotes = session.role === "admin" ? await readFlexibleRecords("client_notes") : [];
@@ -208,7 +210,7 @@ async function readDashboardData(session) {
   if (session.role === "admin" || orders.length) {
     let stagesQuery = supabaseClient
       .from("production_stages")
-      .select("id, order_id, stage_name, worker_name, fabric, bolt_count, layer_count, technical_notes, line_name, target_quantity, completed_quantity, status, updated_at");
+      .select("id, order_id, stage_name, worker_name, fabric, bolt_count, layer_count, color_ply_data, technical_notes, line_name, target_quantity, completed_quantity, status, updated_at");
     if (session.role !== "admin") {
       stagesQuery = stagesQuery.in("order_id", orders.map((order) => order.id));
     }
@@ -269,6 +271,7 @@ async function readDashboardData(session) {
       fabric: cuttingStage?.fabric || "",
       boltCount: Number(cuttingStage?.bolt_count || 0),
       layerCount: Number(cuttingStage?.layer_count || 0),
+      colorPlyData: cuttingStage?.color_ply_data || null,
       cuttingNotes: cuttingStage?.technical_notes || "",
       line: sewingStage?.line_name || "",
       created_at: order.created_at
@@ -291,6 +294,7 @@ async function readDashboardData(session) {
       fabric: stage.fabric || "—",
       boltCount: Number(stage.bolt_count || 0),
       layerCount: Number(stage.layer_count || 0),
+      colorPlyData: stage.color_ply_data || null,
       technicalNotes: stage.technical_notes || "",
       priority: ordersById.get(stage.order_id)?.priority || "عادي",
       total: stage.target_quantity || ordersById.get(stage.order_id)?.total_pieces || 0,
@@ -436,17 +440,17 @@ function parseSizeData(value) {
   return { type: "", counts: {}, legacy: String(value) };
 }
 
-function sizePickerMarkup(value, prefix) {
+function sizePickerMarkup(value, prefix, showCounts = true) {
   const sizeData = parseSizeData(value);
   const pickerOptions = Object.entries(SIZE_OPTIONS).map(([type, sizes]) => `
     <div class="size-option-group" data-size-group="${type}" ${sizeData.type === type ? "" : "hidden"}>
       ${sizes.map((size) => {
         const active = Object.hasOwn(sizeData.counts, size);
         const count = Number(sizeData.counts[size] || 0);
-        return `<div class="size-choice${active ? " active" : ""}"><button type="button" class="size-toggle" data-size-toggle="${size}" aria-pressed="${active}">${size}</button><label class="size-count-label" ${active ? "" : "hidden"}><span class="visually-hidden">عدد مقاس ${size}</span><input data-size-count="${size}" type="number" min="0" step="1" value="${active && count ? count : ""}" placeholder="العدد" ${active ? "" : "disabled"}></label></div>`;
+        return `<div class="size-choice${active ? " active" : ""}"><button type="button" class="size-toggle" data-size-toggle="${size}" aria-pressed="${active}">${size}</button>${showCounts ? `<label class="size-count-label" ${active ? "" : "hidden"}><span class="visually-hidden">عدد مقاس ${size}</span><input data-size-count="${size}" type="number" min="0" step="1" value="${active && count ? count : ""}" placeholder="العدد" ${active ? "" : "disabled"}></label>` : ""}</div>`;
       }).join("")}
     </div>`).join("");
-  return `<div class="field size-picker" data-size-picker="${prefix}" data-size-legacy="${escapeHtml(sizeData.legacy)}">
+  return `<div class="field size-picker" data-size-picker="${prefix}" data-size-legacy="${escapeHtml(sizeData.legacy)}" data-auto-quantity="${showCounts ? "false" : "true"}">
     <label for="${prefix}-type">نوع المقاسات</label>
     <select id="${prefix}-type" data-size-type><option value="">اختر النوع</option>${Object.entries(SIZE_TYPE_LABELS).map(([type, label]) => `<option value="${type}" ${sizeData.type === type ? "selected" : ""}>${label}</option>`).join("")}</select>
     ${pickerOptions}
@@ -455,14 +459,98 @@ function sizePickerMarkup(value, prefix) {
   </div>`;
 }
 
+function parseColorPlyData(value, legacyColors = "", fallbackPlys = 0) {
+  let parsed = value;
+  if (typeof parsed === "string") {
+    try { parsed = JSON.parse(parsed); } catch { parsed = null; }
+  }
+  if (parsed && Array.isArray(parsed.colors)) {
+    return parsed.colors.map((entry) => ({
+      color: String(entry.color || "").toUpperCase(),
+      plys: Number(entry.plys || 0)
+    })).filter((entry) => /^#[0-9A-F]{6}$/.test(entry.color));
+  }
+  return String(legacyColors).split(",").map((color) => color.trim().toUpperCase())
+    .filter((color) => /^#[0-9A-F]{6}$/.test(color))
+    .map((color) => ({ color, plys: Number(fallbackPlys) || 0 }));
+}
+
+function cuttingColorPlyMarkup(colorPlyData, legacyColors, fallbackPlys, prefix) {
+  const colors = parseColorPlyData(colorPlyData, legacyColors, fallbackPlys);
+  const rows = colors.length ? colors.map((entry) => cuttingColorPlyRow(entry.color, entry.plys)).join("") : cuttingColorPlyRow("#000000", "");
+  return `<div class="field color-picker cutting-color-ply-picker" data-color-ply-picker="${prefix}">
+    <label>ألوان الفرشة وعدد الرئات لكل لون</label>
+    <div class="color-ply-rows" data-color-ply-rows>${rows}</div>
+    <button class="row-action" type="button" data-add-ply-color>＋ إضافة لون جديد</button>
+    <input type="hidden" name="colors" data-color-value value="${escapeHtml(colors.map((entry) => entry.color).join(", "))}">
+    <input type="hidden" name="colorPlyData" data-color-ply-value>
+  </div>`;
+}
+
+function cuttingColorPlyRow(color, plys) {
+  return `<div class="color-ply-row" data-color-ply-row>
+    <label class="field"><span>درجة اللون</span><input type="color" data-ply-color value="${/^#[0-9A-F]{6}$/i.test(color) ? escapeHtml(color) : "#000000"}"></label>
+    <label class="field"><span>عدد الرئات لهذا اللون</span><input type="number" data-ply-count min="1" step="1" value="${escapeHtml(plys)}" required></label>
+    <button class="row-action color-ply-remove" type="button" data-remove-ply-color aria-label="حذف اللون">حذف اللون</button>
+  </div>`;
+}
+
+function updateCuttingCalculation(form) {
+  const sizePicker = form.querySelector("[data-size-picker]");
+  const sizeType = sizePicker.querySelector("[data-size-type]").value;
+  const selectedSizes = [...sizePicker.querySelectorAll(".size-option-group:not([hidden]) .size-toggle[aria-pressed='true']")]
+    .map((button) => button.dataset.sizeToggle);
+  const colorRows = [...form.querySelectorAll("[data-color-ply-row]")].map((row) => ({
+    color: row.querySelector("[data-ply-color]").value.toUpperCase(),
+    plys: Number(row.querySelector("[data-ply-count]").value)
+  }));
+  const validRows = colorRows.filter((entry) => Number.isSafeInteger(entry.plys) && entry.plys > 0);
+  const plysPerSize = validRows.reduce((sum, entry) => sum + entry.plys, 0);
+  const counts = Object.fromEntries(selectedSizes.map((size) => [size, String(plysPerSize)]));
+  const sizeData = { type: sizeType, counts };
+  const total = plysPerSize * selectedSizes.length;
+  sizePicker.querySelector("[data-size-value]").value = sizeType ? JSON.stringify(sizeData) : "";
+
+  const picker = form.querySelector("[data-color-ply-picker]");
+  const selectedColors = colorRows.map((entry) => entry.color);
+  picker.querySelector("[data-color-value]").value = [...new Set(selectedColors)].join(", ");
+  picker.querySelector("[data-color-ply-value]").value = JSON.stringify({
+    colors: colorRows,
+    sizes: selectedSizes,
+    type: sizeType
+  });
+  const result = form.querySelector("[data-cutting-total]");
+  if (result) result.textContent = new Intl.NumberFormat("ar-EG").format(total);
+  const plysResult = form.querySelector("[data-cutting-plys]");
+  if (plysResult) plysResult.textContent = new Intl.NumberFormat("ar-EG").format(plysPerSize);
+  const breakdown = colorRows
+    .filter((entry) => Number.isSafeInteger(entry.plys) && entry.plys > 0)
+    .flatMap((entry) => selectedSizes.map((size) =>
+      `<tr><td><span class="color-breakdown-swatch" style="--swatch-color:${escapeHtml(entry.color)}"></span>${escapeHtml(entry.color)}</td><td>${escapeHtml(size)}</td><td>${new Intl.NumberFormat("ar-EG").format(entry.plys)}</td></tr>`
+    ));
+  const breakdownElement = form.querySelector("[data-cutting-breakdown]");
+  if (breakdownElement) {
+    breakdownElement.innerHTML = breakdown.length
+      ? table(["اللون", "المقاس", "عدد القطع"], breakdown)
+      : '<p class="muted">حدد المقاسات وأدخل رئات الألوان لعرض التوزيع المحسوب.</p>';
+  }
+  return { sizeData, colorPlyData: { colors: colorRows, sizes: selectedSizes, type: sizeType }, colors: [...new Set(selectedColors)], total };
+}
+
 function colorPickerMarkup(value, prefix) {
   const selected = String(value || "").split(",").map((color) => color.trim()).filter(Boolean);
-  const palette = COLOR_OPTIONS.map(([label, color]) => {
-    const active = selected.includes(label);
-    return `<button type="button" class="color-swatch${active ? " active" : ""}" data-color-name="${label}" aria-label="${label}" aria-pressed="${active}" title="${label}"><span style="--swatch-color:${color}"></span></button>`;
-  }).join("");
-  const paletteLabels = selected.filter((label) => !COLOR_OPTIONS.some(([known]) => known === label));
-  return `<div class="field color-picker" data-color-picker="${prefix}"><label>الألوان</label><div class="color-swatch-list">${palette}</div><input type="text" data-custom-colors value="${escapeHtml(paletteLabels.join(", "))}" placeholder="ألوان أو درجات أخرى"><input type="hidden" name="colors" data-color-value value="${escapeHtml(value || "")}"></div>`;
+  const choices = [...new Set(selected)].map(colorPickerChoice).join("");
+  return `<div class="field color-picker" data-color-picker="${prefix}">
+    <label>اختيار درجات الألوان</label>
+    <div class="color-picker-controls"><input type="color" data-color-input value="#000000" aria-label="اختر درجة لون"><button class="row-action" type="button" data-add-color>إضافة الدرجة</button></div>
+    <div class="color-swatch-list" data-color-list>${choices || '<span class="muted">لم يتم اختيار ألوان بعد.</span>'}</div>
+    <input type="hidden" name="colors" data-color-value value="${escapeHtml(value || "")}">
+  </div>`;
+}
+
+function colorPickerChoice(color) {
+  const isHex = /^#[0-9a-f]{6}$/i.test(color);
+  return `<span class="color-choice" data-color-choice="${escapeHtml(color)}"><span class="color-choice-swatch"${isHex ? ` style="--swatch-color:${escapeHtml(color)}"` : ""}></span><span class="color-choice-value">${escapeHtml(color)}</span><button type="button" data-remove-color="${escapeHtml(color)}" aria-label="إزالة اللون ${escapeHtml(color)}">×</button></span>`;
 }
 
 function sizeSummary(value) {
@@ -483,9 +571,13 @@ function updateSizePicker(root) {
   });
   const sizeData = { type: selectedType, counts: {} };
   root.querySelectorAll(".size-option-group:not([hidden]) .size-toggle[aria-pressed='true']").forEach((button) => {
-    const input = root.querySelector(`[data-size-count="${CSS.escape(button.dataset.sizeToggle)}"]`);
-    const value = input.value.trim();
-    if (value) sizeData.counts[button.dataset.sizeToggle] = value;
+    if (root.dataset.autoQuantity === "true") {
+      sizeData.counts[button.dataset.sizeToggle] = "0";
+    } else {
+      const input = root.querySelector(`[data-size-count="${CSS.escape(button.dataset.sizeToggle)}"]`);
+      const value = input.value.trim();
+      if (value) sizeData.counts[button.dataset.sizeToggle] = value;
+    }
   });
   root.querySelector("[data-size-value]").value = selectedType
     ? JSON.stringify(sizeData)
@@ -500,37 +592,81 @@ function sizePickerTotal(form) {
 }
 
 function updateColorPicker(root) {
-  const selected = [...root.querySelectorAll(".color-swatch.active")].map((button) => button.dataset.colorName);
-  const custom = root.querySelector("[data-custom-colors]").value.split(",").map((color) => color.trim()).filter(Boolean);
-  root.querySelector("[data-color-value]").value = [...new Set([...selected, ...custom])].join(", ");
+  const selected = [...root.querySelectorAll("[data-color-choice]")].map((choice) => choice.dataset.colorChoice);
+  root.querySelector("[data-color-value]").value = [...new Set(selected)].join(", ");
 }
 
 function bindPickers(form) {
   form.querySelectorAll("[data-size-picker]").forEach((root) => {
-    root.querySelector("[data-size-type]").addEventListener("change", () => updateSizePicker(root));
+    const update = () => {
+      updateSizePicker(root);
+      if (root.dataset.autoQuantity === "true") updateCuttingCalculation(root.closest("form"));
+    };
+    root.querySelector("[data-size-type]").addEventListener("change", update);
     root.querySelectorAll("[data-size-toggle]").forEach((button) => button.addEventListener("click", () => {
       const pressed = button.getAttribute("aria-pressed") !== "true";
       button.setAttribute("aria-pressed", String(pressed));
       button.closest(".size-choice").classList.toggle("active", pressed);
       const countLabel = button.nextElementSibling;
-      const countInput = countLabel.querySelector("input");
-      countLabel.hidden = !pressed;
-      countInput.disabled = !pressed;
-      if (!pressed) countInput.value = "";
-      updateSizePicker(root);
-      if (pressed) countInput.focus();
+      if (countLabel?.matches(".size-count-label")) {
+        const countInput = countLabel.querySelector("input");
+        countLabel.hidden = !pressed;
+        countInput.disabled = !pressed;
+        if (!pressed) countInput.value = "";
+      }
+      update();
     }));
     root.querySelectorAll("[data-size-count]").forEach((input) => input.addEventListener("input", () => updateSizePicker(root)));
     updateSizePicker(root);
   });
   form.querySelectorAll("[data-color-picker]").forEach((root) => {
-    root.querySelectorAll(".color-swatch").forEach((button) => button.addEventListener("click", () => {
-      const selected = button.classList.toggle("active");
-      button.setAttribute("aria-pressed", String(selected));
+    const renderColors = () => {
+      const list = root.querySelector("[data-color-list]");
+      const colors = [...new Set([...root.querySelectorAll("[data-color-choice]")].map((choice) => choice.dataset.colorChoice))];
+      list.innerHTML = colors.length ? colors.map(colorPickerChoice).join("") : '<span class="muted">لم يتم اختيار ألوان بعد.</span>';
       updateColorPicker(root);
-    }));
-    root.querySelector("[data-custom-colors]").addEventListener("input", () => updateColorPicker(root));
+    };
+    root.querySelector("[data-add-color]").addEventListener("click", () => {
+      const color = root.querySelector("[data-color-input]").value.toUpperCase();
+      const selectedColors = [...root.querySelectorAll("[data-color-choice]")].map((choice) => choice.dataset.colorChoice);
+      if (!selectedColors.includes(color)) {
+        const list = root.querySelector("[data-color-list]");
+        list.querySelector(".muted")?.remove();
+        list.insertAdjacentHTML("beforeend", colorPickerChoice(color));
+      }
+      renderColors();
+    });
+    root.addEventListener("click", (event) => {
+      const removeButton = event.target.closest("[data-remove-color]");
+      if (!removeButton) return;
+      removeButton.closest("[data-color-choice]").remove();
+      renderColors();
+    });
     updateColorPicker(root);
+  });
+  form.querySelectorAll("[data-color-ply-picker]").forEach((picker) => {
+    const update = () => updateCuttingCalculation(picker.closest("form"));
+    picker.addEventListener("input", (event) => {
+      if (event.target.matches("[data-ply-color], [data-ply-count]")) update();
+    });
+    picker.addEventListener("click", (event) => {
+      if (event.target.closest("[data-add-ply-color]")) {
+        picker.querySelector("[data-color-ply-rows]").insertAdjacentHTML("beforeend", cuttingColorPlyRow("#000000", ""));
+        update();
+      }
+      if (event.target.closest("[data-remove-ply-color]")) {
+        const rows = picker.querySelectorAll("[data-color-ply-row]");
+        if (rows.length === 1) {
+          const row = rows[0];
+          row.querySelector("[data-ply-color]").value = "#000000";
+          row.querySelector("[data-ply-count]").value = "";
+        } else {
+          event.target.closest("[data-color-ply-row]").remove();
+        }
+        update();
+      }
+    });
+    update();
   });
   form.addEventListener("reset", () => window.setTimeout(() => {
     if (form.elements.editIndex.value) return;
@@ -539,19 +675,23 @@ function bindPickers(form) {
       root.querySelectorAll("[data-size-toggle]").forEach((button) => {
         button.setAttribute("aria-pressed", "false");
         button.closest(".size-choice").classList.remove("active");
-        button.nextElementSibling.hidden = true;
-        const input = button.nextElementSibling.querySelector("input");
-        input.disabled = true;
-        input.value = "";
+        const countLabel = button.nextElementSibling;
+        if (countLabel?.matches(".size-count-label")) {
+          countLabel.hidden = true;
+          const input = countLabel.querySelector("input");
+          input.disabled = true;
+          input.value = "";
+        }
       });
       updateSizePicker(root);
     });
     form.querySelectorAll("[data-color-picker]").forEach((root) => {
-      root.querySelectorAll(".color-swatch").forEach((button) => {
-        button.classList.remove("active");
-        button.setAttribute("aria-pressed", "false");
-      });
+      root.querySelector("[data-color-list]").innerHTML = '<span class="muted">لم يتم اختيار ألوان بعد.</span>';
       updateColorPicker(root);
+    });
+    form.querySelectorAll("[data-color-ply-picker]").forEach((picker) => {
+      picker.querySelector("[data-color-ply-rows]").innerHTML = cuttingColorPlyRow("#000000", "");
+      updateCuttingCalculation(picker.closest("form"));
     });
   }));
 }
@@ -565,23 +705,21 @@ function setSizePicker(root, value) {
     button.setAttribute("aria-pressed", String(selected));
     button.closest(".size-choice").classList.toggle("active", selected);
     const label = button.nextElementSibling;
-    const input = label.querySelector("input");
-    label.hidden = !selected;
-    input.disabled = !selected;
-    input.value = selected ? data.counts[button.dataset.sizeToggle] : "";
+    if (label?.matches(".size-count-label")) {
+      const input = label.querySelector("input");
+      label.hidden = !selected;
+      input.disabled = !selected;
+      input.value = selected ? data.counts[button.dataset.sizeToggle] : "";
+    }
   });
   updateSizePicker(root);
 }
 
 function setColorPicker(root, value) {
   const colors = String(value || "").split(",").map((color) => color.trim()).filter(Boolean);
-  root.querySelectorAll(".color-swatch").forEach((button) => {
-    const selected = colors.includes(button.dataset.colorName);
-    button.classList.toggle("active", selected);
-    button.setAttribute("aria-pressed", String(selected));
-  });
-  root.querySelector("[data-custom-colors]").value = colors
-    .filter((color) => !COLOR_OPTIONS.some(([known]) => known === color)).join(", ");
+  root.querySelector("[data-color-list]").innerHTML = colors.length
+    ? [...new Set(colors)].map(colorPickerChoice).join("")
+    : '<span class="muted">لم يتم اختيار ألوان بعد.</span>';
   updateColorPicker(root);
 }
 
@@ -941,10 +1079,11 @@ function cuttingView(data) {
       <div class="form-section-grid cutting-bed-inputs">
         <label class="field"><span>نوع / قماش الفرشة</span><input name="fabric" value="${escapeHtml(item.fabric === "—" ? "" : item.fabric)}" required></label>
         <label class="field"><span>عدد الأتواب</span><input name="boltCount" type="number" min="1" step="1" value="${item.boltCount || ""}" required></label>
-        <label class="field"><span>عدد الرئات / طوابق الفرش</span><input name="layerCount" type="number" min="1" step="1" value="${item.layerCount || ""}" required></label>
       </div>
-      ${sizePickerMarkup(item.sizes, `cutting-${item.order}`)}
-      ${colorPickerMarkup(item.colors, `cutting-${item.order}`)}
+      ${sizePickerMarkup(item.sizes, `cutting-${item.order}`, false)}
+      ${cuttingColorPlyMarkup(item.colorPlyData, item.colors, item.layerCount, `cutting-${item.order}`)}
+      <p class="cutting-calculated-total">إجمالي الرئات: <strong data-cutting-plys>0</strong> · إجمالي قطع القصة الناتجة: <strong data-cutting-total>${new Intl.NumberFormat("ar-EG").format(item.total)}</strong> قطعة</p>
+      <div class="cutting-breakdown" data-cutting-breakdown></div>
       <label class="field"><span>صورة الموديل (اختياري)</span><input type="file" name="modelImage" accept="image/jpeg,image/png,image/webp"><small>الحد الأقصى 5 ميجابايت.</small></label>
       <label class="field"><span>ملاحظات فنية للفرشة والقص</span><textarea name="technicalNotes" rows="3">${escapeHtml(item.technicalNotes || "")}</textarea></label>
       <div class="form-actions"><button type="submit" class="button button-primary">إنهاء القص</button></div>
@@ -961,22 +1100,26 @@ function cuttingDashboardView(data) {
 }
 
 function cuttingRequestsView(data) {
+  const clientOptions = data.clients.map((client) =>
+    `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)}</option>`
+  ).join("");
   return `${cuttingView(data)}
     ${panel("إرسال قصة جديدة للإدارة", `<form class="cutting-submit-form modal-form" id="cutting-submit-form">
       <section class="form-section"><h3>بيانات الموديل <span>إجباري</span></h3><div class="form-section-grid">
+        <label class="field"><span>العميل</span><select name="customerId" required><option value="">اختر العميل</option>${clientOptions}</select></label>
         <label class="field"><span>اسم الموديل</span><input name="modelName" autocomplete="off"></label>
         <label class="field"><span>رقم الموديل</span><input name="modelNumber" autocomplete="off"></label>
         <label class="field"><span>نوع / قماش الفرشة</span><input name="fabric" required></label>
         <label class="field"><span>عدد الأتواب</span><input name="boltCount" type="number" min="1" step="1" required></label>
-        <label class="field"><span>عدد الرئات / طوابق الفرش</span><input name="layerCount" type="number" min="1" step="1" required></label>
       </div></section>
-      ${sizePickerMarkup("", "new-cutting")}
-      ${colorPickerMarkup("", "new-cutting")}
+      ${sizePickerMarkup("", "new-cutting", false)}
+      ${cuttingColorPlyMarkup(null, "", 0, "new-cutting")}
+      <p class="cutting-calculated-total">إجمالي الرئات: <strong data-cutting-plys>0</strong> · إجمالي قطع القصة الناتجة: <strong data-cutting-total>0</strong> قطعة</p>
+      <div class="cutting-breakdown" data-cutting-breakdown></div>
       <label class="field"><span>صورة الموديل (اختياري)</span><input type="file" name="modelImage" accept="image/jpeg,image/png,image/webp"><small>الحد الأقصى 5 ميجابايت.</small></label>
       <label class="field"><span>ملاحظات فنية للفرشة والقص</span><textarea name="technicalNotes" rows="4"></textarea></label>
-      <p class="form-help">ستُرسل القصة كطلب غير مربوط بعميل لتراجعها الإدارة وتحدد العميل؛ بعد الربط تظهر بياناتها في حسابه.</p>
-      <div class="form-actions"><button type="submit" class="button button-primary">إرسال / تحويل للإدارة</button></div>
-    </form>`, "تُحفظ الكميات الفعلية وبيانات الفرشة، ثم تعيّن الإدارة العميل من شاشة الموديلات والطلبيات.")}`;
+      <div class="form-actions"><button type="submit" class="button button-primary">إرسال القصة للإدارة والعميل</button></div>
+    </form>`, "يرتبط الطلب بالعميل المحدد فور الحفظ، وتظهر بياناته وكمياته للإدارة وفي سجل العميل.")}`;
 }
 
 function cuttingPersonalAccountView(data) {
@@ -1186,19 +1329,19 @@ async function persistFactoryOrder(order, changes = {}) {
 function bindCuttingActions(session) {
   document.querySelectorAll(".cutting-finish-form").forEach((form) => form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const sizePicker = form.querySelector("[data-size-picker]");
-    updateSizePicker(sizePicker);
-    const sizeData = parseSizeData(sizePicker.querySelector("[data-size-value]").value);
-    const total = Object.values(sizeData.counts).reduce((sum, value) => sum + Number(value || 0), 0);
+    const cuttingData = updateCuttingCalculation(form);
+    const { sizeData, total } = cuttingData;
     const boltCount = Number(form.elements.boltCount.value);
-    const layerCount = Number(form.elements.layerCount.value);
     const fabric = String(form.elements.fabric.value).trim();
-    if (!fabric || !Number.isSafeInteger(boltCount) || boltCount < 1 || !Number.isSafeInteger(layerCount) || layerCount < 1) {
-      window.factoryUI.toast("أدخل نوع القماش وعدد الأتواب وعدد الرئات/طوابق الفرش بأعداد صحيحة موجبة.", "error");
+    if (!fabric || !Number.isSafeInteger(boltCount) || boltCount < 1) {
+      window.factoryUI.toast("أدخل نوع القماش وعدد الأتواب كأعداد صحيحة موجبة.", "error");
       return;
     }
-    if (!sizeData.type || !Number.isSafeInteger(total) || total <= 0) {
-      window.factoryUI.toast("اختر نوع المقاسات وأدخل عددًا صحيحًا موجبًا لمقاس واحد على الأقل.", "error");
+    if (!sizeData.type || !sizeData.counts || !Object.keys(sizeData.counts).length || !Number.isSafeInteger(total) || total <= 0
+      || cuttingData.colorPlyData.colors.length === 0
+      || cuttingData.colorPlyData.colors.some((entry) => !Number.isSafeInteger(entry.plys) || entry.plys < 1)
+      || new Set(cuttingData.colorPlyData.colors.map((entry) => entry.color)).size !== cuttingData.colorPlyData.colors.length) {
+      window.factoryUI.toast("حدد مقاسًا واحدًا على الأقل، وأدخل عدد رئات موجبًا لكل لون دون تكرار درجات اللون.", "error");
       return;
     }
     const button = form.querySelector('[type="submit"]');
@@ -1211,11 +1354,10 @@ function bindCuttingActions(session) {
       const { data, error } = await supabaseClient.rpc("finish_factory_cutting", {
         requested_order_id: form.dataset.finishCutting,
         requested_size_data: sizeData,
-        requested_colors: form.querySelector("[data-color-value]").value,
+        requested_color_ply_data: cuttingData.colorPlyData,
         requested_model_image_url: imageUrl,
         requested_fabric: fabric,
         requested_bolt_count: boltCount,
-        requested_layer_count: layerCount,
         requested_technical_notes: String(form.elements.technicalNotes.value).trim()
       });
       if (error?.code === "PGRST202") throw new Error("دالة إنهاء القص غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
@@ -1232,20 +1374,25 @@ function bindCuttingActions(session) {
     event.preventDefault();
     const modelName = String(submitForm.elements.modelName.value).trim();
     const modelNumber = String(submitForm.elements.modelNumber.value).trim();
+    const customerId = submitForm.elements.customerId.value;
     const fabric = String(submitForm.elements.fabric.value).trim();
     const boltCount = Number(submitForm.elements.boltCount.value);
-    const layerCount = Number(submitForm.elements.layerCount.value);
-    const sizePicker = submitForm.querySelector("[data-size-picker]");
-    updateSizePicker(sizePicker);
-    const sizeData = parseSizeData(sizePicker.querySelector("[data-size-value]").value);
-    const total = Object.values(sizeData.counts).reduce((sum, value) => sum + Number(value || 0), 0);
+    const cuttingData = updateCuttingCalculation(submitForm);
+    const { sizeData, total } = cuttingData;
     if (!modelName && !modelNumber) {
       window.factoryUI.toast("أدخل اسم الموديل أو رقمه على الأقل.", "error");
       return;
     }
-    if (!fabric || !Number.isSafeInteger(boltCount) || boltCount < 1 || !Number.isSafeInteger(layerCount) || layerCount < 1
-      || !sizeData.type || !Number.isSafeInteger(total) || total <= 0) {
-      window.factoryUI.toast("أكمل بيانات القماش والأتواب والرئات، واختر نوع المقاس وأدخل كمية صحيحة لمقاس واحد على الأقل.", "error");
+    if (!customerId) {
+      window.factoryUI.toast("اختر العميل الذي ستُسجل القصة على حسابه.", "error");
+      return;
+    }
+    if (!fabric || !Number.isSafeInteger(boltCount) || boltCount < 1
+      || !sizeData.type || !Object.keys(sizeData.counts).length || !Number.isSafeInteger(total) || total <= 0
+      || cuttingData.colorPlyData.colors.length === 0
+      || cuttingData.colorPlyData.colors.some((entry) => !Number.isSafeInteger(entry.plys) || entry.plys < 1)
+      || new Set(cuttingData.colorPlyData.colors.map((entry) => entry.color)).size !== cuttingData.colorPlyData.colors.length) {
+      window.factoryUI.toast("أكمل بيانات القماش والأتواب، وحدد مقاسًا واحدًا على الأقل وأدخل عدد رئات موجبًا لكل لون دون تكرار.", "error");
       return;
     }
     const button = submitForm.querySelector('[type="submit"]');
@@ -1257,20 +1404,20 @@ function bindCuttingActions(session) {
       imageUploaded = Boolean(imageUrl);
       const { data, error } = await supabaseClient.rpc("submit_factory_cutting", {
         requested_order_id: orderId,
+        requested_customer_id: customerId,
         requested_model_name: modelName,
         requested_model_number: modelNumber,
         requested_size_data: sizeData,
-        requested_colors: submitForm.querySelector("[data-color-value]").value,
+        requested_color_ply_data: cuttingData.colorPlyData,
         requested_model_image_url: imageUrl,
         requested_fabric: fabric,
         requested_bolt_count: boltCount,
-        requested_layer_count: layerCount,
         requested_technical_notes: String(submitForm.elements.technicalNotes.value).trim()
       });
       if (error?.code === "PGRST202") throw new Error("دالة إرسال القصة غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
       if (error) throw error;
       await refreshDashboard(session);
-      window.factoryUI.toast(`تم إرسال القصة للإدارة وتسجيل ${new Intl.NumberFormat("ar-EG").format(data)} قطعة.`);
+      window.factoryUI.toast(`تم إرسال القصة وربطها بالعميل وتسجيل ${new Intl.NumberFormat("ar-EG").format(data)} قطعة.`);
     } catch (error) {
       button.disabled = false;
       window.factoryUI.toast(`${imageUploaded ? "رُفعت الصورة لكن لم تُسجل القصة. " : ""}تعذر إرسال القصة: ${error.message}`, "error");

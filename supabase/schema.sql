@@ -412,6 +412,7 @@ create table if not exists public.production_stages (
   fabric text,
   bolt_count integer not null default 0 check (bolt_count >= 0),
   layer_count integer not null default 0 check (layer_count >= 0),
+  color_ply_data jsonb not null default '{}'::jsonb,
   technical_notes text not null default '',
   line_name text,
   target_quantity integer not null default 0 check (target_quantity >= 0),
@@ -426,6 +427,7 @@ alter table public.production_stages
   add column if not exists fabric text,
   add column if not exists bolt_count integer not null default 0,
   add column if not exists layer_count integer not null default 0,
+  add column if not exists color_ply_data jsonb not null default '{}'::jsonb,
   add column if not exists technical_notes text not null default '',
   add column if not exists line_name text,
   add column if not exists target_quantity integer not null default 0,
@@ -1019,17 +1021,128 @@ begin
 end;
 $$;
 
+create or replace function public.calculate_factory_cutting_breakdown(
+  requested_size_data jsonb,
+  requested_color_ply_data jsonb
+)
+returns table (normalized_sizes jsonb, normalized_colors text, total_pieces integer, total_plys integer)
+language plpgsql
+immutable
+set search_path = public
+as $$
+declare
+  size_type text;
+  size_name text;
+  selected_sizes text[] := array[]::text[];
+  selected_colors text[] := array[]::text[];
+  expected_counts jsonb := '{}'::jsonb;
+  color_entry jsonb;
+  raw_plys text;
+  color_name text;
+  color_plys numeric;
+  plys_sum numeric := 0;
+  calculated_total numeric;
+begin
+  if coalesce(jsonb_typeof(requested_color_ply_data), '') <> 'object'
+     or coalesce(jsonb_typeof(requested_color_ply_data -> 'sizes'), '') <> 'array'
+     or coalesce(jsonb_typeof(requested_color_ply_data -> 'colors'), '') <> 'array' then
+    raise exception 'Cutting color, ply, and size selections are required.';
+  end if;
+
+  size_type := requested_color_ply_data ->> 'type';
+  if coalesce(size_type, '') not in ('men', 'women', 'children') then
+    raise exception 'Select a supported size category.';
+  end if;
+
+  for size_name in
+    select jsonb_array_elements_text(requested_color_ply_data -> 'sizes')
+  loop
+    if (size_type in ('men', 'women') and size_name not in ('S', 'M', 'L', 'XL', '2XL', '3XL', '4XL'))
+       or (size_type = 'children' and size_name not in ('2', '4', '6', '8', '10', '12', '14', '16'))
+       or size_name = any(selected_sizes) then
+      raise exception 'The selected size list contains an invalid or duplicate size.';
+    end if;
+    selected_sizes := array_append(selected_sizes, size_name);
+  end loop;
+  if cardinality(selected_sizes) = 0 then
+    raise exception 'Select at least one size.';
+  end if;
+
+  for color_entry in
+    select value from jsonb_array_elements(requested_color_ply_data -> 'colors')
+  loop
+    color_name := upper(trim(coalesce(color_entry ->> 'color', '')));
+    raw_plys := trim(coalesce(color_entry ->> 'plys', ''));
+    if color_name !~ '^#[0-9A-F]{6}$'
+       or raw_plys !~ '^[0-9]+$' then
+      raise exception 'Each color must be a valid HEX value with a positive integer ply count.';
+    end if;
+    color_plys := raw_plys::numeric;
+    if color_plys < 1 or color_plys > 2147483647
+       or color_name = any(selected_colors) then
+      raise exception 'Color ply counts must be positive, within range, and colors must be unique.';
+    end if;
+    plys_sum := plys_sum + color_plys;
+    if plys_sum > 2147483647 then
+      raise exception 'The total number of color plys exceeds the supported quantity.';
+    end if;
+    selected_colors := array_append(selected_colors, color_name);
+  end loop;
+  if cardinality(selected_colors) = 0 then
+    raise exception 'Add at least one color with its ply count.';
+  end if;
+
+  calculated_total := plys_sum * cardinality(selected_sizes);
+  if calculated_total < 1 or calculated_total > 2147483647 then
+    raise exception 'The calculated cutting quantity exceeds the supported range.';
+  end if;
+  foreach size_name in array selected_sizes loop
+    expected_counts := expected_counts || jsonb_build_object(size_name, plys_sum::integer::text);
+  end loop;
+  normalized_sizes := jsonb_build_object('type', size_type, 'counts', expected_counts);
+  if requested_size_data is distinct from normalized_sizes then
+    raise exception 'The supplied size quantities do not match the selected sizes and color ply counts.';
+  end if;
+  normalized_colors := array_to_string(selected_colors, ', ');
+  total_pieces := calculated_total::integer;
+  total_plys := plys_sum::integer;
+  return next;
+end;
+$$;
+
 drop function if exists public.submit_factory_cutting(uuid, text, text, jsonb, text, text, text, integer, integer, text);
+drop function if exists public.submit_factory_cutting(uuid, uuid, text, text, jsonb, text, text, text, integer, integer, text);
+drop function if exists public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, integer, text);
+drop function if exists public.read_factory_cutting_clients();
+create function public.read_factory_cutting_clients()
+returns table (id uuid, name text)
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+begin
+  if not public.has_active_factory_role(array['cutting']) then
+    raise exception 'Only active cutting supervisors can read the client list.';
+  end if;
+
+  return query
+    select customer.id, customer.name
+    from public.factory_clients as customer
+    order by customer.name;
+end;
+$$;
+
 create function public.submit_factory_cutting(
   requested_order_id uuid,
+  requested_customer_id uuid,
   requested_model_name text,
   requested_model_number text,
   requested_size_data jsonb,
-  requested_colors text,
+  requested_color_ply_data jsonb,
   requested_model_image_url text,
   requested_fabric text,
   requested_bolt_count integer,
-  requested_layer_count integer,
   requested_technical_notes text
 )
 returns integer
@@ -1038,91 +1151,84 @@ security definer
 set search_path = public
 as $$
 declare
-  size_type text;
-  size_counts jsonb;
-  cut_total numeric;
+  matched_customer public.factory_clients%rowtype;
+  normalized_sizes jsonb;
+  normalized_colors text;
+  cut_total integer;
+  total_plys integer;
 begin
   if not public.has_active_factory_role(array['cutting']) then
     raise exception 'Only active cutting supervisors can submit new cutting orders.';
   end if;
   if requested_order_id is null
+     or requested_customer_id is null
      or (length(trim(coalesce(requested_model_name, ''))) = 0
          and length(trim(coalesce(requested_model_number, ''))) = 0)
      or requested_size_data is null
      or coalesce(jsonb_typeof(requested_size_data), '') <> 'object'
      or length(trim(coalesce(requested_fabric, ''))) = 0
-     or requested_bolt_count is null or requested_bolt_count < 1
-     or requested_layer_count is null or requested_layer_count < 1 then
-    raise exception 'A valid model, size breakdown, fabric, bolt count, and layer count are required.';
+     or requested_bolt_count is null or requested_bolt_count < 1 then
+    raise exception 'A valid model, size and color ply selections, fabric, and bolt count are required.';
   end if;
 
-  size_type := requested_size_data ->> 'type';
-  size_counts := requested_size_data -> 'counts';
-  if coalesce(size_type, '') not in ('men', 'women', 'children')
-     or coalesce(jsonb_typeof(size_counts), '') <> 'object' then
-    raise exception 'Select a supported size category and at least one size.';
+  select *
+    into matched_customer
+  from public.factory_clients
+  where id = requested_customer_id
+  for key share;
+  if not found then
+    raise exception 'The selected factory customer does not exist.';
   end if;
-  if exists (
-    select 1
-    from jsonb_each_text(size_counts) as size_entry(size_name, quantity_text)
-    where quantity_text is null
-       or quantity_text !~ '^[0-9]+$'
-       or (case when quantity_text ~ '^[0-9]+$' then quantity_text::numeric else 0 end) > 2147483647
-       or (size_type in ('men', 'women') and size_name not in ('S', 'M', 'L', 'XL', '2XL', '3XL', '4XL'))
-       or (size_type = 'children' and size_name not in ('2', '4', '6', '8', '10', '12', '14', '16'))
-  ) then
-    raise exception 'The size breakdown contains an invalid size or quantity.';
-  end if;
-  select coalesce(sum(value::numeric), 0)
-    into cut_total
-  from jsonb_each_text(size_counts);
-  if cut_total <= 0 or cut_total > 2147483647 then
-    raise exception 'Enter a positive cut quantity for at least one size.';
-  end if;
+
+  select breakdown.normalized_sizes, breakdown.normalized_colors,
+         breakdown.total_pieces, breakdown.total_plys
+    into normalized_sizes, normalized_colors, cut_total, total_plys
+  from public.calculate_factory_cutting_breakdown(requested_size_data, requested_color_ply_data) as breakdown;
 
   insert into public.orders (
     id, client_id, customer_id, model_name, model_number, colors, sizes,
     total_pieces, status, model_image_url
   )
   values (
-    requested_order_id, null, null,
+    requested_order_id, matched_customer.user_id, matched_customer.id,
     coalesce(nullif(trim(coalesce(requested_model_name, '')), ''),
              nullif(trim(coalesce(requested_model_number, '')), '')),
     coalesce(trim(requested_model_number), ''),
-    coalesce(trim(requested_colors), ''),
-    requested_size_data::text,
-    cut_total::integer,
+    normalized_colors,
+    normalized_sizes::text,
+    cut_total,
     'في الخط',
     nullif(trim(coalesce(requested_model_image_url, '')), '')
   );
 
   update public.production_stages
-  set target_quantity = cut_total::integer,
-      completed_quantity = cut_total::integer,
+  set target_quantity = cut_total,
+      completed_quantity = cut_total,
       fabric = trim(requested_fabric),
       bolt_count = requested_bolt_count,
-      layer_count = requested_layer_count,
+      layer_count = total_plys,
+      color_ply_data = requested_color_ply_data,
       technical_notes = coalesce(trim(requested_technical_notes), ''),
       status = 'مكتمل',
       updated_at = now()
   where order_id = requested_order_id
     and stage_name = 'cutting';
 
-  return cut_total::integer;
+  return cut_total;
 end;
 $$;
 
 drop function if exists public.finish_factory_cutting(uuid, jsonb, text, text);
 drop function if exists public.finish_factory_cutting(uuid, jsonb, text, text, text, integer, integer);
 drop function if exists public.finish_factory_cutting(uuid, jsonb, text, text, text, integer, integer, text);
+drop function if exists public.finish_factory_cutting(uuid, jsonb, jsonb, text, text, integer, text);
 create function public.finish_factory_cutting(
   requested_order_id uuid,
   requested_size_data jsonb,
-  requested_colors text,
+  requested_color_ply_data jsonb,
   requested_model_image_url text,
   requested_fabric text,
   requested_bolt_count integer,
-  requested_layer_count integer,
   requested_technical_notes text
 )
 returns integer
@@ -1132,9 +1238,10 @@ set search_path = public
 as $$
 declare
   current_order public.orders%rowtype;
-  size_counts jsonb;
-  cut_total numeric;
-  size_type text;
+  normalized_sizes jsonb;
+  normalized_colors text;
+  cut_total integer;
+  total_plys integer;
 begin
   if not public.has_active_factory_role(array['cutting']) then
     raise exception 'Only active cutting supervisors can finish cutting.';
@@ -1142,34 +1249,14 @@ begin
   if requested_order_id is null or requested_size_data is null
      or coalesce(jsonb_typeof(requested_size_data), '') <> 'object'
      or length(trim(coalesce(requested_fabric, ''))) = 0
-     or requested_bolt_count is null or requested_bolt_count < 1
-     or requested_layer_count is null or requested_layer_count < 1 then
-    raise exception 'A valid order, size breakdown, fabric, bolt count, and layer count are required.';
+     or requested_bolt_count is null or requested_bolt_count < 1 then
+    raise exception 'A valid order, size and color ply selections, fabric, and bolt count are required.';
   end if;
 
-  size_type := requested_size_data ->> 'type';
-  size_counts := requested_size_data -> 'counts';
-  if coalesce(size_type, '') not in ('men', 'women', 'children')
-     or coalesce(jsonb_typeof(size_counts), '') <> 'object' then
-    raise exception 'Select a supported size category and at least one size.';
-  end if;
-  if exists (
-    select 1
-    from jsonb_each_text(size_counts) as size_entry(size_name, quantity_text)
-    where quantity_text is null
-       or quantity_text !~ '^[0-9]+$'
-       or (case when quantity_text ~ '^[0-9]+$' then quantity_text::numeric else 0 end) > 2147483647
-       or (size_type in ('men', 'women') and size_name not in ('S', 'M', 'L', 'XL', '2XL', '3XL', '4XL'))
-       or (size_type = 'children' and size_name not in ('2', '4', '6', '8', '10', '12', '14', '16'))
-  ) then
-    raise exception 'The size breakdown contains an invalid size or quantity.';
-  end if;
-  select coalesce(sum(value::numeric), 0)
-    into cut_total
-  from jsonb_each_text(size_counts);
-  if cut_total <= 0 or cut_total > 2147483647 then
-    raise exception 'Enter a positive cut quantity for at least one size.';
-  end if;
+  select breakdown.normalized_sizes, breakdown.normalized_colors,
+         breakdown.total_pieces, breakdown.total_plys
+    into normalized_sizes, normalized_colors, cut_total, total_plys
+  from public.calculate_factory_cutting_breakdown(requested_size_data, requested_color_ply_data) as breakdown;
 
   select *
     into current_order
@@ -1181,10 +1268,10 @@ begin
   end if;
 
   update public.orders
-  set sizes = requested_size_data::text,
-      colors = coalesce(trim(requested_colors), ''),
+  set sizes = normalized_sizes::text,
+      colors = normalized_colors,
       model_image_url = coalesce(nullif(trim(requested_model_image_url), ''), model_image_url),
-      total_pieces = cut_total::integer,
+      total_pieces = cut_total,
       status = 'في الخط'
   where id = requested_order_id;
 
@@ -1193,14 +1280,15 @@ begin
       completed_quantity = cut_total,
       fabric = trim(requested_fabric),
       bolt_count = requested_bolt_count,
-      layer_count = requested_layer_count,
+      layer_count = total_plys,
+      color_ply_data = requested_color_ply_data,
       technical_notes = coalesce(trim(requested_technical_notes), ''),
       status = 'مكتمل',
       updated_at = now()
   where order_id = requested_order_id
     and stage_name = 'cutting';
 
-  return cut_total::integer;
+  return cut_total;
 end;
 $$;
 
@@ -1548,14 +1636,17 @@ revoke all on function public.read_factory_orders_admin() from public, anon, aut
 grant execute on function public.read_factory_orders_admin() to authenticated;
 revoke all on function public.read_factory_orders_client() from public, anon, authenticated;
 grant execute on function public.read_factory_orders_client() to authenticated;
+revoke all on function public.read_factory_cutting_clients() from public, anon, authenticated;
+grant execute on function public.read_factory_cutting_clients() to authenticated;
 revoke all on function public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text) from public, anon, authenticated;
 grant execute on function public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text) to authenticated;
 revoke all on function public.record_factory_delivery(uuid, integer, text) from public, anon, authenticated;
 grant execute on function public.record_factory_delivery(uuid, integer, text) to authenticated;
-revoke all on function public.submit_factory_cutting(uuid, text, text, jsonb, text, text, text, integer, integer, text) from public, anon, authenticated;
-grant execute on function public.submit_factory_cutting(uuid, text, text, jsonb, text, text, text, integer, integer, text) to authenticated;
-revoke all on function public.finish_factory_cutting(uuid, jsonb, text, text, text, integer, integer, text) from public, anon, authenticated;
-grant execute on function public.finish_factory_cutting(uuid, jsonb, text, text, text, integer, integer, text) to authenticated;
+revoke all on function public.calculate_factory_cutting_breakdown(jsonb, jsonb) from public, anon, authenticated;
+revoke all on function public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, integer, text) from public, anon, authenticated;
+grant execute on function public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, integer, text) to authenticated;
+revoke all on function public.finish_factory_cutting(uuid, jsonb, jsonb, text, text, integer, text) from public, anon, authenticated;
+grant execute on function public.finish_factory_cutting(uuid, jsonb, jsonb, text, text, integer, text) to authenticated;
 revoke all on function public.delete_factory_order(uuid) from public, anon, authenticated;
 grant execute on function public.delete_factory_order(uuid) to authenticated;
 revoke all on function public.save_factory_payment(uuid, uuid, numeric, date, text, text, text) from public, anon, authenticated;
