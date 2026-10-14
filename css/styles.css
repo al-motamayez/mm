@@ -9,9 +9,10 @@
   --green: #1c594d;
   --green-dark: #153c35;
   --green-pale: #e9f2ee;
-  --muted: #788680;
-  --line: #e7ece8;
+  --muted: #4f6058;
+  --line: #d8e0da;
   --white: #fff;
+  font-size: 16px;
 }
 
 * { box-sizing: border-box; }
@@ -49,6 +50,8 @@ input:focus, select:focus { border-color: #5e9b83; box-shadow: 0 0 0 3px #5e9b83
 .button { display: inline-flex; min-height: 42px; align-items: center; justify-content: center; gap: 8px; padding: 9px 16px; border: 0; border-radius: 9px; font-weight: 600; }
 .button-primary { color: #fff; background: var(--green); }
 .button-primary:hover { background: #174a40; }
+.button-secondary { border: 1px solid #b7c9be; color: #173d34; background: #eef5f0; }
+.button-secondary:hover { border-color: #719b83; background: #e4efe8; }
 .button-full { width: 100%; min-height: 48px; }
 .auth-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin: 0 0 20px; padding: 4px; border-radius: 10px; background: #f0f4f1; }
 .auth-tab { min-height: 38px; border: 0; border-radius: 8px; color: #69766f; background: transparent; font-size: 13px; }
@@ -131,13 +134,20 @@ td { padding: 13px 16px; border-top: 1px solid #f0f2ef; color: #44514b; font-siz
 .client-form .client-notes-field, .client-form .form-actions { grid-column: 1 / -1; }
 .client-form textarea { width: 100%; min-height: 92px; resize: vertical; padding: 12px 14px; border: 1px solid #dfe6e1; border-radius: 9px; color: #21342f; font: inherit; }
 .client-form textarea:focus { border-color: #5e9b83; outline: none; box-shadow: 0 0 0 3px #5e9b831c; }
-.client-account-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; padding: 18px; }
-.client-account-card { min-width: 0; padding: 17px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
+.client-account-grid { display: grid; width: 100%; grid-template-columns: repeat(auto-fit, minmax(min(100%, 390px), 1fr)); align-items: stretch; gap: 16px; padding: 18px; }
+.client-account-card { display: flex; min-width: 0; height: 100%; flex-direction: column; padding: 20px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
 .client-account-card > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .client-account-card h3 { margin: 0; color: var(--green-dark); font-size: 15px; }
 .client-account-card header p { margin: 5px 0 0; color: var(--muted); font-size: 11px; }
 .client-card-actions { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 12px; }
+.client-activity-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; margin-top: 10px; }
+.client-activity-grid div { min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: #f8faf8; }
+.client-activity-grid span, .client-activity-grid strong { display: block; }
+.client-activity-grid span { color: #4f6058; font-size: 12px; line-height: 1.5; }
+.client-activity-grid strong { margin-top: 6px; color: var(--green-dark); font-size: 20px; }
 .client-detail-toolbar { margin-bottom: 18px; }
+.client-detail-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.client-detail-section, .client-detail-section > .panel { width: 100%; }
 .client-finance-summary { margin-bottom: 20px; }
 .client-detail-section { min-width: 0; margin-top: 22px; }
 .client-detail-section > .order-cards { padding: 12px 0; }
@@ -152,6 +162,8 @@ td { padding: 13px 16px; border-top: 1px solid #f0f2ef; color: #44514b; font-siz
 .settlement-card strong { color: var(--green-dark); font-size: 13px; }
 .settlement-card small, .settlement-card span { color: var(--muted); font-size: 11px; }
 .client-history-card { height: 100%; }
+.financial-debit { color: #8b3028; font-weight: 700; }
+.financial-credit { color: #17613f; font-weight: 700; }
 .client-balance-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 17px 0 12px; }
 .client-balance-grid div { min-width: 0; padding: 10px; border-radius: 9px; background: #f5f8f5; }
 .client-balance-grid span, .client-balance-grid strong { display: block; }
@@ -227,6 +239,42 @@ td { padding: 13px 16px; border-top: 1px solid #f0f2ef; color: #44514b; font-siz
 .confirm-cancel { border: 1px solid #e0e7e2; color: #52615a; background: #fff; }
 .confirm-danger { color: #fff; background: #ad4139; }
 .confirm-danger:hover { background: #92362f; }
+
+.app-shell { font-size: 16px; color: #1b2c27; }
+.main-content { width: 100%; max-width: none; flex: 1 1 0; }
+.topbar-title h1, .topbar h1 { font-size: clamp(25px, 3vw, 32px); }
+.topbar-title p, .topbar p { color: #4f6058; font-size: 15px; line-height: 1.7; }
+.nav-link, .logout-button { color: #43544c; font-size: 15px; }
+.side-label, .profile-details span, .date-label { color: #53635b; font-size: 13px; }
+.profile-details strong { font-size: 14px; }
+.stat-card span { color: #46574f; font-size: 14px; }
+.stat-card strong { font-size: 28px; }
+.stat-card small { color: #53635b; font-size: 13px; }
+.panel-heading h2 { font-size: 18px; }
+.panel-heading p { color: #53635b; font-size: 14px; }
+th { color: #34483f; font-size: 14px; font-weight: 700; }
+td { color: #273a32; font-size: 14px; }
+.status { font-size: 13px; font-weight: 600; }
+.form-stack label, .form-grid label, .modal-form label { color: #34483f; font-size: 15px; }
+input, select, .modal-form textarea { color: #1d3028; font-size: 16px; }
+.field-hint, .notice, .modal-card > p, .clients-toolbar p, .section-heading p { color: #4f6058; font-size: 14px; }
+.client-account-card h3 { font-size: 20px; }
+.client-account-card header p { color: #46574f; font-size: 14px; }
+.client-balance-grid span { color: #46574f; font-size: 13px; }
+.client-balance-grid strong { font-size: 16px; }
+.client-notes-preview { color: #46574f; font-size: 14px; }
+.client-activity-grid span { font-size: 13px; }
+.client-card-actions .button, .client-detail-actions .button { min-height: 46px; font-size: 15px; }
+.row-action { color: #34483f; font-size: 13px; }
+.order-card-heading h3 { font-size: 20px; }
+.order-card-label, .order-card-details dt { color: #4f6058; font-size: 13px; }
+.order-card-details dd { color: #263930; font-size: 15px; }
+.order-progress-step { color: #53635b; font-size: 13px; }
+.form-section-grid .field small, .order-modal-card .form-section-grid .field small { color: #4f6058; font-size: 13px; }
+.empty-state { color: #4f6058; font-size: 15px; }
+.section-heading h2 { font-size: 20px; }
+.settlement-card small, .settlement-card span { color: #4f6058; font-size: 13px; }
+.settlement-card strong { font-size: 15px; }
 @keyframes toast-in { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
 
 @media (max-width: 900px) {
@@ -282,7 +330,9 @@ td { padding: 13px 16px; border-top: 1px solid #f0f2ef; color: #44514b; font-siz
   .client-form { grid-template-columns: minmax(0, 1fr); }
   .client-form .client-notes-field, .client-form .form-actions { grid-column: auto; }
   .client-account-grid { grid-template-columns: minmax(0, 1fr); padding: 12px; }
-  .client-balance-grid { grid-template-columns: 1fr; }
+  .client-balance-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  .client-balance-grid div { padding: 8px; }
+  .client-activity-grid { grid-template-columns: 1fr; }
   .clients-toolbar { align-items: flex-start; flex-direction: column; }
   .clients-toolbar .button { width: 100%; min-height: 46px; }
   .section-heading { align-items: stretch; flex-direction: column; }
@@ -297,6 +347,8 @@ td { padding: 13px 16px; border-top: 1px solid #f0f2ef; color: #44514b; font-siz
   .header-brand .brand-copy strong { font-size: 12px; }
   .header-brand .brand-copy span { font-size: 10px; }
   .date-label { display: none; }
+  .client-detail-actions { width: 100%; }
+  .client-detail-actions > * { flex: 1 1 100%; }
 }
 
 @media (min-width: 651px) and (max-width: 800px) {

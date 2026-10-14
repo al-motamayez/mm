@@ -118,14 +118,17 @@ async function saveFlexibleRecord(collection, payload, recordId = null, ownerId 
 
 async function readDashboardData(session) {
   const data = emptyDashboardData();
+  const deliveriesPromise = session.role === "admin"
+    ? supabaseClient.from("factory_deliveries")
+      .select("id, order_id, customer_id, quantity, price_per_piece, amount, delivered_at, legacy_import")
+      .order("delivered_at", { ascending: false })
+    : Promise.resolve({ data: [], error: null });
   const [payments, leaves, tasks, settlements, deliveriesResult] = await Promise.all([
     readFlexibleRecords("payments"),
     readFlexibleRecords("leaves"),
     readFlexibleRecords("tasks"),
     readFlexibleRecords("settlements"),
-    supabaseClient.from("factory_deliveries")
-      .select("id, order_id, customer_id, quantity, price_per_piece, amount, delivered_at, legacy_import")
-      .order("delivered_at", { ascending: false })
+    deliveriesPromise
   ]);
   if (["42P01", "PGRST205"].includes(deliveriesResult.error?.code)) {
     throw new Error("سجل التسليمات غير موجود في قاعدة البيانات. شغّل supabase/schema.sql كاملًا في SQL Editor.");
@@ -517,11 +520,17 @@ function clientAccountCards(data) {
   return `<div class="client-account-grid">${clients.map((client) => {
     const summary = clientAccountSummary(client, data);
     const linkedUser = data.users.find((user) => user.id === client.user_id);
+    const inProductionCount = summary.orders.filter((order) =>
+      ["تحت الإنشاء", "في الخط", "تحت التصنيع", "قيد الإنتاج"].includes(order.status)
+    ).length;
+    const unpricedCount = summary.orders.filter((order) => order.pricePerPiece <= 0).length;
+    const uncountedCount = summary.orders.filter((order) => order.quantity <= 0).length;
     return `<article class="client-account-card">
       <header><div><h3>${escapeHtml(client.name)}</h3><p>${escapeHtml(client.phone || "بدون هاتف")}${linkedUser ? ` · ${escapeHtml(linkedUser.username)}` : " · ملف عميل بلا حساب دخول"}</p></div>${statusTag(linkedUser?.status === "suspended" ? "متوقف" : "نشط")}</header>
       <div class="client-balance-grid"><div><span>إجمالي المطلوب</span><strong>${money(summary.due)}</strong></div><div><span>المدفوع</span><strong>${money(summary.paid)}</strong></div><div><span>الرصيد المتبقي</span><strong>${money(summary.balance)}</strong></div></div>
+      <div class="client-activity-grid"><div><span>تحت الإنشاء / التصنيع</span><strong>${inProductionCount}</strong></div><div><span>لم يُحدد سعرها</span><strong>${unpricedCount}</strong></div><div><span>لم يُحدد عددها</span><strong>${uncountedCount}</strong></div></div>
       <p class="client-notes-preview">${escapeHtml(client.notes || "لا توجد ملاحظات مسجلة.")}</p>
-      <div class="client-card-actions"><button class="button button-primary" type="button" data-open-client-details="${escapeHtml(client.id)}">التفاصيل</button><button class="row-action" type="button" data-edit-customer="${escapeHtml(client.id)}">تعديل بيانات العميل</button></div>
+      <div class="client-card-actions"><button class="button button-primary" type="button" data-open-client-details="${escapeHtml(client.id)}">التفاصيل</button><button class="button button-secondary" type="button" data-quick-client-payment="${escapeHtml(client.id)}">＋ إضافة دفعة مالية</button><button class="row-action" type="button" data-edit-customer="${escapeHtml(client.id)}">تعديل بيانات العميل</button></div>
     </article>`;
   }).join("")}</div>`;
 }
@@ -532,24 +541,50 @@ function clientDetailsView(client, data) {
   const unpricedOrders = summary.orders.filter((order) => order.pricePerPiece <= 0);
   const archivedOrders = summary.archivedOrders;
   const deliveries = data.deliveries.filter((delivery) => delivery.customer_id === client.id);
+  const payments = data.payments.filter((payment) => payment.customerId === client.id);
+  const financialEntries = [
+    ...deliveries.map((delivery) => {
+      const order = data.models.find((item) => item.id === delivery.order_id);
+      return {
+        type: "تسليم بضاعة",
+        reference: order?.name || "طلب مؤرشف",
+        detail: `${new Intl.NumberFormat("ar-EG").format(delivery.quantity)} قطعة × ${money(delivery.price_per_piece)}`,
+        amount: Number(delivery.amount),
+        date: delivery.delivered_at
+      };
+    }),
+    ...payments.map((payment) => ({
+      type: "دفعة مالية",
+      reference: payment.reference || "—",
+      detail: `${payment.method || "—"}${payment.notes ? ` · ${payment.notes}` : ""}`,
+      amount: -Number(payment.amount || 0),
+      date: payment._createdAt || payment.created_at || payment.date
+    })),
+    ...summary.settlements.map((entry) => ({
+      type: "تصفية وترحيل رصيد",
+      reference: "رصيد سابق مرحّل",
+      detail: `افتتاحي ${money(entry.openingBalance)} · ختامي ${money(entry.balance)}`,
+      amount: Number(entry.balance),
+      date: entry.date || entry._createdAt
+    }))
+  ].sort((left, right) => new Date(right.date).getTime() - new Date(left.date).getTime());
   const orderCard = (order, archived = false) => `<article class="order-card client-history-card">
     <header class="order-card-heading"><div><p class="order-card-label">${archived ? "طلب مؤرشف" : "طلب حالي"}${order.modelNumber ? ` · رقم ${escapeHtml(order.modelNumber)}` : ""}</p><h3>${escapeHtml(order.name || "موديل بدون اسم")}</h3></div>${statusTag(order.status)}</header>
     <dl class="order-card-details">
       <div><dt>العدد الإجمالي بعد القص</dt><dd>${order.quantity ? `${new Intl.NumberFormat("ar-EG").format(order.quantity)} قطعة` : "بانتظار الحصر"}</dd></div>
       <div><dt>المستلم</dt><dd>${new Intl.NumberFormat("ar-EG").format(order.deliveredPieces)} قطعة</dd></div>
       <div><dt>المتبقي</dt><dd>${order.quantity ? `${new Intl.NumberFormat("ar-EG").format(order.remainingPieces)} قطعة` : "بانتظار الحصر"}</dd></div>
+      <div><dt>الألوان</dt><dd>${escapeHtml(order.colors || "—")}</dd></div>
+      <div><dt>المقاسات</dt><dd>${escapeHtml(order.sizes || "—")}</dd></div>
       ${order.pricePerPiece > 0 ? `<div><dt>سعر القطعة</dt><dd>${money(order.pricePerPiece)}</dd></div><div><dt>إجمالي قيمة المسلّم</dt><dd>${money(order.totalAmount)}</dd></div>` : '<div><dt>التسعير</dt><dd>لم يُسعّر بعد</dd></div>'}
       ${archived ? `<div><dt>تاريخ الأرشفة</dt><dd>${escapeHtml(new Intl.DateTimeFormat("ar-EG", { dateStyle: "medium" }).format(new Date(order.archivedAt)))}</dd></div>` : ""}
     </dl>
   </article>`;
-  return `<div class="clients-toolbar client-detail-toolbar"><div><h2>${escapeHtml(client.name)} · تفاصيل الحساب</h2><p>${escapeHtml(client.phone || "لا يوجد رقم هاتف")}</p></div><button class="row-action" type="button" data-return-clients>العودة إلى العملاء</button></div>
+  return `<div class="clients-toolbar client-detail-toolbar"><div><h2>${escapeHtml(client.name)} · تفاصيل الحساب</h2><p>${escapeHtml(client.phone || "لا يوجد رقم هاتف")}${client.notes ? ` · ${escapeHtml(client.notes)}` : ""}</p></div><div class="client-detail-actions"><button class="button button-primary" type="button" data-quick-client-payment="${escapeHtml(client.id)}">＋ إضافة دفعة مالية</button><button class="row-action" type="button" data-return-clients>العودة إلى العملاء</button></div></div>
     <div class="stats-grid client-finance-summary">${summary.latestSettlement ? stat("رصيد سابق مرحّل", money(summary.openingBalance), "افتتاح الفترة الحالية") : ""}${stat("إجمالي المطلوب", money(summary.due), "يشمل الرصيد السابق المرحّل")}${stat("المدفوع", money(summary.paid))}${stat("الرصيد المتبقي", money(summary.balance), summary.balance < 0 ? "رصيد دائن للعميل" : "مستحق على العميل")}</div>
     <section class="client-detail-section"><header class="section-heading"><div><h2>الموديلات التي تم تسعيرها</h2><p>يُحتسب المطلوب المالي على الكمية التي تم تسليمها.</p></div></header>${pricedOrders.length ? `<div class="order-cards">${pricedOrders.map((order) => orderCard(order)).join("")}</div>` : '<div class="empty-state">لا توجد موديلات مسعّرة في الفترة الحالية.</div>'}</section>
     <section class="client-detail-section"><header class="section-heading"><div><h2>موديلات لم تُسعّر بعد</h2><p>طلبات في القص أو الانتظار أو مراحل التشغيل الأخرى.</p></div></header>${unpricedOrders.length ? `<div class="order-cards">${unpricedOrders.map((order) => orderCard(order)).join("")}</div>` : '<div class="empty-state">لا توجد موديلات بانتظار التسعير.</div>'}</section>
-    <section class="client-detail-section">${panel("سجل التسليمات", table(["الموديل","الكمية","سعر القطعة وقت التسليم","قيمة التسليم","التاريخ"], deliveries.map((delivery) => {
-      const order = data.models.find((item) => item.id === delivery.order_id);
-      return `<tr><td>${escapeHtml(order?.name || "طلب مؤرشف")}</td><td>${new Intl.NumberFormat("ar-EG").format(delivery.quantity)}</td><td>${money(delivery.price_per_piece)}</td><td>${money(delivery.amount)}</td><td>${escapeHtml(new Intl.DateTimeFormat("ar-EG", { dateStyle: "medium" }).format(new Date(delivery.delivered_at)))}</td></tr>`;
-    })))}</section>
+    <section class="client-detail-section">${panel("السجل المالي الكامل للدفعات والتسليمات", financialEntries.length ? table(["النوع","الموديل / المرجع","التفاصيل","الأثر المالي","التاريخ"], financialEntries.map((entry) => `<tr><td>${escapeHtml(entry.type)}</td><td>${escapeHtml(entry.reference)}</td><td>${escapeHtml(entry.detail)}</td><td class="${entry.amount < 0 ? "financial-credit" : "financial-debit"}">${money(entry.amount)}</td><td>${escapeHtml(new Intl.DateTimeFormat("ar-EG", { dateStyle: "medium" }).format(new Date(entry.date)))}</td></tr>`)) : '<div class="empty-state">لا توجد حركات مالية مسجلة لهذا العميل حتى الآن.</div>')}</section>
     <section class="client-detail-section"><header class="section-heading"><div><h2>الفترات المالية السابقة</h2><p>الأوامر والتسليمات محفوظة في الأرشيف ولا تُحذف عند التصفية.</p></div><button class="button button-primary" type="button" data-settle-client="${escapeHtml(client.id)}">تصفية الحساب وترحيل الرصيد</button></header>
       ${summary.settlements.length ? `<div class="settlement-history">${summary.settlements.map((entry) => `<article class="settlement-card"><div><strong>رصيد سابق مرحّل</strong><small>${escapeHtml(entry.date || entry._createdAt)}</small></div><div><span>رصيد افتتاحي</span><strong>${money(entry.openingBalance)}</strong></div><div><span>قيمة التسليمات</span><strong>${money(entry.deliveredTotal)}</strong></div><div><span>المدفوع</span><strong>${money(Number(entry.orderPaidTotal || 0) + Number(entry.paymentsTotal || 0))}</strong></div><div><span>رصيد الفترة الختامي</span><strong>${money(entry.balance)}</strong></div></article>`).join("")}</div>` : '<div class="empty-state">لم تتم تصفية حساب العميل سابقًا.</div>'}
       ${archivedOrders.length ? `<h3 class="history-subheading">الموديلات والطلبات المؤرشفة</h3><div class="order-cards">${archivedOrders.map((order) => orderCard(order, true)).join("")}</div>` : ""}
@@ -795,6 +830,9 @@ async function persistFactoryOrder(order, changes = {}) {
 }
 
 function bindClientDetailActions(session) {
+  document.querySelectorAll("#client-details [data-quick-client-payment]").forEach((button) => {
+    button.addEventListener("click", () => openClientPayment(button.dataset.quickClientPayment));
+  });
   document.querySelectorAll("[data-return-clients]").forEach((button) => button.addEventListener("click", () => {
     selectedClientId = "";
     activateDashboardView("clients");
@@ -839,6 +877,24 @@ function bindClientDetailActions(session) {
   }));
 }
 
+function openClientPayment(clientId) {
+  const client = dashboardData.clients.find((entry) => entry.id === clientId);
+  if (!client) {
+    window.factoryUI.toast("تعذر العثور على ملف العميل.", "error");
+    return;
+  }
+  const form = document.querySelector("#payment-form");
+  form.reset();
+  form.elements.editIndex.value = "";
+  form.elements.customerId.value = client.id;
+  form.elements.date.value = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  form.querySelector('[type="submit"]').textContent = "تسجيل الدفعة";
+  form.querySelector("[data-cancel-edit]").hidden = true;
+  activateDashboardView("finance");
+  form.scrollIntoView({ behavior: "smooth", block: "center" });
+  form.elements.amount.focus({ preventScroll: true });
+}
+
 function bindActions(session) {
   document.querySelector("#logout").addEventListener("click", async () => {
     const { error } = await supabaseClient.auth.signOut();
@@ -850,6 +906,9 @@ function bindActions(session) {
   });
 
   if (session.role !== "admin") return;
+  document.querySelectorAll("#clients [data-quick-client-payment]").forEach((button) => {
+    button.addEventListener("click", () => openClientPayment(button.dataset.quickClientPayment));
+  });
   const editConfigs = {
     models: { form: "model-form", collection: "models", fields: ["customerId", "name", "modelNumber", "colors", "sizes", "quantity", "pricePerPiece", "paidAmount", "status"] },
     payments: { form: "payment-form", collection: "payments", fields: ["customerId", "amount", "date", "method", "reference", "notes"] }

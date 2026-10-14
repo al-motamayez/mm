@@ -1071,7 +1071,7 @@ declare
   order_paid_total numeric(14, 2) := 0;
   payments_total numeric(14, 2) := 0;
   closing_balance numeric(14, 2);
-  settlement_time timestamptz := clock_timestamp();
+  settlement_time timestamptz;
 begin
   if not public.is_active_factory_admin() then
     raise exception 'Only active admins can settle factory client accounts.';
@@ -1088,6 +1088,7 @@ begin
   if not found then
     raise exception 'The selected factory customer does not exist.';
   end if;
+  settlement_time := clock_timestamp();
 
   select coalesce((payload ->> 'balance')::numeric, 0)
     into opening_balance
