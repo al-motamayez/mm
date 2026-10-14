@@ -385,6 +385,7 @@ alter table public.orders
   add column if not exists model_number text not null default '',
   add column if not exists sender_name text,
   add column if not exists colors text not null default '',
+  add column if not exists color_names jsonb not null default '{}'::jsonb,
   add column if not exists sizes text not null default '',
   add column if not exists total_pieces integer not null default 0,
   add column if not exists delivered_pieces integer not null default 0,
@@ -397,11 +398,14 @@ alter table public.orders
 
 alter table public.orders
   drop column if exists remaining_amount,
-  drop column if exists total_amount;
+  drop column if exists total_amount,
+  drop column if exists expected_total_amount;
 
 alter table public.orders
   add column total_amount numeric(14, 2)
     generated always as (delivered_pieces * price_per_piece) stored,
+  add column expected_total_amount numeric(14, 2)
+    generated always as (total_pieces * price_per_piece) stored,
   add column remaining_amount numeric(14, 2)
     generated always as (delivered_pieces * price_per_piece - paid_amount) stored;
 
@@ -434,6 +438,40 @@ alter table public.production_stages
   add column if not exists line_name text,
   add column if not exists target_quantity integer not null default 0,
   add column if not exists completed_quantity integer not null default 0;
+
+create schema if not exists private;
+revoke all on schema private from public, anon, authenticated;
+
+create table if not exists private.orphaned_production_stages (
+  stage_id uuid primary key,
+  order_id uuid not null,
+  archived_at timestamptz not null default now(),
+  stage_data jsonb not null
+);
+
+revoke all on table private.orphaned_production_stages from public, anon, authenticated;
+
+insert into private.orphaned_production_stages (stage_id, order_id, stage_data)
+select stage.id, stage.order_id, to_jsonb(stage)
+from public.production_stages as stage
+where not exists (
+  select 1
+  from public.orders as factory_order
+  where factory_order.id = stage.order_id
+)
+on conflict (stage_id) do nothing;
+
+delete from public.production_stages as stage
+where not exists (
+  select 1
+  from public.orders as factory_order
+  where factory_order.id = stage.order_id
+);
+
+alter table public.production_stages
+  drop constraint if exists production_stages_order_id_fkey,
+  add constraint production_stages_order_id_fkey
+    foreign key (order_id) references public.orders (id) on delete cascade;
 
 update public.production_stages
 set stage_name = case lower(trim(stage_name))
@@ -615,6 +653,7 @@ returns table (
   model_number text,
   sender_name text,
   colors text,
+  color_names jsonb,
   sizes text,
   total_pieces integer,
   delivered_pieces integer,
@@ -623,6 +662,7 @@ returns table (
   model_image_url text,
   price_per_piece numeric,
   total_amount numeric,
+  expected_total_amount numeric,
   paid_amount numeric,
   remaining_amount numeric,
   status text,
@@ -646,6 +686,7 @@ begin
            factory_order.model_number,
            factory_order.sender_name,
            factory_order.colors,
+           factory_order.color_names,
            factory_order.sizes,
            factory_order.total_pieces,
            factory_order.delivered_pieces,
@@ -654,6 +695,7 @@ begin
            factory_order.model_image_url,
            factory_order.price_per_piece,
            factory_order.total_amount,
+           factory_order.expected_total_amount,
            factory_order.paid_amount,
            factory_order.remaining_amount,
            factory_order.status,
@@ -668,6 +710,7 @@ drop function if exists public.save_factory_order(uuid, uuid, text, text, intege
 drop function if exists public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date);
 drop function if exists public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text);
 drop function if exists public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text);
+drop function if exists public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb);
 create function public.save_factory_order(
   requested_order_id uuid,
   requested_customer_id uuid,
@@ -684,7 +727,8 @@ create function public.save_factory_order(
   requested_paid_amount numeric,
   requested_expected_delivery_date date,
   requested_model_image_url text,
-  requested_priority text
+  requested_priority text,
+  requested_color_names jsonb
 )
 returns uuid
 language plpgsql
@@ -700,6 +744,7 @@ declare
   current_total_pieces integer;
   matched_client_id uuid;
   resolved_model_name text;
+  normalized_color_names jsonb;
 begin
   if not public.is_active_factory_admin() then
     raise exception 'Only active admins can create or edit factory orders.';
@@ -717,6 +762,34 @@ begin
     or requested_price_per_piece < 0
     or requested_paid_amount is null
     or requested_paid_amount < 0
+    or coalesce(jsonb_typeof(requested_color_names), '') <> 'object'
+    or exists (
+      select 1
+      from jsonb_each_text(
+        case
+          when jsonb_typeof(requested_color_names) = 'object' then requested_color_names
+          else '{}'::jsonb
+        end
+      ) as color_entry(color_hex, color_name)
+      where color_hex !~ '^#[0-9A-Fa-f]{6}$'
+         or length(trim(color_name)) = 0
+         or length(trim(color_name)) > 64
+    )
+    or exists (
+      select 1
+      from unnest(string_to_array(coalesce(requested_colors, ''), ',')) as selected_color(color_hex)
+      where trim(selected_color.color_hex) ~ '^#[0-9A-Fa-f]{6}$'
+        and not exists (
+          select 1
+          from jsonb_each_text(
+            case
+              when jsonb_typeof(requested_color_names) = 'object' then requested_color_names
+              else '{}'::jsonb
+            end
+          ) as named_color(color_hex, color_name)
+          where upper(named_color.color_hex) = upper(trim(selected_color.color_hex))
+        )
+    )
     or requested_priority is null
     or requested_priority not in ('عادي', 'مرتفع', 'عاجل')
     or requested_status is null
@@ -727,6 +800,10 @@ begin
     ) then
     raise exception 'Invalid factory order data.';
   end if;
+
+  select coalesce(jsonb_object_agg(upper(color_hex), trim(color_name)), '{}'::jsonb)
+    into normalized_color_names
+  from jsonb_each_text(requested_color_names) as color_entry(color_hex, color_name);
 
   select customer.id, customer.user_id
     into matched_customer_id, matched_client_id
@@ -748,13 +825,13 @@ begin
       raise exception 'A new order must start in the waiting, paused, or under-construction state.';
     end if;
     insert into public.orders (
-      client_id, customer_id, model_name, model_number, colors, sizes,
+      client_id, customer_id, model_name, model_number, colors, color_names, sizes,
       total_pieces, delivered_pieces, price_per_piece, paid_amount, expected_delivery_date, model_image_url, priority, status
     )
     values (
       matched_client_id, matched_customer_id, resolved_model_name,
       coalesce(trim(requested_model_number), ''),
-      coalesce(trim(requested_colors), ''), coalesce(trim(requested_sizes), ''),
+      coalesce(trim(requested_colors), ''), normalized_color_names, coalesce(trim(requested_sizes), ''),
       requested_quantity, requested_delivered_pieces,
       requested_price_per_piece, requested_paid_amount, requested_expected_delivery_date, requested_model_image_url, trim(requested_priority), trim(requested_status)
     )
@@ -819,6 +896,7 @@ begin
         model_name = resolved_model_name,
         model_number = coalesce(trim(requested_model_number), ''),
         colors = coalesce(trim(requested_colors), ''),
+        color_names = normalized_color_names,
         sizes = coalesce(trim(requested_sizes), ''),
         total_pieces = requested_quantity,
         delivered_pieces = requested_delivered_pieces,
@@ -1113,8 +1191,10 @@ begin
     color_name := upper(trim(coalesce(color_entry ->> 'color', '')));
     raw_plys := trim(coalesce(color_entry ->> 'plys', ''));
     if color_name !~ '^#[0-9A-F]{6}$'
-       or raw_plys !~ '^[0-9]+$' then
-      raise exception 'Each color must be a valid HEX value with a positive integer ply count.';
+       or raw_plys !~ '^[0-9]+$'
+       or length(trim(coalesce(color_entry ->> 'name', ''))) = 0
+       or length(trim(coalesce(color_entry ->> 'name', ''))) > 64 then
+      raise exception 'Each color must have a name, a valid HEX value, and a positive integer ply count.';
     end if;
     color_plys := raw_plys::numeric;
     if color_plys < 1 or color_plys > 2147483647
@@ -1236,7 +1316,7 @@ begin
   from public.calculate_factory_cutting_breakdown(requested_size_data, requested_color_ply_data) as breakdown;
 
   insert into public.orders (
-    id, client_id, customer_id, model_name, model_number, sender_name, colors, sizes,
+    id, client_id, customer_id, model_name, model_number, sender_name, colors, color_names, sizes,
     total_pieces, status, model_image_url
   )
   values (
@@ -1246,6 +1326,11 @@ begin
     coalesce(trim(requested_model_number), ''),
     submitted_by_name,
     normalized_colors,
+    coalesce((
+      select jsonb_object_agg(upper(trim(color_entry ->> 'color')), trim(color_entry ->> 'name'))
+      from jsonb_array_elements(requested_color_ply_data -> 'colors') as color_entry
+      where length(trim(coalesce(color_entry ->> 'name', ''))) > 0
+    ), '{}'::jsonb),
     normalized_sizes::text,
     0,
     'قيد الفرش',
@@ -1316,6 +1401,11 @@ begin
 
   update public.orders
   set colors = normalized_colors,
+      color_names = coalesce((
+        select jsonb_object_agg(upper(trim(color_entry ->> 'color')), trim(color_entry ->> 'name'))
+        from jsonb_array_elements(requested_color_ply_data -> 'colors') as color_entry
+        where length(trim(coalesce(color_entry ->> 'name', ''))) > 0
+      ), '{}'::jsonb),
       sizes = normalized_sizes::text,
       status = 'قيد الفرش'
   where id = requested_order_id;
@@ -1442,6 +1532,11 @@ begin
   update public.orders
   set sizes = normalized_sizes::text,
       colors = normalized_colors,
+      color_names = coalesce((
+        select jsonb_object_agg(upper(trim(color_entry ->> 'color')), trim(color_entry ->> 'name'))
+        from jsonb_array_elements(requested_color_ply_data -> 'colors') as color_entry
+        where length(trim(coalesce(color_entry ->> 'name', ''))) > 0
+      ), '{}'::jsonb),
       model_image_url = coalesce(nullif(trim(requested_model_image_url), ''), model_image_url),
       total_pieces = cut_total,
       status = 'تم القص'
@@ -1819,8 +1914,8 @@ revoke all on function public.read_factory_orders_client() from public, anon, au
 grant execute on function public.read_factory_orders_client() to authenticated;
 revoke all on function public.read_factory_cutting_clients() from public, anon, authenticated;
 grant execute on function public.read_factory_cutting_clients() to authenticated;
-revoke all on function public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text) from public, anon, authenticated;
-grant execute on function public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text) to authenticated;
+revoke all on function public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb) from public, anon, authenticated;
+grant execute on function public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb) to authenticated;
 revoke all on function public.record_factory_delivery(uuid, integer, text) from public, anon, authenticated;
 grant execute on function public.record_factory_delivery(uuid, integer, text) to authenticated;
 revoke all on function public.calculate_factory_cutting_breakdown(jsonb, jsonb) from public, anon, authenticated;

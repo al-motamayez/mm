@@ -253,6 +253,10 @@ async function readDashboardData(session) {
       name: order.model_name || order.model_number || "موديل بدون اسم",
       modelNumber: order.model_number || "",
       senderName: order.sender_name || "",
+      colorNames: {
+        ...Object.fromEntries(parseColorPlyData(cuttingStage?.color_ply_data).map((entry) => [entry.color, entry.name]).filter(([, name]) => name)),
+        ...parseColorNames(order.color_names)
+      },
       client: clientsById.get(order.customer_id)?.name || "",
       quantity: order.total_pieces,
       completedPieces,
@@ -265,6 +269,7 @@ async function readDashboardData(session) {
       remainingPieces: Number(order.total_pieces) - Number(order.delivered_pieces || 0),
       pricePerPiece: Number(order.price_per_piece || 0),
       totalAmount: Number(order.total_amount || 0),
+      expectedAmount: Number(order.expected_total_amount ?? (Number(order.total_pieces || 0) * Number(order.price_per_piece || 0))),
       paidAmount: Number(order.paid_amount || 0),
       remainingAmount: Number(order.remaining_amount || 0),
       expectedDeliveryDate: order.expected_delivery_date || "",
@@ -475,17 +480,18 @@ function parseColorPlyData(value, legacyColors = "", fallbackPlys = 0) {
   if (parsed && Array.isArray(parsed.colors)) {
     return parsed.colors.map((entry) => ({
       color: String(entry.color || "").toUpperCase(),
+      name: String(entry.name || ""),
       plys: Number(entry.plys || 0)
     })).filter((entry) => /^#[0-9A-F]{6}$/.test(entry.color));
   }
   return String(legacyColors).split(",").map((color) => color.trim().toUpperCase())
     .filter((color) => /^#[0-9A-F]{6}$/.test(color))
-    .map((color) => ({ color, plys: Number(fallbackPlys) || 0 }));
+    .map((color) => ({ color, name: "", plys: Number(fallbackPlys) || 0 }));
 }
 
 function cuttingColorPlyMarkup(colorPlyData, legacyColors, fallbackPlys, prefix) {
   const colors = parseColorPlyData(colorPlyData, legacyColors, fallbackPlys);
-  const rows = colors.length ? colors.map((entry) => cuttingColorPlyRow(entry.color, entry.plys)).join("") : cuttingColorPlyRow("#000000", "");
+  const rows = colors.length ? colors.map((entry) => cuttingColorPlyRow(entry.color, entry.plys, entry.name)).join("") : cuttingColorPlyRow("#000000", "", "");
   return `<div class="field color-picker cutting-color-ply-picker" data-color-ply-picker="${prefix}">
     <label>ألوان الفرشة وعدد الرئات لكل لون</label>
     <div class="color-ply-rows" data-color-ply-rows>${rows}</div>
@@ -495,8 +501,9 @@ function cuttingColorPlyMarkup(colorPlyData, legacyColors, fallbackPlys, prefix)
   </div>`;
 }
 
-function cuttingColorPlyRow(color, plys) {
+function cuttingColorPlyRow(color, plys, name = "") {
   return `<div class="color-ply-row" data-color-ply-row>
+    <label class="field"><span>اسم اللون</span><input type="text" data-ply-name maxlength="64" value="${escapeHtml(name)}" required></label>
     <label class="field"><span>درجة اللون</span><input type="color" data-ply-color value="${/^#[0-9A-F]{6}$/i.test(color) ? escapeHtml(color) : "#000000"}"></label>
     <label class="field"><span>عدد الرئات لهذا اللون</span><input type="number" data-ply-count min="1" step="1" value="${escapeHtml(plys)}" required></label>
     <button class="row-action color-ply-remove" type="button" data-remove-ply-color aria-label="حذف اللون">حذف اللون</button>
@@ -510,6 +517,7 @@ function updateCuttingCalculation(form) {
     .map((button) => button.dataset.sizeToggle);
   const colorRows = [...form.querySelectorAll("[data-color-ply-row]")].map((row) => ({
     color: row.querySelector("[data-ply-color]").value.toUpperCase(),
+    name: String(row.querySelector("[data-ply-name]").value).trim(),
     plys: Number(row.querySelector("[data-ply-count]").value)
   }));
   const validRows = colorRows.filter((entry) => Number.isSafeInteger(entry.plys) && entry.plys > 0);
@@ -534,7 +542,7 @@ function updateCuttingCalculation(form) {
   const breakdown = colorRows
     .filter((entry) => Number.isSafeInteger(entry.plys) && entry.plys > 0)
     .flatMap((entry) => selectedSizes.map((size) =>
-      `<tr><td><span class="color-breakdown-swatch" style="--swatch-color:${escapeHtml(entry.color)}"></span>${escapeHtml(entry.color)}</td><td>${escapeHtml(size)}</td><td>${new Intl.NumberFormat("ar-EG").format(entry.plys)}</td></tr>`
+      `<tr><td><span class="color-breakdown-swatch" style="--swatch-color:${escapeHtml(entry.color)}"></span>${escapeHtml(entry.name)} · ${escapeHtml(entry.color)}</td><td>${escapeHtml(size)}</td><td>${new Intl.NumberFormat("ar-EG").format(entry.plys)}</td></tr>`
     ));
   const breakdownElement = form.querySelector("[data-cutting-breakdown]");
   if (breakdownElement) {
@@ -545,20 +553,47 @@ function updateCuttingCalculation(form) {
   return { sizeData, colorPlyData: { colors: colorRows, sizes: selectedSizes, type: sizeType }, colors: [...new Set(selectedColors)], total };
 }
 
+function parseColorNames(value) {
+  let parsed = value;
+  if (typeof parsed === "string") {
+    try { parsed = JSON.parse(parsed); } catch { parsed = null; }
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  return Object.fromEntries(Object.entries(parsed)
+    .filter(([color, name]) => /^#[0-9A-F]{6}$/i.test(color) && typeof name === "string")
+    .map(([color, name]) => [color.toUpperCase(), name.trim().slice(0, 64)]));
+}
+
 function colorPickerMarkup(value, prefix) {
   const selected = String(value || "").split(",").map((color) => color.trim()).filter(Boolean);
-  const choices = [...new Set(selected)].map(colorPickerChoice).join("");
+  const choices = [...new Set(selected)].map((color) => colorPickerChoice(color)).join("");
   return `<div class="field color-picker" data-color-picker="${prefix}">
     <label>اختيار درجات الألوان</label>
     <div class="color-picker-controls"><input type="color" data-color-input value="#000000" aria-label="اختر درجة لون"><button class="row-action" type="button" data-add-color>إضافة الدرجة</button></div>
     <div class="color-swatch-list" data-color-list>${choices || '<span class="muted">لم يتم اختيار ألوان بعد.</span>'}</div>
     <input type="hidden" name="colors" data-color-value value="${escapeHtml(value || "")}">
+    <input type="hidden" name="colorNames" data-color-names-value value="{}">
   </div>`;
 }
 
-function colorPickerChoice(color) {
+function colorPickerChoice(color, name = "") {
   const isHex = /^#[0-9a-f]{6}$/i.test(color);
-  return `<span class="color-choice" data-color-choice="${escapeHtml(color)}"><span class="color-choice-swatch"${isHex ? ` style="--swatch-color:${escapeHtml(color)}"` : ""}></span><span class="color-choice-value">${escapeHtml(color)}</span><button type="button" data-remove-color="${escapeHtml(color)}" aria-label="إزالة اللون ${escapeHtml(color)}">×</button></span>`;
+  return `<span class="color-choice" data-color-choice="${escapeHtml(color)}"><span class="color-choice-swatch"${isHex ? ` style="--swatch-color:${escapeHtml(color)}"` : ""}></span><span class="color-choice-value">${escapeHtml(color)}</span><label class="color-choice-name"><span>اسم اللون</span><input type="text" data-color-name maxlength="64" value="${escapeHtml(name)}" aria-label="اسم اللون ${escapeHtml(color)}"></label><button type="button" data-remove-color="${escapeHtml(color)}" aria-label="إزالة اللون ${escapeHtml(color)}">×</button></span>`;
+}
+
+function colorSummaryMarkup(colors, colorNames = {}, colorPlyData = null) {
+  const names = {
+    ...Object.fromEntries(parseColorPlyData(colorPlyData).map((entry) => [entry.color, entry.name]).filter(([, name]) => name)),
+    ...parseColorNames(colorNames)
+  };
+  const entries = String(colors || "").split(",").map((color) => color.trim().toUpperCase())
+    .filter((color) => color.length > 0);
+  if (!entries.length) return "—";
+  return `<span class="model-color-list">${entries.map((color) => {
+    const isHex = /^#[0-9A-F]{6}$/.test(color);
+    const label = names[color] || "اسم اللون غير مسجل";
+    return `<span class="model-color-chip">${isHex ? `<span class="color-breakdown-swatch" style="--swatch-color:${escapeHtml(color)}"></span>` : ""}<strong>${escapeHtml(label)}</strong>${isHex ? `<small>${escapeHtml(color)}</small>` : ""}</span>`;
+  }).join("")}</span>`;
 }
 
 function sizeSummary(value) {
@@ -600,8 +635,12 @@ function sizePickerTotal(form) {
 }
 
 function updateColorPicker(root) {
-  const selected = [...root.querySelectorAll("[data-color-choice]")].map((choice) => choice.dataset.colorChoice);
+  const choices = [...root.querySelectorAll("[data-color-choice]")];
+  const selected = choices.map((choice) => choice.dataset.colorChoice);
   root.querySelector("[data-color-value]").value = [...new Set(selected)].join(", ");
+  root.querySelector("[data-color-names-value]").value = JSON.stringify(Object.fromEntries(choices
+    .map((choice) => [choice.dataset.colorChoice.toUpperCase(), String(choice.querySelector("[data-color-name]").value).trim()])
+    .filter(([, name]) => name)));
 }
 
 function bindPickers(form) {
@@ -630,8 +669,17 @@ function bindPickers(form) {
   form.querySelectorAll("[data-color-picker]").forEach((root) => {
     const renderColors = () => {
       const list = root.querySelector("[data-color-list]");
+      const names = Object.fromEntries([...root.querySelectorAll("[data-color-choice]")].map((choice) =>
+        [choice.dataset.colorChoice, String(choice.querySelector("[data-color-name]").value).trim()]
+      ));
       const colors = [...new Set([...root.querySelectorAll("[data-color-choice]")].map((choice) => choice.dataset.colorChoice))];
-      list.innerHTML = colors.length ? colors.map(colorPickerChoice).join("") : '<span class="muted">لم يتم اختيار ألوان بعد.</span>';
+      list.innerHTML = colors.length
+        ? colors.map((color) => colorPickerChoice(color, names[color])).join("")
+        : '<span class="muted">لم يتم اختيار ألوان بعد.</span>';
+      colors.forEach((color, index) => {
+        const input = list.querySelectorAll("[data-color-name]")[index];
+        if (input) input.value = names[color] || "";
+      });
       updateColorPicker(root);
     };
     root.querySelector("[data-add-color]").addEventListener("click", () => {
@@ -640,9 +688,12 @@ function bindPickers(form) {
       if (!selectedColors.includes(color)) {
         const list = root.querySelector("[data-color-list]");
         list.querySelector(".muted")?.remove();
-        list.insertAdjacentHTML("beforeend", colorPickerChoice(color));
+        list.insertAdjacentHTML("beforeend", colorPickerChoice(color, ""));
       }
       renderColors();
+    });
+    root.addEventListener("input", (event) => {
+      if (event.target.matches("[data-color-name]")) updateColorPicker(root);
     });
     root.addEventListener("click", (event) => {
       const removeButton = event.target.closest("[data-remove-color]");
@@ -655,17 +706,18 @@ function bindPickers(form) {
   form.querySelectorAll("[data-color-ply-picker]").forEach((picker) => {
     const update = () => updateCuttingCalculation(picker.closest("form"));
     picker.addEventListener("input", (event) => {
-      if (event.target.matches("[data-ply-color], [data-ply-count]")) update();
+      if (event.target.matches("[data-ply-color], [data-ply-count], [data-ply-name]")) update();
     });
     picker.addEventListener("click", (event) => {
       if (event.target.closest("[data-add-ply-color]")) {
-        picker.querySelector("[data-color-ply-rows]").insertAdjacentHTML("beforeend", cuttingColorPlyRow("#000000", ""));
+        picker.querySelector("[data-color-ply-rows]").insertAdjacentHTML("beforeend", cuttingColorPlyRow("#000000", "", ""));
         update();
       }
       if (event.target.closest("[data-remove-ply-color]")) {
         const rows = picker.querySelectorAll("[data-color-ply-row]");
         if (rows.length === 1) {
           const row = rows[0];
+          row.querySelector("[data-ply-name]").value = "";
           row.querySelector("[data-ply-color]").value = "#000000";
           row.querySelector("[data-ply-count]").value = "";
         } else {
@@ -698,7 +750,7 @@ function bindPickers(form) {
       updateColorPicker(root);
     });
     form.querySelectorAll("[data-color-ply-picker]").forEach((picker) => {
-      picker.querySelector("[data-color-ply-rows]").innerHTML = cuttingColorPlyRow("#000000", "");
+      picker.querySelector("[data-color-ply-rows]").innerHTML = cuttingColorPlyRow("#000000", "", "");
       updateCuttingCalculation(picker.closest("form"));
     });
   }));
@@ -723,10 +775,11 @@ function setSizePicker(root, value) {
   updateSizePicker(root);
 }
 
-function setColorPicker(root, value) {
+function setColorPicker(root, value, colorNames = {}) {
   const colors = String(value || "").split(",").map((color) => color.trim()).filter(Boolean);
+  const names = parseColorNames(colorNames);
   root.querySelector("[data-color-list]").innerHTML = colors.length
-    ? [...new Set(colors)].map(colorPickerChoice).join("")
+    ? [...new Set(colors)].map((color) => colorPickerChoice(color, names[color.toUpperCase()] || "")).join("")
     : '<span class="muted">لم يتم اختيار ألوان بعد.</span>';
   updateColorPicker(root);
 }
@@ -822,12 +875,12 @@ function orderCards(models, withActions = false) {
     <header class="order-card-heading">${modelImageMarkup(item.modelImageUrl)}<div><p class="order-card-label">الموديل ${item.modelNumber ? `· رقم ${escapeHtml(item.modelNumber)}` : ""} · الأولوية: ${escapeHtml(item.priority || "عادي")}</p><h3>${escapeHtml(item.name || item.modelNumber || "موديل بدون اسم")}</h3></div>${statusTag(item.displayStatus || item.status)}</header>
     <p class="order-card-client">العميل: <strong>${escapeHtml(item.client || "غير مربوط بعميل · بانتظار مراجعة الإدارة")}</strong></p>
     <dl class="order-card-details">
-      <div><dt>الألوان</dt><dd>${escapeHtml(item.colors || "—")}</dd></div><div><dt>المقاسات / العدد لكل مقاس</dt><dd>${escapeHtml(sizeSummary(item.sizes))}</dd></div>
+      <div><dt>الألوان</dt><dd>${colorSummaryMarkup(item.colors, item.colorNames, item.colorPlyData)}</dd></div><div><dt>المقاسات / العدد لكل مقاس</dt><dd>${escapeHtml(sizeSummary(item.sizes))}</dd></div>
       <div><dt>العدد الفعلي بعد القص</dt><dd>${item.quantity ? `${new Intl.NumberFormat("ar-EG").format(item.quantity)} قطعة` : "بانتظار الحصر بعد القص"}</dd></div><div><dt>الكمية المنجزة</dt><dd>${new Intl.NumberFormat("ar-EG").format(item.completedPieces)} قطعة</dd></div>
       ${item.fabric ? `<div><dt>القماش / الفرشة</dt><dd>${escapeHtml(item.fabric)} · ${new Intl.NumberFormat("ar-EG").format(item.boltCount)} أتواب · ${new Intl.NumberFormat("ar-EG").format(item.layerCount)} طوابق</dd></div>` : ""}
       ${item.cuttingNotes ? `<div><dt>ملاحظات فنية للقص</dt><dd>${escapeHtml(item.cuttingNotes)}</dd></div>` : ""}
       <div><dt>الكمية المسلّمة فعليًا</dt><dd>${new Intl.NumberFormat("ar-EG").format(item.deliveredPieces)} قطعة</dd></div><div><dt>المتبقي (السالب يعني زيادة تسليم)</dt><dd>${item.quantity ? `${new Intl.NumberFormat("ar-EG").format(item.remainingPieces)} قطعة` : "بانتظار الحصر بعد القص"}</dd></div>
-      <div><dt>سعر القطعة</dt><dd>${money(item.pricePerPiece)}</dd></div><div><dt>قيمة الكمية المسلّمة</dt><dd>${money(item.totalAmount)}</dd></div>
+      <div><dt>سعر القطعة</dt><dd>${money(item.pricePerPiece)}</dd></div><div><dt>الإجمالي المتوقع (العدد × السعر)</dt><dd>${money(item.expectedAmount)}</dd></div><div><dt>قيمة الكمية المسلّمة</dt><dd>${money(item.totalAmount)}</dd></div>
       <div><dt>التسليم المتوقع</dt><dd>${formatDateOnly(item.expectedDeliveryDate)}</dd></div><div><dt>تاريخ الإنشاء</dt><dd>${formatDateTime(item.created_at)}</dd></div>
       ${item.senderName ? `<div><dt>تم الإرسال بواسطة</dt><dd>${escapeHtml(item.senderName)}</dd></div>` : ""}
       <div><dt>المدفوع</dt><dd>${money(item.paidAmount)}</dd></div><div><dt>المتبقي من قيمة المسلّم</dt><dd>${money(item.remainingAmount)}</dd></div>
@@ -846,7 +899,7 @@ function orderProgress(status) {
 }
 
 function clientOrderRows(orders) {
-  return orders.map((item) => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.colors || "—")}</td><td>${escapeHtml(item.sizes || "—")}</td><td>${item.quantity ? new Intl.NumberFormat("ar-EG").format(item.quantity) : "بانتظار الحصر"}</td><td>${new Intl.NumberFormat("ar-EG").format(item.deliveredPieces)}</td><td>${item.quantity ? new Intl.NumberFormat("ar-EG").format(item.remainingPieces) : "بانتظار الحصر"}</td><td>${statusTag(item.displayStatus || item.status)}</td><td>${orderProgress(item.status)}</td></tr>`);
+  return orders.map((item) => `<tr><td>${escapeHtml(item.name)}</td><td>${colorSummaryMarkup(item.colors, item.colorNames, item.colorPlyData)}</td><td>${escapeHtml(item.sizes || "—")}</td><td>${item.quantity ? new Intl.NumberFormat("ar-EG").format(item.quantity) : "بانتظار الحصر"}</td><td>${new Intl.NumberFormat("ar-EG").format(item.deliveredPieces)}</td><td>${item.quantity ? new Intl.NumberFormat("ar-EG").format(item.remainingPieces) : "بانتظار الحصر"}</td><td>${statusTag(item.displayStatus || item.status)}</td><td>${orderProgress(item.status)}</td></tr>`);
 }
 
 function clientOrderCards(orders) {
@@ -854,11 +907,11 @@ function clientOrderCards(orders) {
   return `<div class="order-cards">${orders.map((item) => `<article class="order-card client-order-card">
     <header class="order-card-heading">${modelImageMarkup(item.modelImageUrl)}<div><p class="order-card-label">الموديل ${item.modelNumber ? `· رقم ${escapeHtml(item.modelNumber)}` : ""}</p><h3>${escapeHtml(item.name || item.modelNumber || "موديل بدون اسم")}</h3></div>${statusTag(item.displayStatus || item.status)}</header>
     <dl class="order-card-details">
-      <div><dt>الألوان</dt><dd>${escapeHtml(item.colors || "—")}</dd></div><div><dt>المقاسات / العدد لكل مقاس</dt><dd>${escapeHtml(sizeSummary(item.sizes))}</dd></div>
+      <div><dt>الألوان</dt><dd>${colorSummaryMarkup(item.colors, item.colorNames, item.colorPlyData)}</dd></div><div><dt>المقاسات / العدد لكل مقاس</dt><dd>${escapeHtml(sizeSummary(item.sizes))}</dd></div>
       <div><dt>العدد الفعلي بعد القص</dt><dd>${item.quantity ? new Intl.NumberFormat("ar-EG").format(item.quantity) : "بانتظار الحصر"}</dd></div><div><dt>الكمية المنجزة</dt><dd>${new Intl.NumberFormat("ar-EG").format(item.completedPieces)}</dd></div>
       <div><dt>الكمية المسلّمة</dt><dd>${new Intl.NumberFormat("ar-EG").format(item.deliveredPieces)}</dd></div><div><dt>المتبقي</dt><dd>${item.quantity ? new Intl.NumberFormat("ar-EG").format(item.remainingPieces) : "بانتظار الحصر بعد القص"}</dd></div>
       ${item.senderName ? `<div><dt>تم الإرسال بواسطة</dt><dd>${escapeHtml(item.senderName)}</dd></div>` : ""}
-      <div><dt>سعر القطعة</dt><dd>${money(item.pricePerPiece)}</dd></div><div><dt>إجمالي قيمة المسلّم</dt><dd>${money(item.totalAmount)}</dd></div>
+      <div><dt>سعر القطعة</dt><dd>${money(item.pricePerPiece)}</dd></div><div><dt>الإجمالي المتوقع (العدد × السعر)</dt><dd>${money(item.expectedAmount)}</dd></div><div><dt>إجمالي قيمة المسلّم</dt><dd>${money(item.totalAmount)}</dd></div>
       <div><dt>التسليم المتوقع</dt><dd>${formatDateOnly(item.expectedDeliveryDate)}</dd></div>
       <div><dt>المدفوع على الطلب</dt><dd>${money(item.paidAmount)}</dd></div><div><dt>المتبقي</dt><dd>${money(item.remainingAmount)}</dd></div>
     </dl>
@@ -896,6 +949,7 @@ function clientAccountSummary(client, data) {
   const openingBalance = roundMoney(latestSettlement?.balance || 0);
   const orders = data.models.filter((order) => order.customerId === client.id && !order.archivedAt);
   const deliveredTotal = sumMoney(orders.map((order) => order.totalAmount));
+  const expectedTotal = sumMoney(orders.map((order) => order.expectedAmount));
   const orderPaid = sumMoney(orders.map((order) => order.paidAmount));
   const periodStart = client.account_period_started_at || latestSettlement?.date || null;
   const payments = data.payments.filter((payment) =>
@@ -903,9 +957,13 @@ function clientAccountSummary(client, data) {
     && (!periodStart || new Date(payment._createdAt || payment.created_at).getTime() >= new Date(periodStart).getTime())
   );
   const paymentsTotal = sumMoney(payments.map((payment) => payment.amount));
-  const due = addMoney(openingBalance, deliveredTotal);
+  const grossDue = addMoney(openingBalance, deliveredTotal);
   const paid = addMoney(orderPaid, paymentsTotal);
-  const balance = subtractMoney(due, paid);
+  const due = subtractMoney(grossDue, paid);
+  const balance = due;
+  const remainingOpeningBalance = openingBalance > 0
+    ? Math.max(0, subtractMoney(openingBalance, paid))
+    : openingBalance;
   return {
     settlements,
     latestSettlement,
@@ -913,12 +971,15 @@ function clientAccountSummary(client, data) {
     orders,
     archivedOrders: data.models.filter((order) => order.customerId === client.id && order.archivedAt),
     deliveredTotal,
+    expectedTotal,
     requiredAfterDelivery: deliveredTotal,
+    grossDue,
     orderPaid,
     payments,
     paymentsTotal,
     due,
     paid,
+    remainingOpeningBalance,
     balance
   };
 }
@@ -961,7 +1022,7 @@ function clientAccountCards(data) {
     const uncountedOrders = summary.orders.filter((order) => order.quantity <= 0);
     return `<article class="client-account-card">
       <header><div><h3>${escapeHtml(client.name)}</h3><p>${escapeHtml(client.phone || "بدون هاتف")}${linkedUser ? ` · ${escapeHtml(linkedUser.username)}` : " · ملف عميل بلا حساب دخول"}</p></div>${statusTag(linkedUser?.status === "suspended" ? "متوقف" : "نشط")}</header>
-      <div class="client-balance-grid"><div><span>إجمالي المطلوب</span><strong>${money(summary.due)}</strong></div><div><span>المطلوب بعد التسليم</span><strong>${money(summary.requiredAfterDelivery)}</strong></div><div><span>المدفوع</span><strong>${money(summary.paid)}</strong></div><div><span>الرصيد المتبقي</span><strong>${money(summary.balance)}</strong><small>${summary.balance === 0 ? "تم السداد بالكامل" : summary.balance < 0 ? "رصيد دائن للعميل" : "مستحق على العميل"}</small></div></div>
+      <div class="client-balance-grid"><div><span>المطلوب بعد خصم المدفوع</span><strong>${money(summary.due)}</strong></div><div><span>الإجمالي المتوقع للطلبات</span><strong>${money(summary.expectedTotal)}</strong></div><div><span>المطلوب بعد التسليم</span><strong>${money(summary.requiredAfterDelivery)}</strong></div><div><span>المدفوع</span><strong>${money(summary.paid)}</strong></div><div><span>الرصيد المتبقي</span><strong>${money(summary.balance)}</strong><small>${summary.balance === 0 ? "تم السداد بالكامل" : summary.balance < 0 ? "رصيد دائن للعميل" : "مستحق على العميل"}</small></div></div>
       ${unpricedOrders.length ? '<p class="client-unpriced-alert" role="status">يوجد موديلات لم تحدد أسعارها بعد</p>' : ""}
       <div class="client-activity-grid">
         <div><span>تحت الإنشاء / التصنيع</span><strong>${inProductionCount}</strong></div>
@@ -1013,9 +1074,9 @@ function clientDetailsView(client, data) {
       <div><dt>العدد الإجمالي بعد القص</dt><dd>${order.quantity ? `${new Intl.NumberFormat("ar-EG").format(order.quantity)} قطعة` : "بانتظار الحصر"}</dd></div>
       <div><dt>المستلم</dt><dd>${new Intl.NumberFormat("ar-EG").format(order.deliveredPieces)} قطعة</dd></div>
       <div><dt>المتبقي</dt><dd>${order.quantity ? `${new Intl.NumberFormat("ar-EG").format(order.remainingPieces)} قطعة` : "بانتظار الحصر"}</dd></div>
-      <div><dt>الألوان</dt><dd>${escapeHtml(order.colors || "—")}</dd></div>
+      <div><dt>الألوان</dt><dd>${colorSummaryMarkup(order.colors, order.colorNames, order.colorPlyData)}</dd></div>
       <div><dt>المقاسات / العدد لكل مقاس</dt><dd>${escapeHtml(sizeSummary(order.sizes))}</dd></div>
-      ${order.pricePerPiece > 0 ? `<div><dt>سعر القطعة</dt><dd>${money(order.pricePerPiece)}</dd></div><div><dt>إجمالي قيمة المسلّم</dt><dd>${money(order.totalAmount)}</dd></div>` : '<div><dt>التسعير</dt><dd>لم يُسعّر بعد</dd></div>'}
+      ${order.pricePerPiece > 0 ? `<div><dt>سعر القطعة</dt><dd>${money(order.pricePerPiece)}</dd></div><div><dt>الإجمالي المتوقع (العدد × السعر)</dt><dd>${money(order.expectedAmount)}</dd></div><div><dt>إجمالي قيمة المسلّم</dt><dd>${money(order.totalAmount)}</dd></div>` : '<div><dt>التسعير</dt><dd>لم يُسعّر بعد</dd></div>'}
       <div><dt>التسليم المتوقع</dt><dd>${formatDateOnly(order.expectedDeliveryDate)}</dd></div>
       <div><dt>تاريخ الإنشاء</dt><dd>${formatDateTime(order.created_at)}</dd></div>
       ${order.senderName ? `<div><dt>تم الإرسال بواسطة</dt><dd>${escapeHtml(order.senderName)}</dd></div>` : ""}
@@ -1025,7 +1086,7 @@ function clientDetailsView(client, data) {
   </article>`;
   const clientNotes = data.clientNotes.filter((note) => note.customerId === client.id);
   return `<div class="clients-toolbar client-detail-toolbar"><div><h2>${escapeHtml(client.name)} · تفاصيل الحساب</h2><p>${escapeHtml(client.phone || "لا يوجد رقم هاتف")}${client.notes ? ` · ${escapeHtml(client.notes)}` : ""}</p><p>تاريخ إنشاء ملف العميل: ${formatDateTime(client.created_at)}</p></div><div class="client-detail-actions"><button class="button button-primary" type="button" data-quick-client-payment="${escapeHtml(client.id)}">＋ إضافة دفعة مالية</button><button class="button button-secondary" type="button" data-print-account>طباعة كشف الحساب / PDF</button><button class="row-action" type="button" data-return-clients>العودة إلى العملاء</button></div></div>
-    <div class="stats-grid client-finance-summary">${summary.latestSettlement ? stat("رصيد سابق مرحّل", money(summary.openingBalance), "افتتاح الفترة الحالية") : ""}${stat("المطلوب بعد التسليم", money(summary.requiredAfterDelivery), "قيمة الكميات المسلّمة")}${stat("إجمالي المطلوب", money(summary.due), "الرصيد السابق + المطلوب الحالي")}${stat("المدفوع", money(summary.paid))}${stat("الرصيد المتبقي", money(summary.balance), summary.balance === 0 ? "تم السداد بالكامل" : summary.balance < 0 ? "رصيد دائن للعميل" : "مستحق على العميل")}</div>
+    <div class="stats-grid client-finance-summary">${summary.latestSettlement ? stat("الرصيد السابق المرحّل المتبقي", money(summary.remainingOpeningBalance), "بعد احتساب المدفوعات الحالية") : ""}${stat("الإجمالي المتوقع للطلبات", money(summary.expectedTotal), "العدد × سعر القطعة")}${stat("المطلوب بعد التسليم", money(summary.requiredAfterDelivery), "قيمة الكميات المسلّمة")}${stat("إجمالي المطلوب بعد خصم المدفوع", money(summary.due), "الرصيد المرحّل + المطلوب الحالي − المدفوع")}${stat("المدفوع", money(summary.paid))}${stat("الرصيد المتبقي", money(summary.balance), summary.balance === 0 ? "تم السداد بالكامل" : summary.balance < 0 ? "رصيد دائن للعميل" : "مستحق على العميل")}</div>
     <section class="client-detail-section"><header class="section-heading"><div><h2>الموديلات التي تم تسعيرها</h2><p>يُحتسب المطلوب المالي على الكمية التي تم تسليمها.</p></div><button class="button button-secondary" type="button" data-open-order-for-client="${escapeHtml(client.id)}">＋ إضافة موديل للعميل</button></header>${pricedOrders.length ? `<div class="order-cards">${pricedOrders.map((order) => orderCard(order)).join("")}</div>` : '<div class="empty-state">لا توجد موديلات مسعّرة في الفترة الحالية.</div>'}</section>
     <section class="client-detail-section"><header class="section-heading"><div><h2>موديلات لم تُسعّر بعد</h2><p>طلبات في القص أو الانتظار أو مراحل التشغيل الأخرى.</p></div></header>${unpricedOrders.length ? `<div class="order-cards">${unpricedOrders.map((order) => orderCard(order)).join("")}</div>` : '<div class="empty-state">لا توجد موديلات بانتظار التسعير.</div>'}</section>
     <section class="client-detail-section">${panel("سجل تسليمات البضاعة", deliveries.length ? table(["الموديل","الكمية","المستلم","تاريخ ووقت الاستلام","التسليم المتوقع","القيمة"], deliveries.map((delivery) => { const order = data.models.find((item) => item.id === delivery.order_id); return `<tr><td>${escapeHtml(order?.name || "طلب مؤرشف")}</td><td>${new Intl.NumberFormat("ar-EG").format(delivery.quantity)} قطعة</td><td>${escapeHtml(delivery.recipient_name || "—")}</td><td>${formatDateTime(delivery.delivered_at)}</td><td>${formatDateOnly(delivery.expected_delivery_date || order?.expectedDeliveryDate)}</td><td>${money(delivery.amount)}</td></tr>`; })) : '<div class="empty-state">لا توجد تسليمات مسجلة لهذا العميل.</div>')}</section>
@@ -1079,6 +1140,7 @@ function adminView(data, accounts) {
         <section class="form-section"><h3>التفاصيل المالية <span>اختياري</span></h3><div class="form-section-grid">
           <div class="field"><label for="model-price">سعر القطعة (ج.م)</label><input id="model-price" name="pricePerPiece" type="number" min="0" step="0.01" value="0"><small id="model-price-history-note" hidden>تعديل السعر يعيد احتساب قيمة التسليمات المسجلة لهذا الموديل ورصيد العميل.</small></div>
           <div class="field"><label for="model-paid">العربون على الطلب (لا تكرره في سجل الدفعات)</label><input id="model-paid" name="paidAmount" type="number" min="0" step="0.01" value="0"></div>
+          <div class="field"><label for="model-expected-total">الإجمالي المتوقع (العدد × السعر)</label><output id="model-expected-total" class="calculated-value">0 ج.م</output></div>
           <div class="field"><label for="model-total">قيمة الكمية المسلّمة</label><output id="model-total" class="calculated-value">0 ج.م</output></div>
           <div class="field"><label for="model-remaining">المتبقي من قيمة المسلّم</label><output id="model-remaining" class="calculated-value">0 ج.م</output></div>
           <div class="field"><label for="client-balance-preview">الرصيد المتوقع للعميل بعد الحفظ</label><output id="client-balance-preview" class="calculated-value">اختر العميل</output></div>
@@ -1210,13 +1272,18 @@ function clientView(data, session) {
     && (!latestSettlement || new Date(item._createdAt || item.created_at).getTime() >= new Date(latestSettlement.date || latestSettlement._createdAt).getTime())
   );
   const totalAmount = sumMoney(currentOrders.map((item) => item.totalAmount));
+  const expectedTotal = sumMoney(currentOrders.map((item) => item.expectedAmount));
   const paymentsTotal = sumMoney(payments.map((item) => item.amount));
   const orderPaid = sumMoney(currentOrders.map((item) => item.paidAmount));
   const totalPaid = addMoney(paymentsTotal, orderPaid);
-  const due = addMoney(openingBalance, totalAmount);
-  const remaining = subtractMoney(due, totalPaid);
+  const grossDue = addMoney(openingBalance, totalAmount);
+  const remaining = subtractMoney(grossDue, totalPaid);
+  const due = remaining;
+  const remainingOpeningBalance = openingBalance > 0
+    ? Math.max(0, subtractMoney(openingBalance, totalPaid))
+    : openingBalance;
   const deliveredUnits = currentOrders.reduce((sum, item) => sum + Number(item.quantity), 0);
-  return `<section id="dashboard" class="dashboard-section"><div class="stats-grid">${stat("موديلاتي الحالية", currentOrders.length, "ضمن الفترة الحالية")}${stat("العدد الفعلي", new Intl.NumberFormat("ar-EG").format(deliveredUnits), "قطعة بعد القص")}${latestSettlement ? stat("رصيد سابق مرحّل", money(openingBalance), "افتتاح الفترة الحالية") : ""}${stat("المطلوب بعد التسليم", money(totalAmount), "قيمة البضاعة المستلمة")}${stat("إجمالي المطلوب", money(due), "الرصيد السابق + المطلوب الحالي")}${stat("إجمالي المدفوع", money(totalPaid))}${stat("الرصيد المتبقي", money(remaining), remaining === 0 ? "تم السداد بالكامل" : remaining < 0 ? "رصيد دائن للعميل" : "مستحق على العميل")}</div></section><section id="orders" class="dashboard-section">${panel("موديلاتي والطلبيات الحالية", clientOrderCards(currentOrders))}${archivedOrders.length ? panel("الطلبات المؤرشفة", clientOrderCards(archivedOrders)) : ""}</section><section id="finance" class="dashboard-section">${panel("دفعاتي المالية", table(["المبلغ","تاريخ ووقت التسجيل","طريقة الدفع"], payments.map((item) => `<tr><td>${money(item.amount)}</td><td>${formatDateTime(item._createdAt || item.created_at || item.date)}</td><td>${escapeHtml(item.method)}</td></tr>`)))}</section>`;
+  return `<section id="dashboard" class="dashboard-section"><div class="stats-grid">${stat("موديلاتي الحالية", currentOrders.length, "ضمن الفترة الحالية")}${stat("العدد الفعلي", new Intl.NumberFormat("ar-EG").format(deliveredUnits), "قطعة بعد القص")}${latestSettlement ? stat("الرصيد السابق المرحّل المتبقي", money(remainingOpeningBalance), "بعد احتساب المدفوعات الحالية") : ""}${stat("الإجمالي المتوقع للطلبات", money(expectedTotal), "العدد × سعر القطعة")}${stat("المطلوب بعد التسليم", money(totalAmount), "قيمة البضاعة المستلمة")}${stat("إجمالي المطلوب بعد خصم المدفوع", money(due), "الرصيد المرحّل + المطلوب الحالي − المدفوع")}${stat("إجمالي المدفوع", money(totalPaid))}${stat("الرصيد المتبقي", money(remaining), remaining === 0 ? "تم السداد بالكامل" : remaining < 0 ? "رصيد دائن للعميل" : "مستحق على العميل")}</div></section><section id="orders" class="dashboard-section">${panel("موديلاتي والطلبيات الحالية", clientOrderCards(currentOrders))}${archivedOrders.length ? panel("الطلبات المؤرشفة", clientOrderCards(archivedOrders)) : ""}</section><section id="finance" class="dashboard-section">${panel("دفعاتي المالية", table(["المبلغ","تاريخ ووقت التسجيل","طريقة الدفع"], payments.map((item) => `<tr><td>${money(item.amount)}</td><td>${formatDateTime(item._createdAt || item.created_at || item.date)}</td><td>${escapeHtml(item.method)}</td></tr>`)))}</section>`;
 }
 
 let sidebarCollapsed = false;
@@ -1361,7 +1428,8 @@ async function persistFactoryOrder(order, changes = {}) {
     requested_paid_amount: Number(updated.paidAmount || 0),
     requested_expected_delivery_date: updated.expectedDeliveryDate || null,
     requested_model_image_url: updated.modelImageUrl || null,
-    requested_priority: updated.priority || "عادي"
+    requested_priority: updated.priority || "عادي",
+    requested_color_names: parseColorNames(updated.colorNames)
   });
   if (error?.code === "PGRST202") {
     throw new Error("دالة حفظ الطلبات المحدّثة غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
@@ -1379,9 +1447,9 @@ function bindCuttingActions(session) {
     if (!fabric || !Number.isSafeInteger(boltCount) || boltCount < 1
       || !sizeData.type || !Object.keys(sizeData.counts).length || !Number.isSafeInteger(total) || total <= 0
       || cuttingData.colorPlyData.colors.length === 0
-      || cuttingData.colorPlyData.colors.some((entry) => !Number.isSafeInteger(entry.plys) || entry.plys < 1)
+      || cuttingData.colorPlyData.colors.some((entry) => !entry.name || !Number.isSafeInteger(entry.plys) || entry.plys < 1)
       || new Set(cuttingData.colorPlyData.colors.map((entry) => entry.color)).size !== cuttingData.colorPlyData.colors.length) {
-      window.factoryUI.toast("تحقق من القماش والأتواب، وحدد مقاسًا وأدخل رئات صحيحة لكل لون دون تكرار اللون.", "error");
+      window.factoryUI.toast("تحقق من القماش والأتواب، وحدد المقاسات، وأدخل اسمًا ورئات صحيحة لكل لون دون تكرار اللون.", "error");
       return null;
     }
     return {
@@ -1647,7 +1715,7 @@ function bindActions(session) {
       form.elements.pricePerPiece.readOnly = false;
       form.querySelector("#model-price-history-note").hidden = item.deliveredPieces <= 0;
       setSizePicker(form.querySelector("[data-size-picker]"), item.sizes);
-      setColorPicker(form.querySelector("[data-color-picker]"), item.colors);
+      setColorPicker(form.querySelector("[data-color-picker]"), item.colors, item.colorNames);
       form.querySelector("[data-model-image-preview]").innerHTML = modelImageMarkup(item.modelImageUrl);
       updateOrderTotals();
       activateDashboardView("orders");
@@ -1699,7 +1767,7 @@ function bindActions(session) {
     orderForm.elements.quantity.value = order.quantity || "";
     orderForm.elements.deliveredPieces.value = order.deliveredPieces;
     setSizePicker(orderForm.querySelector("[data-size-picker]"), order.sizes);
-    setColorPicker(orderForm.querySelector("[data-color-picker]"), order.colors);
+    setColorPicker(orderForm.querySelector("[data-color-picker]"), order.colors, order.colorNames);
     orderForm.querySelector("[data-model-image-preview]").innerHTML = modelImageMarkup(order.modelImageUrl);
     orderForm.elements.pricePerPiece.readOnly = false;
     orderForm.querySelector("#model-price-history-note").hidden = order.deliveredPieces <= 0;
@@ -1889,13 +1957,16 @@ function bindActions(session) {
   });
   const updateOrderTotals = () => {
     if (!orderForm) return;
+    const quantity = sizePickerTotal(orderForm) || Number(orderForm.elements.quantity.value || 0);
     const delivered = Number(orderForm.elements.deliveredPieces.value || 0);
     const price = Number(orderForm.elements.pricePerPiece.value || 0);
     const paid = Number(orderForm.elements.paidAmount.value || 0);
     const total = roundMoney(delivered * price);
+    const expectedTotal = roundMoney(quantity * price);
     const formatAmount = (value) => `${new Intl.NumberFormat("ar-EG", { maximumFractionDigits: 2 }).format(value)} ج.م`;
     orderForm.querySelector("#model-delivered-summary").textContent = `${new Intl.NumberFormat("ar-EG").format(delivered)} قطعة`;
     orderForm.elements.paidAmount.removeAttribute("max");
+    orderForm.querySelector("#model-expected-total").textContent = formatAmount(expectedTotal);
     orderForm.querySelector("#model-total").textContent = formatAmount(total);
     orderForm.querySelector("#model-remaining").textContent = formatAmount(subtractMoney(total, paid));
     const selectedClient = dashboardData.clients.find((client) => client.id === orderForm.elements.customerId.value);
@@ -1939,7 +2010,16 @@ function bindActions(session) {
     }
     openOrderEditor(order);
   });
-  ["deliveredPieces", "pricePerPiece", "paidAmount"].forEach((name) => orderForm.elements[name].addEventListener("input", updateOrderTotals));
+  ["quantity", "deliveredPieces", "pricePerPiece", "paidAmount"].forEach((name) => orderForm.elements[name].addEventListener("input", updateOrderTotals));
+  orderForm.addEventListener("input", (event) => {
+    if (event.target.closest("[data-size-picker]")) updateOrderTotals();
+  });
+  orderForm.addEventListener("click", (event) => {
+    if (event.target.closest("[data-size-toggle]")) updateOrderTotals();
+  });
+  orderForm.addEventListener("change", (event) => {
+    if (event.target.matches("[data-size-type]")) updateOrderTotals();
+  });
   orderForm.elements.customerId.addEventListener("change", updateOrderTotals);
   updateOrderTotals();
   document.querySelector("#model-form").addEventListener("submit", async (event) => {
@@ -1956,6 +2036,8 @@ function bindActions(session) {
     const modelName = String(formData.get("name")).trim();
     const modelNumber = String(formData.get("modelNumber")).trim();
     const customerId = String(formData.get("customerId"));
+    const colors = String(formData.get("colors") || "").trim();
+    const colorNames = parseColorNames(formData.get("colorNames"));
     if (!modelName && !modelNumber) {
       window.factoryUI.toast("أدخل اسم الموديل أو رقمه على الأقل.", "error");
       return;
@@ -1966,6 +2048,12 @@ function bindActions(session) {
     }
     if (quantity === 0 && deliveredPieces > 0) {
       window.factoryUI.toast("أدخل العدد الفعلي بعد القص قبل تسجيل أي تسليم.", "error");
+      return;
+    }
+    const unnamedColor = colors.split(",").map((color) => color.trim().toUpperCase())
+      .find((color) => /^#[0-9A-F]{6}$/.test(color) && !colorNames[color]);
+    if (unnamedColor) {
+      window.factoryUI.toast(`أدخل اسم اللون ${unnamedColor} قبل حفظ الطلبية.`, "error");
       return;
     }
     const customer = dashboardData.clients.find((client) => client.id === customerId);
@@ -1992,7 +2080,8 @@ function bindActions(session) {
         priority: String(formData.get("priority")),
         fabric: String(formData.get("fabric") || "").trim(),
         line: String(formData.get("line") || "").trim(),
-        colors: String(formData.get("colors") || "").trim(),
+        colors,
+        colorNames,
         sizes: String(formData.get("sizes") || "").trim(),
         modelImageUrl: existingOrder?.modelImageUrl || "",
         expectedDeliveryDate: String(formData.get("expectedDeliveryDate") || "")
