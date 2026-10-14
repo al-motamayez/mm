@@ -173,6 +173,8 @@ td { padding: 13px 16px; border-top: 1px solid #f0f2ef; color: #44514b; font-siz
 .fabric-form .form-actions { grid-column: 1 / -1; }
 .fabric-color { display: inline-flex; align-items: center; gap: 6px; }
 .fabric-color i { display: inline-block; width: 18px; height: 18px; border: 1px solid #8c9991; border-radius: 50%; background: var(--fabric-color); }
+.incoming-assignment { display: grid; min-width: 210px; gap: 6px; }
+.incoming-assignment select { min-height: 38px; padding: 6px 9px; font-size: 12px; }
 .fabric-form input[type="color"] { width: 100%; min-height: 44px; padding: 5px; }
 .dashboard-section#clients > .panel { overflow: visible; }
 .dashboard-section#clients .client-account-grid { padding-top: 20px; }

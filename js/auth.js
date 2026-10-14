@@ -110,6 +110,18 @@ async function createPendingAccount(user, fullName, username, phone) {
   }
 }
 
+async function recordAuthEvent(eventType) {
+  const { error } = await supabaseClient.rpc("record_factory_auth_event", {
+    requested_event_type: eventType
+  });
+  if (error) {
+    if (error.code === "PGRST202") {
+      throw new Error("سجل الدخول اللحظي غير مهيأ. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+    }
+    throw new Error(`تعذر تسجيل حدث المصادقة: ${error.message}`);
+  }
+}
+
 function isExistingAuthAccountError(error) {
   return error.code === "user_already_exists"
     || error.code === "email_exists"
@@ -214,6 +226,13 @@ signupForm.addEventListener("submit", async (event) => {
       }
       throw new Error(`تعذر إضافة طلب الحساب إلى users: ${profileError.message}`);
     }
+    try {
+      await recordAuthEvent("signup");
+    } catch (eventError) {
+      const { error: signOutError } = await supabaseClient.auth.signOut();
+      if (signOutError) throw signOutError;
+      throw eventError;
+    }
     const { error: signOutError } = await supabaseClient.auth.signOut();
     if (signOutError) throw signOutError;
     signupForm.reset();
@@ -272,6 +291,13 @@ loginForm.addEventListener("submit", async (event) => {
     if (!data.user) {
       showMessage("تعذر التحقق من بيانات الحساب.");
       return;
+    }
+    try {
+      await recordAuthEvent("login");
+    } catch (eventError) {
+      const { error: signOutError } = await supabaseClient.auth.signOut();
+      if (signOutError) throw signOutError;
+      throw eventError;
     }
     await routeAuthenticatedUser(data.user);
   } catch (profileError) {

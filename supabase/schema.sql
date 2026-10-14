@@ -1037,15 +1037,32 @@ alter table public.factory_deliveries
 
 create table if not exists public.factory_fabrics (
   id uuid primary key default gen_random_uuid(),
+  stock_scope text not null default 'owner' check (stock_scope in ('owner', 'incoming')),
+  customer_id uuid references public.factory_clients (id) on delete set null,
   name text not null check (length(trim(name)) between 1 and 120),
   fabric_type text not null default '',
   color_name text not null default '',
+  color_number text not null default '',
   color_hex text not null default '#FFFFFF' check (color_hex ~ '^#[0-9A-Fa-f]{6}$'),
   unit text not null check (unit in ('متر', 'ثوب', 'لفة')),
   quantity_available numeric(14, 3) not null default 0 check (quantity_available >= 0),
+  received_at timestamptz,
+  received_by uuid references auth.users (id) on delete set null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.factory_fabrics
+  add column if not exists stock_scope text not null default 'owner',
+  add column if not exists customer_id uuid references public.factory_clients (id) on delete set null,
+  add column if not exists color_number text not null default '',
+  add column if not exists received_at timestamptz,
+  add column if not exists received_by uuid references auth.users (id) on delete set null;
+
+alter table public.factory_fabrics
+  drop constraint if exists factory_fabrics_stock_scope_check,
+  add constraint factory_fabrics_stock_scope_check
+    check (stock_scope in ('owner', 'incoming'));
 
 create table if not exists public.factory_fabric_transactions (
   id uuid primary key default gen_random_uuid(),
@@ -1065,25 +1082,68 @@ alter table public.factory_fabric_transactions
 
 create table if not exists public.factory_live_signals (
   id text primary key,
-  order_id uuid not null,
+  order_id uuid,
   client_id uuid,
   worker_id uuid,
-  signal_type text not null check (signal_type in ('order', 'stage')),
+  client_record_id uuid,
+  signal_type text not null check (signal_type in ('order', 'stage', 'client')),
   changed_at timestamptz not null default now()
 );
 
 alter table public.factory_live_signals
+  alter column order_id drop not null,
   add column if not exists client_id uuid,
-  add column if not exists worker_id uuid;
+  add column if not exists worker_id uuid,
+  add column if not exists client_record_id uuid,
+  drop constraint if exists factory_live_signals_signal_type_check,
+  add constraint factory_live_signals_signal_type_check
+    check (signal_type in ('order', 'stage', 'client'));
+
+create table if not exists public.factory_auth_events (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users (id) on delete cascade,
+  event_type text not null check (event_type in ('login', 'signup')),
+  occurred_at timestamptz not null default now()
+);
+
+create or replace function public.record_factory_auth_event(requested_event_type text)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  saved_event_id uuid;
+begin
+  if auth.uid() is null then
+    raise exception 'An authenticated session is required to record this event.';
+  end if;
+  if requested_event_type is null or requested_event_type not in ('login', 'signup') then
+    raise exception 'Unsupported authentication event.';
+  end if;
+
+  insert into public.factory_auth_events (user_id, event_type)
+  values (auth.uid(), requested_event_type)
+  returning id into saved_event_id;
+  return saved_event_id;
+end;
+$$;
+
+revoke all on function public.record_factory_auth_event(text) from public, anon, authenticated;
 
 alter table public.factory_fabrics enable row level security;
 alter table public.factory_fabric_transactions enable row level security;
 alter table public.factory_live_signals enable row level security;
+alter table public.factory_auth_events enable row level security;
 revoke all on public.factory_fabrics, public.factory_fabric_transactions from public, anon, authenticated;
 revoke all on public.factory_live_signals from public, anon, authenticated;
+revoke all on public.factory_auth_events from public, anon, authenticated;
 
-create index if not exists factory_fabrics_name_color_idx
-  on public.factory_fabrics (name, color_hex);
+create index if not exists factory_fabrics_scope_name_color_idx
+  on public.factory_fabrics (stock_scope, name, color_hex);
+create index if not exists factory_fabrics_customer_idx
+  on public.factory_fabrics (customer_id, received_at desc)
+  where stock_scope = 'incoming';
 create index if not exists factory_fabric_transactions_fabric_date_idx
   on public.factory_fabric_transactions (fabric_id, created_at desc);
 create index if not exists factory_fabric_transactions_order_idx
@@ -1096,6 +1156,8 @@ create index if not exists factory_live_signals_client_idx
 create index if not exists factory_live_signals_worker_idx
   on public.factory_live_signals (worker_id)
   where worker_id is not null;
+create index if not exists factory_auth_events_date_idx
+  on public.factory_auth_events (occurred_at desc);
 
 update public.factory_live_signals as signal
 set client_id = factory_order.client_id
@@ -1174,6 +1236,41 @@ $$;
 
 revoke all on function public.emit_factory_live_signal() from public, anon, authenticated;
 
+create or replace function public.emit_factory_client_live_signal()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  changed_client_record_id uuid;
+  signal_key text;
+begin
+  if tg_op = 'DELETE' then
+    changed_client_record_id := old.id;
+  else
+    changed_client_record_id := new.id;
+  end if;
+  signal_key := 'client:' || changed_client_record_id::text;
+
+  insert into public.factory_live_signals (
+    id, order_id, client_id, worker_id, client_record_id, signal_type, changed_at
+  )
+  values (signal_key, null, null, null, changed_client_record_id, 'client', now())
+  on conflict (id) do update
+  set client_record_id = excluded.client_record_id,
+      signal_type = excluded.signal_type,
+      changed_at = excluded.changed_at;
+
+  if tg_op = 'DELETE' then
+    return old;
+  end if;
+  return new;
+end;
+$$;
+
+revoke all on function public.emit_factory_client_live_signal() from public, anon, authenticated;
+
 drop trigger if exists emit_factory_order_live_signal on public.orders;
 create trigger emit_factory_order_live_signal
   after insert or update or delete on public.orders
@@ -1183,6 +1280,11 @@ drop trigger if exists emit_factory_stage_live_signal on public.production_stage
 create trigger emit_factory_stage_live_signal
   after insert or update or delete on public.production_stages
   for each row execute procedure public.emit_factory_live_signal();
+
+drop trigger if exists emit_factory_client_live_signal on public.factory_clients;
+create trigger emit_factory_client_live_signal
+  after insert or update or delete on public.factory_clients
+  for each row execute procedure public.emit_factory_client_live_signal();
 
 alter table public.production_stages
   drop constraint if exists production_stages_fabric_id_fkey,
@@ -1219,6 +1321,7 @@ as $$
 declare
   saved_fabric_id uuid;
   current_unit text;
+  current_scope text;
 begin
   if not public.is_active_factory_admin() then
     raise exception 'Only active admins can manage fabric items.';
@@ -1238,12 +1341,15 @@ begin
             trim(coalesce(requested_color_name, '')), upper(requested_color_hex), requested_unit)
     returning id into saved_fabric_id;
   else
-    select unit into current_unit
+    select unit, stock_scope into current_unit, current_scope
     from public.factory_fabrics
     where id = requested_fabric_id
     for update;
     if not found then
       raise exception 'Fabric stock item not found.';
+    end if;
+    if current_scope <> 'owner' then
+      raise exception 'Incoming fabric records cannot be edited as owner inventory.';
     end if;
     if current_unit is distinct from requested_unit and exists (
       select 1 from public.factory_fabric_transactions
@@ -1282,7 +1388,7 @@ declare
   saved_transaction_id uuid;
 begin
   if not public.is_active_factory_admin() then
-    raise exception 'Only active admins can record incoming fabric stock.';
+    raise exception 'Only active admins can record owner fabric inventory.';
   end if;
   if requested_fabric_id is null or requested_quantity is null
      or requested_quantity <= 0 or requested_quantity > 99999999999.999 then
@@ -1292,7 +1398,8 @@ begin
   update public.factory_fabrics
   set quantity_available = quantity_available + requested_quantity,
       updated_at = now()
-  where id = requested_fabric_id;
+  where id = requested_fabric_id
+    and stock_scope = 'owner';
   if not found then
     raise exception 'Fabric stock item not found.';
   end if;
@@ -1311,6 +1418,106 @@ end;
 $$;
 
 revoke all on function public.record_factory_fabric_receipt(uuid, numeric, timestamptz, text) from public, anon, authenticated;
+
+create or replace function public.register_factory_incoming_fabric(
+  requested_customer_id uuid,
+  requested_name text,
+  requested_type text,
+  requested_color_name text,
+  requested_color_number text,
+  requested_color_hex text,
+  requested_quantity numeric,
+  requested_unit text,
+  requested_received_at timestamptz,
+  requested_notes text
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  saved_fabric_id uuid;
+  receipt_time timestamptz := coalesce(requested_received_at, now());
+begin
+  if not public.has_active_factory_role(array['admin', 'cutting']) then
+    raise exception 'Only active admins and cutting supervisors can register incoming fabric.';
+  end if;
+  if length(trim(coalesce(requested_name, ''))) not between 1 and 120
+     or length(coalesce(requested_type, '')) > 120
+     or length(coalesce(requested_color_name, '')) > 64
+     or length(coalesce(requested_color_number, '')) > 64
+     or upper(coalesce(requested_color_hex, '')) !~ '^#[0-9A-F]{6}$'
+     or requested_quantity is null or requested_quantity <= 0
+     or requested_quantity > 99999999999.999
+     or requested_unit is null or requested_unit not in ('متر', 'ثوب', 'لفة') then
+    raise exception 'Enter valid incoming fabric details and a positive quantity.';
+  end if;
+  if requested_customer_id is not null and not exists (
+    select 1 from public.factory_clients where id = requested_customer_id
+  ) then
+    raise exception 'Selected client was not found.';
+  end if;
+
+  insert into public.factory_fabrics (
+    stock_scope, customer_id, name, fabric_type, color_name, color_number, color_hex,
+    unit, quantity_available, received_at, received_by
+  )
+  values (
+    'incoming', requested_customer_id, trim(requested_name),
+    trim(coalesce(requested_type, '')), trim(coalesce(requested_color_name, '')),
+    trim(coalesce(requested_color_number, '')), upper(requested_color_hex),
+    requested_unit, requested_quantity, receipt_time, auth.uid()
+  )
+  returning id into saved_fabric_id;
+
+  insert into public.factory_fabric_transactions (
+    fabric_id, transaction_type, quantity, notes, actor_id, created_at
+  )
+  values (
+    saved_fabric_id, 'receipt', requested_quantity,
+    coalesce(trim(requested_notes), ''), auth.uid(), receipt_time
+  );
+  return saved_fabric_id;
+end;
+$$;
+
+revoke all on function public.register_factory_incoming_fabric(uuid, text, text, text, text, text, numeric, text, timestamptz, text) from public, anon, authenticated;
+
+create or replace function public.assign_factory_incoming_fabric(
+  requested_fabric_id uuid,
+  requested_customer_id uuid
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not public.is_active_factory_admin() then
+    raise exception 'Only active admins can assign incoming fabric to a client.';
+  end if;
+  if requested_fabric_id is null then
+    raise exception 'Select an incoming fabric record.';
+  end if;
+  if requested_customer_id is not null and not exists (
+    select 1 from public.factory_clients where id = requested_customer_id
+  ) then
+    raise exception 'Selected client was not found.';
+  end if;
+
+  update public.factory_fabrics
+  set customer_id = requested_customer_id,
+      updated_at = now()
+  where id = requested_fabric_id
+    and stock_scope = 'incoming';
+  if not found then
+    raise exception 'Incoming fabric record was not found.';
+  end if;
+end;
+$$;
+
+revoke all on function public.assign_factory_incoming_fabric(uuid, uuid) from public, anon, authenticated;
 
 create or replace function public.adjust_factory_fabric_stock(
   requested_fabric_id uuid,
@@ -1340,6 +1547,7 @@ begin
   set quantity_available = quantity_available + requested_adjustment,
       updated_at = now()
   where id = requested_fabric_id
+    and stock_scope = 'owner'
     and quantity_available + requested_adjustment >= 0;
   if not found then
     raise exception 'Fabric item not found or the adjustment would make stock negative.';
@@ -1381,7 +1589,9 @@ begin
     raise exception 'Fabric items with inventory history cannot be deleted.';
   end if;
   delete from public.factory_fabrics
-  where id = requested_fabric_id and quantity_available = 0;
+  where id = requested_fabric_id
+    and stock_scope = 'owner'
+    and quantity_available = 0;
   if not found then
     raise exception 'Only an unused fabric item with zero stock can be deleted.';
   end if;
@@ -1405,6 +1615,7 @@ declare
   prior_quantity numeric(14, 3);
   resolved_fabric public.factory_fabrics%rowtype;
   quantity_delta numeric(14, 3);
+  order_customer_id uuid;
 begin
   if requested_order_id is null or requested_fabric_id is null
      or requested_quantity is null or requested_quantity <= 0
@@ -1427,6 +1638,19 @@ begin
   for update;
   if not found then
     raise exception 'Selected fabric stock item not found.';
+  end if;
+  if resolved_fabric.stock_scope <> 'incoming' then
+    raise exception 'Cutting may only use fabric registered as incoming for cutting.';
+  end if;
+
+  select customer_id into order_customer_id
+  from public.orders
+  where id = requested_order_id;
+  if resolved_fabric.customer_id is null then
+    raise exception 'Assign incoming fabric to a client before using it for cutting.';
+  end if;
+  if resolved_fabric.customer_id is distinct from order_customer_id then
+    raise exception 'Incoming fabric is assigned to a different client.';
   end if;
 
   prior_quantity := coalesce(prior_quantity, 0);
@@ -2373,11 +2597,22 @@ create policy "Users read their own factory deliveries"
 drop policy if exists "Factory staff read fabric stock" on public.factory_fabrics;
 create policy "Factory staff read fabric stock"
   on public.factory_fabrics for select to authenticated
-  using (public.has_active_factory_role(array['admin', 'cutting']));
+  using (
+    public.is_active_factory_admin()
+    or (
+      stock_scope = 'incoming'
+      and public.has_active_factory_role(array['cutting'])
+    )
+  );
 
 drop policy if exists "Admins read fabric transactions" on public.factory_fabric_transactions;
 create policy "Admins read fabric transactions"
   on public.factory_fabric_transactions for select to authenticated
+  using (public.is_active_factory_admin());
+
+drop policy if exists "Admins read authentication events" on public.factory_auth_events;
+create policy "Admins read authentication events"
+  on public.factory_auth_events for select to authenticated
   using (public.is_active_factory_admin());
 
 drop policy if exists "Factory roles read safe live signals" on public.factory_live_signals;
@@ -2396,7 +2631,8 @@ create policy "Factory roles read safe live signals"
   );
 
 revoke all on public.orders, public.production_stages, public.factory_records, public.factory_deliveries,
-  public.factory_fabrics, public.factory_fabric_transactions, public.factory_live_signals from public, anon, authenticated;
+  public.factory_fabrics, public.factory_fabric_transactions, public.factory_live_signals,
+  public.factory_auth_events from public, anon, authenticated;
 alter table public.factory_clients enable row level security;
 drop policy if exists "Admins manage factory clients" on public.factory_clients;
 create policy "Admins manage factory clients"
@@ -2417,6 +2653,7 @@ grant select on public.factory_deliveries to authenticated;
 grant select on public.factory_fabrics to authenticated;
 grant select on public.factory_fabric_transactions to authenticated;
 grant select on public.factory_live_signals to authenticated;
+grant select on public.factory_auth_events to authenticated;
 grant update (completed_quantity, status, updated_at) on public.production_stages to authenticated;
 revoke all on function public.has_active_factory_role(text[]) from public, anon, authenticated;
 grant execute on function public.has_active_factory_role(text[]) to authenticated;
@@ -2441,6 +2678,10 @@ revoke all on function public.save_factory_fabric(uuid, text, text, text, text, 
 grant execute on function public.save_factory_fabric(uuid, text, text, text, text, text) to authenticated;
 revoke all on function public.record_factory_fabric_receipt(uuid, numeric, timestamptz, text) from public, anon, authenticated;
 grant execute on function public.record_factory_fabric_receipt(uuid, numeric, timestamptz, text) to authenticated;
+revoke all on function public.register_factory_incoming_fabric(uuid, text, text, text, text, text, numeric, text, timestamptz, text) from public, anon, authenticated;
+grant execute on function public.register_factory_incoming_fabric(uuid, text, text, text, text, text, numeric, text, timestamptz, text) to authenticated;
+revoke all on function public.assign_factory_incoming_fabric(uuid, uuid) from public, anon, authenticated;
+grant execute on function public.assign_factory_incoming_fabric(uuid, uuid) to authenticated;
 revoke all on function public.adjust_factory_fabric_stock(uuid, numeric, timestamptz, text) from public, anon, authenticated;
 grant execute on function public.adjust_factory_fabric_stock(uuid, numeric, timestamptz, text) to authenticated;
 revoke all on function public.delete_factory_fabric(uuid) from public, anon, authenticated;
@@ -2448,6 +2689,9 @@ grant execute on function public.delete_factory_fabric(uuid) to authenticated;
 revoke all on function public.reconcile_factory_fabric_usage(uuid, uuid, numeric) from public, anon, authenticated;
 revoke all on function public.guard_factory_financial_history() from public, anon, authenticated;
 revoke all on function public.emit_factory_live_signal() from public, anon, authenticated;
+revoke all on function public.emit_factory_client_live_signal() from public, anon, authenticated;
+revoke all on function public.record_factory_auth_event(text) from public, anon, authenticated;
+grant execute on function public.record_factory_auth_event(text) to authenticated;
 revoke all on function public.mark_factory_cutting_ready(uuid) from public, anon, authenticated;
 grant execute on function public.mark_factory_cutting_ready(uuid) to authenticated;
 revoke all on function public.finish_factory_cutting(uuid, jsonb, jsonb, text, text, integer, text, uuid, numeric) from public, anon, authenticated;
@@ -2507,6 +2751,7 @@ do $$
 declare
   table_name text;
   publication_covers_all boolean;
+  publication_includes_public_schema boolean;
 begin
   if not exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
     execute 'create publication supabase_realtime';
@@ -2515,7 +2760,20 @@ begin
   select puballtables into publication_covers_all
   from pg_publication
   where pubname = 'supabase_realtime';
-  if not publication_covers_all then
+  select exists (
+    select 1
+    from pg_publication_namespace as publication_namespace
+    join pg_publication as publication
+      on publication.oid = publication_namespace.pnpubid
+    where publication.pubname = 'supabase_realtime'
+      and publication_namespace.pnnspid = 'public'::regnamespace
+  ) into publication_includes_public_schema;
+
+  if publication_covers_all or publication_includes_public_schema then
+    raise warning 'supabase_realtime publishes all public tables; switch it to explicit tables if column-level financial privacy is required.';
+  end if;
+
+  if not publication_covers_all and not publication_includes_public_schema then
     foreach table_name in array array['orders', 'production_stages'] loop
       if exists (
         select 1 from pg_publication_tables
@@ -2528,21 +2786,28 @@ begin
     end loop;
   end if;
 
-  foreach table_name in array array[
-    'factory_live_signals',
-    'factory_fabrics',
-    'factory_fabric_transactions'
-  ] loop
-    if not exists (
-      select 1
-      from pg_publication_tables
-      where pubname = 'supabase_realtime'
-        and schemaname = 'public'
-        and tablename = table_name
-    ) then
-      execute format('alter publication supabase_realtime add table public.%I', table_name);
-    end if;
-  end loop;
+  if not publication_covers_all and not publication_includes_public_schema then
+    foreach table_name in array array[
+      'factory_live_signals',
+      'factory_auth_events',
+      'factory_fabrics',
+      'factory_fabric_transactions',
+      'users',
+      'factory_clients',
+      'factory_records',
+      'factory_deliveries'
+    ] loop
+      if not exists (
+        select 1
+        from pg_publication_tables
+        where pubname = 'supabase_realtime'
+          and schemaname = 'public'
+          and tablename = table_name
+      ) then
+        execute format('alter publication supabase_realtime add table public.%I', table_name);
+      end if;
+    end loop;
+  end if;
 end;
 $$;
 
@@ -2550,5 +2815,7 @@ alter table public.orders replica identity full;
 alter table public.production_stages replica identity full;
 alter table public.factory_fabrics replica identity full;
 alter table public.factory_fabric_transactions replica identity full;
+alter table public.factory_auth_events replica identity full;
+alter table public.users replica identity full;
 
 notify pgrst, 'reload schema';
