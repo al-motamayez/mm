@@ -230,11 +230,13 @@ td { padding: 13px 16px; border-top: 1px solid #f0f2ef; color: #44514b; font-siz
 .client-history-card { height: 100%; }
 .financial-debit { color: #8b3028; font-weight: 700; }
 .financial-credit { color: #17613f; font-weight: 700; }
-.client-balance-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 17px 0 12px; }
+.client-balance-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(125px, 1fr)); gap: 10px; margin: 17px 0 12px; }
 .client-balance-grid div { min-width: 0; padding: 10px; border-radius: 9px; background: #f5f8f5; }
 .client-balance-grid span, .client-balance-grid strong { display: block; }
 .client-balance-grid span { color: var(--muted); font-size: 10px; }
 .client-balance-grid strong { margin-top: 5px; color: var(--green-dark); font-size: 13px; overflow-wrap: anywhere; }
+.client-balance-grid small { display: block; margin-top: 4px; color: #4f6058; font-size: 11px; }
+.client-unpriced-alert { margin: 8px 0 12px; padding: 10px 12px; border: 1px solid #e3c16d; border-radius: 8px; color: #694a09; background: #fff8df; font-weight: 700; }
 .client-notes-preview { min-height: 24px; color: #68756f; font-size: 12px; line-height: 1.7; }
 .clients-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
 .clients-toolbar h2 { margin: 0; color: var(--green-dark); font-size: 22px; }
@@ -402,7 +404,7 @@ input, select, .modal-form textarea { color: #1d3028; font-size: 16px; }
   .client-form { grid-template-columns: minmax(0, 1fr); }
   .client-form .client-notes-field, .client-form .form-actions { grid-column: auto; }
   .client-account-grid { grid-template-columns: minmax(0, 1fr); padding: 12px; }
-  .client-balance-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  .client-balance-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
   .client-balance-grid div { padding: 8px; }
   .client-activity-grid { grid-template-columns: 1fr; }
   .clients-toolbar { align-items: flex-start; flex-direction: column; }

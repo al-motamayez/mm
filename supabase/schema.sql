@@ -370,6 +370,7 @@ create table if not exists public.orders (
   customer_id uuid references public.factory_clients (id) on delete set null,
   model_name text,
   model_number text not null default '',
+  sender_name text,
   total_pieces integer not null default 0 check (total_pieces >= 0),
   status text not null default 'قيد الانتظار',
   created_at timestamptz not null default now()
@@ -382,6 +383,7 @@ alter table public.orders
 alter table public.orders
   add column if not exists model_name text,
   add column if not exists model_number text not null default '',
+  add column if not exists sender_name text,
   add column if not exists colors text not null default '',
   add column if not exists sizes text not null default '',
   add column if not exists total_pieces integer not null default 0,
@@ -490,9 +492,14 @@ set model_name = coalesce(
       when 'قيد الانتظار' then 'قيد الانتظار'
       when 'معلق' then 'معلق'
       when 'تحت الإنشاء' then 'تحت الإنشاء'
-      when 'في الخط' then 'في الخط'
-      when 'تحت التصنيع' then 'تحت التصنيع'
-      when 'قيد الإنتاج' then 'قيد الإنتاج'
+      when 'قيد الفرش' then 'قيد الفرش'
+      when 'تم الفرش / جاهز للقص' then 'تم الفرش / جاهز للقص'
+      when 'تم القص' then 'تم القص'
+      when 'معلق - في انتظار الخياطة' then 'معلق - في انتظار الخياطة'
+      when 'في الخياطة' then 'في الخياطة'
+      when 'في الخط' then 'في الخياطة'
+      when 'تحت التصنيع' then 'قيد الفرش'
+      when 'قيد الإنتاج' then 'قيد الفرش'
       else 'قيد الانتظار'
     end;
 
@@ -514,7 +521,11 @@ alter table public.orders
   add constraint orders_delivered_pieces_nonnegative check (delivered_pieces >= 0),
   add constraint orders_paid_amount_nonnegative check (paid_amount >= 0),
   add constraint orders_factory_status_check check (
-    status in ('قيد الانتظار', 'معلق', 'تحت الإنشاء', 'في الخط', 'تحت التصنيع', 'قيد الإنتاج', 'جاهز للتسليم', 'مكتمل')
+    status in (
+      'قيد الانتظار', 'معلق', 'تحت الإنشاء', 'قيد الفرش',
+      'تم الفرش / جاهز للقص', 'تم القص', 'معلق - في انتظار الخياطة',
+      'في الخياطة', 'جاهز للتسليم', 'مكتمل'
+    )
   );
 
 do $$
@@ -602,6 +613,7 @@ returns table (
   customer_id uuid,
   model_name text,
   model_number text,
+  sender_name text,
   colors text,
   sizes text,
   total_pieces integer,
@@ -632,6 +644,7 @@ begin
            factory_order.customer_id,
            factory_order.model_name,
            factory_order.model_number,
+           factory_order.sender_name,
            factory_order.colors,
            factory_order.sizes,
            factory_order.total_pieces,
@@ -682,6 +695,9 @@ declare
   saved_order_id uuid;
   matched_customer_id uuid;
   current_customer_id uuid;
+  current_price_per_piece numeric;
+  current_status text;
+  current_total_pieces integer;
   matched_client_id uuid;
   resolved_model_name text;
 begin
@@ -704,7 +720,11 @@ begin
     or requested_priority is null
     or requested_priority not in ('عادي', 'مرتفع', 'عاجل')
     or requested_status is null
-    or requested_status not in ('قيد الانتظار', 'معلق', 'تحت الإنشاء', 'في الخط', 'تحت التصنيع', 'قيد الإنتاج', 'جاهز للتسليم', 'مكتمل') then
+    or requested_status not in (
+      'قيد الانتظار', 'معلق', 'تحت الإنشاء', 'قيد الفرش',
+      'تم الفرش / جاهز للقص', 'تم القص', 'معلق - في انتظار الخياطة',
+      'في الخياطة', 'جاهز للتسليم', 'مكتمل'
+    ) then
     raise exception 'Invalid factory order data.';
   end if;
 
@@ -724,6 +744,9 @@ begin
   );
 
   if requested_order_id is null then
+    if requested_status in ('قيد الفرش', 'تم الفرش / جاهز للقص', 'تم القص', 'معلق - في انتظار الخياطة', 'في الخياطة') then
+      raise exception 'A new order must start in the waiting, paused, or under-construction state.';
+    end if;
     insert into public.orders (
       client_id, customer_id, model_name, model_number, colors, sizes,
       total_pieces, delivered_pieces, price_per_piece, paid_amount, expected_delivery_date, model_image_url, priority, status
@@ -741,8 +764,8 @@ begin
         line_name = nullif(trim(requested_line_name), '')
     where order_id = saved_order_id;
   else
-    select customer_id
-      into current_customer_id
+    select customer_id, price_per_piece, status, total_pieces
+      into current_customer_id, current_price_per_piece, current_status, current_total_pieces
     from public.orders
     where id = requested_order_id
     for update;
@@ -765,13 +788,17 @@ begin
     ) then
       raise exception 'Record deliveries through the delivery workflow; delivered totals cannot be edited.';
     end if;
-    if exists (
-      select 1 from public.orders
-      where id = requested_order_id
-        and delivered_pieces > 0
-        and price_per_piece <> requested_price_per_piece
-    ) then
-      raise exception 'The unit price cannot be changed after a delivery has been recorded.';
+    if requested_status = 'في الخياطة'
+       and (current_status not in ('معلق - في انتظار الخياطة', 'في الخياطة') or current_total_pieces <= 0) then
+      raise exception 'Move the order to waiting for sewing before an admin starts the sewing stage.';
+    end if;
+    if requested_status = 'معلق - في انتظار الخياطة'
+       and current_status not in ('تم القص', 'معلق - في انتظار الخياطة') then
+      raise exception 'An order must have completed cutting before waiting for sewing.';
+    end if;
+    if requested_status in ('قيد الفرش', 'تم الفرش / جاهز للقص', 'تم القص')
+       and requested_status <> current_status then
+      raise exception 'Cutting-stage statuses can only be advanced by the cutting workflow.';
     end if;
 
     update public.production_stages
@@ -802,6 +829,18 @@ begin
         priority = trim(requested_priority),
         status = trim(requested_status)
     where id = requested_order_id;
+    if current_price_per_piece is distinct from requested_price_per_piece then
+      update public.factory_deliveries
+      set price_per_piece = requested_price_per_piece
+      where order_id = requested_order_id;
+    end if;
+    if requested_status = 'في الخياطة' then
+      update public.production_stages
+      set status = 'قيد التنفيذ',
+          updated_at = now()
+      where order_id = requested_order_id
+        and stage_name = 'sewing';
+    end if;
     saved_order_id := requested_order_id;
   end if;
 
@@ -1152,6 +1191,7 @@ set search_path = public
 as $$
 declare
   matched_customer public.factory_clients%rowtype;
+  submitted_by_name text;
   normalized_sizes jsonb;
   normalized_colors text;
   cut_total integer;
@@ -1180,13 +1220,23 @@ begin
     raise exception 'The selected factory customer does not exist.';
   end if;
 
+  select coalesce(nullif(trim(name), ''), username)
+    into submitted_by_name
+  from public.users
+  where id = auth.uid()
+    and role = 'cutting'
+    and status = 'active';
+  if not found then
+    raise exception 'The active cutting supervisor profile could not be identified.';
+  end if;
+
   select breakdown.normalized_sizes, breakdown.normalized_colors,
          breakdown.total_pieces, breakdown.total_plys
     into normalized_sizes, normalized_colors, cut_total, total_plys
   from public.calculate_factory_cutting_breakdown(requested_size_data, requested_color_ply_data) as breakdown;
 
   insert into public.orders (
-    id, client_id, customer_id, model_name, model_number, colors, sizes,
+    id, client_id, customer_id, model_name, model_number, sender_name, colors, sizes,
     total_pieces, status, model_image_url
   )
   values (
@@ -1194,27 +1244,146 @@ begin
     coalesce(nullif(trim(coalesce(requested_model_name, '')), ''),
              nullif(trim(coalesce(requested_model_number, '')), '')),
     coalesce(trim(requested_model_number), ''),
+    submitted_by_name,
     normalized_colors,
     normalized_sizes::text,
-    cut_total,
-    'في الخط',
+    0,
+    'قيد الفرش',
     nullif(trim(coalesce(requested_model_image_url, '')), '')
   );
 
   update public.production_stages
-  set target_quantity = cut_total,
-      completed_quantity = cut_total,
+  set target_quantity = 0,
+      completed_quantity = 0,
       fabric = trim(requested_fabric),
       bolt_count = requested_bolt_count,
       layer_count = total_plys,
       color_ply_data = requested_color_ply_data,
       technical_notes = coalesce(trim(requested_technical_notes), ''),
-      status = 'مكتمل',
+      status = 'قيد الفرش',
       updated_at = now()
   where order_id = requested_order_id
     and stage_name = 'cutting';
 
-  return cut_total;
+  return total_plys;
+end;
+$$;
+
+drop function if exists public.update_factory_cutting_progress(uuid, jsonb, jsonb, text, integer, text);
+create function public.update_factory_cutting_progress(
+  requested_order_id uuid,
+  requested_size_data jsonb,
+  requested_color_ply_data jsonb,
+  requested_fabric text,
+  requested_bolt_count integer,
+  requested_technical_notes text
+)
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  current_order public.orders%rowtype;
+  normalized_sizes jsonb;
+  normalized_colors text;
+  calculated_total integer;
+  total_plys integer;
+begin
+  if not public.has_active_factory_role(array['cutting']) then
+    raise exception 'Only active cutting supervisors can update cutting progress.';
+  end if;
+  if requested_order_id is null
+     or length(trim(coalesce(requested_fabric, ''))) = 0
+     or requested_bolt_count is null or requested_bolt_count < 1 then
+    raise exception 'A valid order, fabric, and positive bolt count are required.';
+  end if;
+
+  select *
+    into current_order
+  from public.orders
+  where id = requested_order_id
+  for update;
+  if not found or current_order.archived_at is not null
+     or current_order.status not in ('قيد الانتظار', 'معلق', 'تحت الإنشاء', 'قيد الفرش') then
+    raise exception 'This order is not accepting live cutting updates.';
+  end if;
+
+  select breakdown.normalized_sizes, breakdown.normalized_colors,
+         breakdown.total_pieces, breakdown.total_plys
+    into normalized_sizes, normalized_colors, calculated_total, total_plys
+  from public.calculate_factory_cutting_breakdown(requested_size_data, requested_color_ply_data) as breakdown;
+
+  update public.orders
+  set colors = normalized_colors,
+      sizes = normalized_sizes::text,
+      status = 'قيد الفرش'
+  where id = requested_order_id;
+
+  update public.production_stages
+  set fabric = trim(requested_fabric),
+      bolt_count = requested_bolt_count,
+      layer_count = total_plys,
+      color_ply_data = requested_color_ply_data,
+      technical_notes = coalesce(trim(requested_technical_notes), ''),
+      status = 'قيد الفرش',
+      updated_at = now()
+  where order_id = requested_order_id
+    and stage_name = 'cutting';
+  if not found then
+    raise exception 'The cutting stage for this order does not exist.';
+  end if;
+
+  return total_plys;
+end;
+$$;
+
+drop function if exists public.mark_factory_cutting_ready(uuid);
+create function public.mark_factory_cutting_ready(requested_order_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  current_order public.orders%rowtype;
+  current_layer_count integer;
+begin
+  if not public.has_active_factory_role(array['cutting']) then
+    raise exception 'Only active cutting supervisors can mark a bed ready for cutting.';
+  end if;
+  if requested_order_id is null then
+    raise exception 'A valid factory order is required.';
+  end if;
+
+  select *
+    into current_order
+  from public.orders
+  where id = requested_order_id
+  for update;
+  if not found or current_order.archived_at is not null
+     or current_order.status <> 'قيد الفرش' then
+    raise exception 'Only an order currently being spread can be marked ready.';
+  end if;
+
+  select layer_count
+    into current_layer_count
+  from public.production_stages
+  where order_id = requested_order_id
+    and stage_name = 'cutting'
+  for update;
+  if not found or current_layer_count < 1 then
+    raise exception 'Save at least one positive color ply before marking the bed ready.';
+  end if;
+
+  update public.orders
+  set status = 'تم الفرش / جاهز للقص'
+  where id = requested_order_id;
+  update public.production_stages
+  set status = 'تم الفرش / جاهز للقص',
+      updated_at = now()
+  where order_id = requested_order_id
+    and stage_name = 'cutting';
 end;
 $$;
 
@@ -1266,13 +1435,16 @@ begin
   if not found or current_order.archived_at is not null then
     raise exception 'The active factory order was not found.';
   end if;
+  if current_order.status <> 'تم الفرش / جاهز للقص' then
+    raise exception 'Mark the bed ready for cutting before recording its final piece count.';
+  end if;
 
   update public.orders
   set sizes = normalized_sizes::text,
       colors = normalized_colors,
       model_image_url = coalesce(nullif(trim(requested_model_image_url), ''), model_image_url),
       total_pieces = cut_total,
-      status = 'في الخط'
+      status = 'تم القص'
   where id = requested_order_id;
 
   update public.production_stages
@@ -1623,6 +1795,7 @@ grant insert (name, phone, notes) on public.factory_clients to authenticated;
 grant update (name, phone, notes, updated_at) on public.factory_clients to authenticated;
 grant select (id, client_id, customer_id, model_name, model_number, colors, sizes, total_pieces, delivered_pieces, archived_at, status, priority, created_at)
   on public.orders to authenticated;
+grant select (sender_name) on public.orders to authenticated;
 grant select (model_image_url) on public.orders to authenticated;
 grant select on public.production_stages to authenticated;
 grant select, insert, update on public.factory_records to authenticated;
@@ -1645,6 +1818,10 @@ grant execute on function public.record_factory_delivery(uuid, integer, text) to
 revoke all on function public.calculate_factory_cutting_breakdown(jsonb, jsonb) from public, anon, authenticated;
 revoke all on function public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, integer, text) from public, anon, authenticated;
 grant execute on function public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, integer, text) to authenticated;
+revoke all on function public.update_factory_cutting_progress(uuid, jsonb, jsonb, text, integer, text) from public, anon, authenticated;
+grant execute on function public.update_factory_cutting_progress(uuid, jsonb, jsonb, text, integer, text) to authenticated;
+revoke all on function public.mark_factory_cutting_ready(uuid) from public, anon, authenticated;
+grant execute on function public.mark_factory_cutting_ready(uuid) to authenticated;
 revoke all on function public.finish_factory_cutting(uuid, jsonb, jsonb, text, text, integer, text) from public, anon, authenticated;
 grant execute on function public.finish_factory_cutting(uuid, jsonb, jsonb, text, text, integer, text) to authenticated;
 revoke all on function public.delete_factory_order(uuid) from public, anon, authenticated;

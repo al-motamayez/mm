@@ -177,14 +177,14 @@ async function readDashboardData(session) {
   } else {
     let ordersQuery = supabaseClient
       .from("orders")
-      .select("id, model_name, model_number, colors, sizes, total_pieces, model_image_url, priority, archived_at, status, created_at")
+      .select("id, model_name, model_number, sender_name, colors, sizes, total_pieces, model_image_url, priority, archived_at, status, created_at")
       .is("archived_at", null)
       .order("created_at", { ascending: false });
     ({ data: orders, error: ordersError } = await ordersQuery);
     if (ordersError?.code === "42703") {
       ordersQuery = supabaseClient
         .from("orders")
-        .select("id, model_name, model_number, colors, sizes, total_pieces, model_image_url, priority, status, created_at")
+        .select("id, model_name, model_number, sender_name, colors, sizes, total_pieces, model_image_url, priority, status, created_at")
         .order("created_at", { ascending: false });
       ({ data: orders, error: ordersError } = await ordersQuery);
     }
@@ -252,6 +252,7 @@ async function readDashboardData(session) {
       customerId: order.customer_id,
       name: order.model_name || order.model_number || "موديل بدون اسم",
       modelNumber: order.model_number || "",
+      senderName: order.sender_name || "",
       client: clientsById.get(order.customer_id)?.name || "",
       quantity: order.total_pieces,
       completedPieces,
@@ -268,6 +269,10 @@ async function readDashboardData(session) {
       remainingAmount: Number(order.remaining_amount || 0),
       expectedDeliveryDate: order.expected_delivery_date || "",
       status: order.status,
+      displayStatus: order.status === "قيد الفرش" && Number(cuttingStage?.layer_count) > 0
+        ? `قيد الفرش - تم فرش ${new Intl.NumberFormat("ar-EG").format(cuttingStage.layer_count)} رئات`
+        : order.status,
+      cuttingPlys: Number(cuttingStage?.layer_count || 0),
       fabric: cuttingStage?.fabric || "",
       boltCount: Number(cuttingStage?.bolt_count || 0),
       layerCount: Number(cuttingStage?.layer_count || 0),
@@ -299,7 +304,9 @@ async function readDashboardData(session) {
       priority: ordersById.get(stage.order_id)?.priority || "عادي",
       total: stage.target_quantity || ordersById.get(stage.order_id)?.total_pieces || 0,
       cut: stage.completed_quantity || 0,
-      status: stage.status
+      status: stage.status,
+      orderStatus: ordersById.get(stage.order_id)?.status || stage.status,
+      senderName: ordersById.get(stage.order_id)?.sender_name || ""
     }));
   data.sewing = stages
     .filter((stage) => stageNames.get(stage.stage_name) === "sewing")
@@ -424,7 +431,8 @@ function escapeHtml(value) {
 }
 
 function money(value) {
-  return `${new Intl.NumberFormat("ar-EG").format(value)} ج.م`;
+  const rounded = Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+  return `${new Intl.NumberFormat("ar-EG", { minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(rounded)} ج.م`;
 }
 
 function parseSizeData(value) {
@@ -775,8 +783,9 @@ function formatRecordDate(value) {
 }
 
 function statusClass(value) {
-  if (["قيد المراجعة", "قيد التنفيذ", "قيد الإنتاج", "قيد الانتظار", "معلق", "تحت الإنشاء", "في الخط", "تحت التصنيع", "جار العمل"].includes(value)) return "warning";
-  if (value === "جديدة" || value === "جاهز للتسليم") return "info";
+  if (String(value).startsWith("قيد الفرش")
+    || ["قيد المراجعة", "قيد التنفيذ", "قيد الإنتاج", "قيد الانتظار", "معلق", "تحت الإنشاء", "تم الفرش / جاهز للقص", "معلق - في انتظار الخياطة", "جار العمل"].includes(value)) return "warning";
+  if (["جديدة", "جاهز للتسليم", "تم القص", "في الخياطة"].includes(value)) return "info";
   if (value === "جاهز للتسليم" || value === "مكتمل") return "";
   return "muted";
 }
@@ -810,7 +819,7 @@ function orderCards(models, withActions = false) {
   return `<div class="order-cards">${models.map((item) => {
     const index = dashboardData.models.findIndex((order) => order.id === item.id);
     return `<article class="order-card">
-    <header class="order-card-heading">${modelImageMarkup(item.modelImageUrl)}<div><p class="order-card-label">الموديل ${item.modelNumber ? `· رقم ${escapeHtml(item.modelNumber)}` : ""} · الأولوية: ${escapeHtml(item.priority || "عادي")}</p><h3>${escapeHtml(item.name || item.modelNumber || "موديل بدون اسم")}</h3></div>${statusTag(item.status)}</header>
+    <header class="order-card-heading">${modelImageMarkup(item.modelImageUrl)}<div><p class="order-card-label">الموديل ${item.modelNumber ? `· رقم ${escapeHtml(item.modelNumber)}` : ""} · الأولوية: ${escapeHtml(item.priority || "عادي")}</p><h3>${escapeHtml(item.name || item.modelNumber || "موديل بدون اسم")}</h3></div>${statusTag(item.displayStatus || item.status)}</header>
     <p class="order-card-client">العميل: <strong>${escapeHtml(item.client || "غير مربوط بعميل · بانتظار مراجعة الإدارة")}</strong></p>
     <dl class="order-card-details">
       <div><dt>الألوان</dt><dd>${escapeHtml(item.colors || "—")}</dd></div><div><dt>المقاسات / العدد لكل مقاس</dt><dd>${escapeHtml(sizeSummary(item.sizes))}</dd></div>
@@ -820,6 +829,7 @@ function orderCards(models, withActions = false) {
       <div><dt>الكمية المسلّمة فعليًا</dt><dd>${new Intl.NumberFormat("ar-EG").format(item.deliveredPieces)} قطعة</dd></div><div><dt>المتبقي (السالب يعني زيادة تسليم)</dt><dd>${item.quantity ? `${new Intl.NumberFormat("ar-EG").format(item.remainingPieces)} قطعة` : "بانتظار الحصر بعد القص"}</dd></div>
       <div><dt>سعر القطعة</dt><dd>${money(item.pricePerPiece)}</dd></div><div><dt>قيمة الكمية المسلّمة</dt><dd>${money(item.totalAmount)}</dd></div>
       <div><dt>التسليم المتوقع</dt><dd>${formatDateOnly(item.expectedDeliveryDate)}</dd></div><div><dt>تاريخ الإنشاء</dt><dd>${formatDateTime(item.created_at)}</dd></div>
+      ${item.senderName ? `<div><dt>تم الإرسال بواسطة</dt><dd>${escapeHtml(item.senderName)}</dd></div>` : ""}
       <div><dt>المدفوع</dt><dd>${money(item.paidAmount)}</dd></div><div><dt>المتبقي من قيمة المسلّم</dt><dd>${money(item.remainingAmount)}</dd></div>
     </dl>
     ${withActions ? `<footer class="order-card-actions"><button class="row-action" type="button" data-edit-kind="models" data-index="${index}">تعديل الطلبية</button>${item.customerId ? `<button class="row-action" type="button" data-action="record-delivery" data-index="${index}">تسجيل تسليم</button>` : '<span class="order-delete-protected">عيّن العميل قبل تسجيل أي تسليم</span>'}${item.status === "مكتمل" ? '<span class="status">مغلق / مؤرشف</span>' : `<button class="row-action order-close-action" type="button" data-action="close-order" data-index="${index}">اكتمل / إغلاق الطلب</button>`}${orderCanBeDeleted(item) ? `<button class="row-action order-delete-action" type="button" data-action="delete-order" data-order-id="${escapeHtml(item.id)}">حذف الموديل</button>` : '<span class="order-delete-protected" title="لا يمكن حذف طلب له تسليمات أو مبالغ مسجلة أو مؤرشف">محمي بسجل مالي / تسليم</span>'}</footer>` : ""}
@@ -828,25 +838,26 @@ function orderCards(models, withActions = false) {
 }
 
 function orderProgress(status) {
-  const stages = ["قيد الانتظار", "معلق", "تحت الإنشاء", "في الخط", "تحت التصنيع", "جاهز للتسليم", "مكتمل"];
-  const activeStatus = status === "قيد الإنتاج" ? "تحت التصنيع" : status;
+  const stages = ["قيد الانتظار", "قيد الفرش", "تم الفرش / جاهز للقص", "تم القص", "معلق - في انتظار الخياطة", "في الخياطة", "جاهز للتسليم", "مكتمل"];
+  const activeStatus = status === "معلق" || status === "تحت الإنشاء" ? "قيد الانتظار" : status;
   const activeIndex = Math.max(0, stages.indexOf(activeStatus));
   const steps = stages.map((stage, index) => `<span class="order-progress-step${index <= activeIndex ? " complete" : ""}${index === activeIndex ? " current" : ""}">${stage}</span>`).join("");
   return `<div class="order-progress" aria-label="تقدم الطلب: ${escapeHtml(activeStatus)}">${steps}</div>`;
 }
 
 function clientOrderRows(orders) {
-  return orders.map((item) => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.colors || "—")}</td><td>${escapeHtml(item.sizes || "—")}</td><td>${item.quantity ? new Intl.NumberFormat("ar-EG").format(item.quantity) : "بانتظار الحصر"}</td><td>${new Intl.NumberFormat("ar-EG").format(item.deliveredPieces)}</td><td>${item.quantity ? new Intl.NumberFormat("ar-EG").format(item.remainingPieces) : "بانتظار الحصر"}</td><td>${statusTag(item.status)}</td><td>${orderProgress(item.status)}</td></tr>`);
+  return orders.map((item) => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.colors || "—")}</td><td>${escapeHtml(item.sizes || "—")}</td><td>${item.quantity ? new Intl.NumberFormat("ar-EG").format(item.quantity) : "بانتظار الحصر"}</td><td>${new Intl.NumberFormat("ar-EG").format(item.deliveredPieces)}</td><td>${item.quantity ? new Intl.NumberFormat("ar-EG").format(item.remainingPieces) : "بانتظار الحصر"}</td><td>${statusTag(item.displayStatus || item.status)}</td><td>${orderProgress(item.status)}</td></tr>`);
 }
 
 function clientOrderCards(orders) {
   if (!orders.length) return '<div class="empty-state">لا توجد طلبيات لعرضها حاليًا.</div>';
   return `<div class="order-cards">${orders.map((item) => `<article class="order-card client-order-card">
-    <header class="order-card-heading">${modelImageMarkup(item.modelImageUrl)}<div><p class="order-card-label">الموديل ${item.modelNumber ? `· رقم ${escapeHtml(item.modelNumber)}` : ""}</p><h3>${escapeHtml(item.name || item.modelNumber || "موديل بدون اسم")}</h3></div>${statusTag(item.status)}</header>
+    <header class="order-card-heading">${modelImageMarkup(item.modelImageUrl)}<div><p class="order-card-label">الموديل ${item.modelNumber ? `· رقم ${escapeHtml(item.modelNumber)}` : ""}</p><h3>${escapeHtml(item.name || item.modelNumber || "موديل بدون اسم")}</h3></div>${statusTag(item.displayStatus || item.status)}</header>
     <dl class="order-card-details">
       <div><dt>الألوان</dt><dd>${escapeHtml(item.colors || "—")}</dd></div><div><dt>المقاسات / العدد لكل مقاس</dt><dd>${escapeHtml(sizeSummary(item.sizes))}</dd></div>
       <div><dt>العدد الفعلي بعد القص</dt><dd>${item.quantity ? new Intl.NumberFormat("ar-EG").format(item.quantity) : "بانتظار الحصر"}</dd></div><div><dt>الكمية المنجزة</dt><dd>${new Intl.NumberFormat("ar-EG").format(item.completedPieces)}</dd></div>
       <div><dt>الكمية المسلّمة</dt><dd>${new Intl.NumberFormat("ar-EG").format(item.deliveredPieces)}</dd></div><div><dt>المتبقي</dt><dd>${item.quantity ? new Intl.NumberFormat("ar-EG").format(item.remainingPieces) : "بانتظار الحصر بعد القص"}</dd></div>
+      ${item.senderName ? `<div><dt>تم الإرسال بواسطة</dt><dd>${escapeHtml(item.senderName)}</dd></div>` : ""}
       <div><dt>سعر القطعة</dt><dd>${money(item.pricePerPiece)}</dd></div><div><dt>إجمالي قيمة المسلّم</dt><dd>${money(item.totalAmount)}</dd></div>
       <div><dt>التسليم المتوقع</dt><dd>${formatDateOnly(item.expectedDeliveryDate)}</dd></div>
       <div><dt>المدفوع على الطلب</dt><dd>${money(item.paidAmount)}</dd></div><div><dt>المتبقي</dt><dd>${money(item.remainingAmount)}</dd></div>
@@ -882,18 +893,19 @@ function clientAccountSummary(client, data) {
     .filter((entry) => entry.customerId === client.id)
     .sort((left, right) => new Date(right.date || right._createdAt).getTime() - new Date(left.date || left._createdAt).getTime());
   const latestSettlement = settlements[0] || null;
-  const openingBalance = Number(latestSettlement?.balance || 0);
+  const openingBalance = roundMoney(latestSettlement?.balance || 0);
   const orders = data.models.filter((order) => order.customerId === client.id && !order.archivedAt);
-  const deliveredTotal = orders.reduce((sum, order) => sum + Number(order.totalAmount || 0), 0);
-  const orderPaid = orders.reduce((sum, order) => sum + Number(order.paidAmount || 0), 0);
+  const deliveredTotal = roundMoney(orders.reduce((sum, order) => sum + Number(order.totalAmount || 0), 0));
+  const orderPaid = roundMoney(orders.reduce((sum, order) => sum + Number(order.paidAmount || 0), 0));
   const periodStart = client.account_period_started_at || latestSettlement?.date || null;
   const payments = data.payments.filter((payment) =>
     payment.customerId === client.id
     && (!periodStart || new Date(payment._createdAt || payment.created_at).getTime() >= new Date(periodStart).getTime())
   );
-  const paymentsTotal = payments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
-  const due = openingBalance + deliveredTotal;
-  const paid = orderPaid + paymentsTotal;
+  const paymentsTotal = roundMoney(payments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0));
+  const due = roundMoney(openingBalance + deliveredTotal);
+  const paid = roundMoney(orderPaid + paymentsTotal);
+  const balance = roundMoney(due - paid);
   return {
     settlements,
     latestSettlement,
@@ -901,32 +913,38 @@ function clientAccountSummary(client, data) {
     orders,
     archivedOrders: data.models.filter((order) => order.customerId === client.id && order.archivedAt),
     deliveredTotal,
+    requiredAfterDelivery: deliveredTotal,
     orderPaid,
     payments,
     paymentsTotal,
     due,
     paid,
-    balance: due - paid
+    balance
   };
+}
+
+function roundMoney(value) {
+  return Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
 }
 
 function clientAccountCards(data) {
   const clients = data.clients;
   if (!clients.length) return '<div class="empty-state">لا توجد حسابات عملاء مسجلة.</div>';
   const previewList = (orders, id) => orders.length
-    ? `<div class="model-preview-list" id="${id}">${orders.map((order) => `<button class="model-preview-item model-preview-link" type="button" data-open-model-id="${escapeHtml(order.id)}" aria-label="فتح ${escapeHtml(order.name)} للتعديل"><strong>${escapeHtml(order.name)}</strong><span>${escapeHtml(order.modelNumber || "دون رقم")}</span>${statusTag(order.status)}</button>`).join("")}</div>`
+    ? `<div class="model-preview-list" id="${id}">${orders.map((order) => `<button class="model-preview-item model-preview-link" type="button" data-open-model-id="${escapeHtml(order.id)}" aria-label="فتح ${escapeHtml(order.name)} للتعديل"><strong>${escapeHtml(order.name)}</strong><span>${escapeHtml(order.modelNumber || "دون رقم")}</span>${statusTag(order.displayStatus || order.status)}</button>`).join("")}</div>`
     : `<div class="model-preview-list" id="${id}" role="tooltip"><span>لا توجد موديلات ضمن هذه الفئة.</span></div>`;
   return `<div class="client-account-grid">${clients.map((client) => {
     const summary = clientAccountSummary(client, data);
     const linkedUser = data.users.find((user) => user.id === client.user_id);
     const inProductionCount = summary.orders.filter((order) =>
-      ["تحت الإنشاء", "في الخط", "تحت التصنيع", "قيد الإنتاج"].includes(order.status)
+      ["تحت الإنشاء", "قيد الفرش", "تم الفرش / جاهز للقص", "تم القص", "معلق - في انتظار الخياطة", "في الخياطة"].includes(order.status)
     ).length;
     const unpricedOrders = summary.orders.filter((order) => order.pricePerPiece <= 0);
     const uncountedOrders = summary.orders.filter((order) => order.quantity <= 0);
     return `<article class="client-account-card">
       <header><div><h3>${escapeHtml(client.name)}</h3><p>${escapeHtml(client.phone || "بدون هاتف")}${linkedUser ? ` · ${escapeHtml(linkedUser.username)}` : " · ملف عميل بلا حساب دخول"}</p></div>${statusTag(linkedUser?.status === "suspended" ? "متوقف" : "نشط")}</header>
-      <div class="client-balance-grid"><div><span>إجمالي المطلوب</span><strong>${money(summary.due)}</strong></div><div><span>المدفوع</span><strong>${money(summary.paid)}</strong></div><div><span>الرصيد المتبقي</span><strong>${money(summary.balance)}</strong></div></div>
+      <div class="client-balance-grid"><div><span>إجمالي المطلوب</span><strong>${money(summary.due)}</strong></div><div><span>المطلوب بعد التسليم</span><strong>${money(summary.requiredAfterDelivery)}</strong></div><div><span>المدفوع</span><strong>${money(summary.paid)}</strong></div><div><span>الرصيد المتبقي</span><strong>${money(summary.balance)}</strong><small>${summary.balance === 0 ? "تم السداد بالكامل" : summary.balance < 0 ? "رصيد دائن للعميل" : "مستحق على العميل"}</small></div></div>
+      ${unpricedOrders.length ? '<p class="client-unpriced-alert" role="status">يوجد موديلات لم تحدد أسعارها بعد</p>' : ""}
       <div class="client-activity-grid">
         <div><span>تحت الإنشاء / التصنيع</span><strong>${inProductionCount}</strong></div>
         <div class="model-preview"><span>لم يُحدد سعرها</span><button class="model-preview-trigger" type="button" aria-label="${unpricedOrders.length} موديلات لم يحدد سعرها" aria-describedby="unpriced-${escapeHtml(client.id)}">${unpricedOrders.length}</button>${previewList(unpricedOrders, `unpriced-${escapeHtml(client.id)}`)}</div>
@@ -972,7 +990,7 @@ function clientDetailsView(client, data) {
     }))
   ].sort((left, right) => new Date(right.date).getTime() - new Date(left.date).getTime());
   const orderCard = (order, archived = false) => `<article class="order-card client-history-card">
-    <header class="order-card-heading">${modelImageMarkup(order.modelImageUrl)}<div><p class="order-card-label">${archived ? "طلب مؤرشف" : "طلب حالي"}${order.modelNumber ? ` · رقم ${escapeHtml(order.modelNumber)}` : ""}</p><h3>${escapeHtml(order.name || "موديل بدون اسم")}</h3></div>${statusTag(order.status)}</header>
+    <header class="order-card-heading">${modelImageMarkup(order.modelImageUrl)}<div><p class="order-card-label">${archived ? "طلب مؤرشف" : "طلب حالي"}${order.modelNumber ? ` · رقم ${escapeHtml(order.modelNumber)}` : ""}</p><h3>${escapeHtml(order.name || "موديل بدون اسم")}</h3></div>${statusTag(order.displayStatus || order.status)}</header>
     <dl class="order-card-details">
       <div><dt>العدد الإجمالي بعد القص</dt><dd>${order.quantity ? `${new Intl.NumberFormat("ar-EG").format(order.quantity)} قطعة` : "بانتظار الحصر"}</dd></div>
       <div><dt>المستلم</dt><dd>${new Intl.NumberFormat("ar-EG").format(order.deliveredPieces)} قطعة</dd></div>
@@ -982,13 +1000,14 @@ function clientDetailsView(client, data) {
       ${order.pricePerPiece > 0 ? `<div><dt>سعر القطعة</dt><dd>${money(order.pricePerPiece)}</dd></div><div><dt>إجمالي قيمة المسلّم</dt><dd>${money(order.totalAmount)}</dd></div>` : '<div><dt>التسعير</dt><dd>لم يُسعّر بعد</dd></div>'}
       <div><dt>التسليم المتوقع</dt><dd>${formatDateOnly(order.expectedDeliveryDate)}</dd></div>
       <div><dt>تاريخ الإنشاء</dt><dd>${formatDateTime(order.created_at)}</dd></div>
+      ${order.senderName ? `<div><dt>تم الإرسال بواسطة</dt><dd>${escapeHtml(order.senderName)}</dd></div>` : ""}
       ${archived ? `<div><dt>تاريخ الأرشفة</dt><dd>${formatDateTime(order.archivedAt)}</dd></div>` : ""}
     </dl>
     ${!archived ? `<footer class="order-card-actions"><button class="row-action" type="button" data-edit-client-order="${escapeHtml(order.id)}">تعديل السعر أو بيانات الموديل</button>${orderCanBeDeleted(order) ? `<button class="row-action order-delete-action" type="button" data-action="delete-order" data-order-id="${escapeHtml(order.id)}">حذف الموديل</button>` : '<span class="order-delete-protected" title="لا يمكن حذف طلب له تسليمات أو مبالغ مسجلة">محمي بسجل مالي / تسليم</span>'}</footer>` : ""}
   </article>`;
   const clientNotes = data.clientNotes.filter((note) => note.customerId === client.id);
   return `<div class="clients-toolbar client-detail-toolbar"><div><h2>${escapeHtml(client.name)} · تفاصيل الحساب</h2><p>${escapeHtml(client.phone || "لا يوجد رقم هاتف")}${client.notes ? ` · ${escapeHtml(client.notes)}` : ""}</p><p>تاريخ إنشاء ملف العميل: ${formatDateTime(client.created_at)}</p></div><div class="client-detail-actions"><button class="button button-primary" type="button" data-quick-client-payment="${escapeHtml(client.id)}">＋ إضافة دفعة مالية</button><button class="button button-secondary" type="button" data-print-account>طباعة كشف الحساب / PDF</button><button class="row-action" type="button" data-return-clients>العودة إلى العملاء</button></div></div>
-    <div class="stats-grid client-finance-summary">${summary.latestSettlement ? stat("رصيد سابق مرحّل", money(summary.openingBalance), "افتتاح الفترة الحالية") : ""}${stat("إجمالي المطلوب", money(summary.due), "يشمل الرصيد السابق المرحّل")}${stat("المدفوع", money(summary.paid))}${stat("الرصيد المتبقي", money(summary.balance), summary.balance < 0 ? "رصيد دائن للعميل" : "مستحق على العميل")}</div>
+    <div class="stats-grid client-finance-summary">${summary.latestSettlement ? stat("رصيد سابق مرحّل", money(summary.openingBalance), "افتتاح الفترة الحالية") : ""}${stat("المطلوب بعد التسليم", money(summary.requiredAfterDelivery), "قيمة الكميات المسلّمة")}${stat("إجمالي المطلوب", money(summary.due), "الرصيد السابق + المطلوب الحالي")}${stat("المدفوع", money(summary.paid))}${stat("الرصيد المتبقي", money(summary.balance), summary.balance === 0 ? "تم السداد بالكامل" : summary.balance < 0 ? "رصيد دائن للعميل" : "مستحق على العميل")}</div>
     <section class="client-detail-section"><header class="section-heading"><div><h2>الموديلات التي تم تسعيرها</h2><p>يُحتسب المطلوب المالي على الكمية التي تم تسليمها.</p></div><button class="button button-secondary" type="button" data-open-order-for-client="${escapeHtml(client.id)}">＋ إضافة موديل للعميل</button></header>${pricedOrders.length ? `<div class="order-cards">${pricedOrders.map((order) => orderCard(order)).join("")}</div>` : '<div class="empty-state">لا توجد موديلات مسعّرة في الفترة الحالية.</div>'}</section>
     <section class="client-detail-section"><header class="section-heading"><div><h2>موديلات لم تُسعّر بعد</h2><p>طلبات في القص أو الانتظار أو مراحل التشغيل الأخرى.</p></div></header>${unpricedOrders.length ? `<div class="order-cards">${unpricedOrders.map((order) => orderCard(order)).join("")}</div>` : '<div class="empty-state">لا توجد موديلات بانتظار التسعير.</div>'}</section>
     <section class="client-detail-section">${panel("سجل تسليمات البضاعة", deliveries.length ? table(["الموديل","الكمية","المستلم","تاريخ ووقت الاستلام","التسليم المتوقع","القيمة"], deliveries.map((delivery) => { const order = data.models.find((item) => item.id === delivery.order_id); return `<tr><td>${escapeHtml(order?.name || "طلب مؤرشف")}</td><td>${new Intl.NumberFormat("ar-EG").format(delivery.quantity)} قطعة</td><td>${escapeHtml(delivery.recipient_name || "—")}</td><td>${formatDateTime(delivery.delivered_at)}</td><td>${formatDateOnly(delivery.expected_delivery_date || order?.expectedDeliveryDate)}</td><td>${money(delivery.amount)}</td></tr>`; })) : '<div class="empty-state">لا توجد تسليمات مسجلة لهذا العميل.</div>')}</section>
@@ -1036,11 +1055,11 @@ function adminView(data, accounts) {
           <label class="field model-image-field"><span>صورة الموديل (اختياري)</span><input type="file" name="modelImage" accept="image/jpeg,image/png,image/webp"><small>JPG أو PNG أو WEBP بحد أقصى 5 ميجابايت.</small><div data-model-image-preview></div></label>
           <div class="field"><label for="model-expected-delivery">تاريخ التسليم المتوقع (اختياري)</label><input id="model-expected-delivery" name="expectedDeliveryDate" type="date"></div>
           <input type="hidden" name="deliveredPieces" value="0"><div class="field"><label>إجمالي الكمية المسلّمة</label><output id="model-delivered-summary" class="calculated-value">0 قطعة</output></div>
-          <div class="field"><label for="model-status">حالة الطلب</label><select id="model-status" name="status"><option>قيد الانتظار</option><option>معلق</option><option>تحت الإنشاء</option><option>في الخط</option><option>تحت التصنيع</option><option>قيد الإنتاج</option><option>جاهز للتسليم</option><option>مكتمل</option></select></div>
+          <div class="field"><label for="model-status">حالة الطلب</label><select id="model-status" name="status"><option>قيد الانتظار</option><option>معلق</option><option>تحت الإنشاء</option><option>قيد الفرش</option><option>تم الفرش / جاهز للقص</option><option>تم القص</option><option>معلق - في انتظار الخياطة</option><option>في الخياطة</option><option>جاهز للتسليم</option><option>مكتمل</option></select></div>
           <div class="field"><label for="model-priority">أولوية التنفيذ</label><select id="model-priority" name="priority"><option>عادي</option><option>مرتفع</option><option>عاجل</option></select></div>
         </div></section>
         <section class="form-section"><h3>التفاصيل المالية <span>اختياري</span></h3><div class="form-section-grid">
-          <div class="field"><label for="model-price">سعر القطعة (ج.م)</label><input id="model-price" name="pricePerPiece" type="number" min="0" step="0.01" value="0"><small id="model-price-history-note" hidden>تم تسجيل تسليمات بهذا السعر؛ لا يمكن تغييره حفاظًا على قيمة السجل المالي.</small></div>
+          <div class="field"><label for="model-price">سعر القطعة (ج.م)</label><input id="model-price" name="pricePerPiece" type="number" min="0" step="0.01" value="0"><small id="model-price-history-note" hidden>تعديل السعر يعيد احتساب قيمة التسليمات المسجلة لهذا الموديل ورصيد العميل.</small></div>
           <div class="field"><label for="model-paid">العربون على الطلب (لا تكرره في سجل الدفعات)</label><input id="model-paid" name="paidAmount" type="number" min="0" step="0.01" value="0"></div>
           <div class="field"><label for="model-total">قيمة الكمية المسلّمة</label><output id="model-total" class="calculated-value">0 ج.م</output></div>
           <div class="field"><label for="model-remaining">المتبقي من قيمة المسلّم</label><output id="model-remaining" class="calculated-value">0 ج.م</output></div>
@@ -1069,12 +1088,18 @@ function adminView(data, accounts) {
 
 function cuttingView(data) {
   const priorityOrder = { عاجل: 0, مرتفع: 1, عادي: 2 };
+  const readyStatus = "تم الفرش / جاهز للقص";
   const activeCutting = data.cutting
-    .filter((item) => item.status !== "مكتمل")
+    .filter((item) => ["قيد الانتظار", "معلق", "تحت الإنشاء", "قيد الفرش", readyStatus].includes(item.orderStatus))
     .sort((left, right) => (priorityOrder[left.priority] ?? 3) - (priorityOrder[right.priority] ?? 3));
-  const cards = activeCutting.length ? `<div class="cutting-order-grid">${activeCutting.map((item) => `<article class="order-card cutting-order-card">
-    <header class="order-card-heading">${modelImageMarkup(item.modelImageUrl)}<div><p class="order-card-label">أمر قص · ${escapeHtml(item.order.slice(0, 8))} · الأولوية: ${escapeHtml(item.priority)}</p><h3>${escapeHtml(item.model)}</h3></div>${statusTag(item.status)}</header>
-    <p class="cutting-target">العدد الحالي: ${new Intl.NumberFormat("ar-EG").format(item.total)} قطعة</p>
+  const cards = activeCutting.length ? `<div class="cutting-order-grid">${activeCutting.map((item) => {
+    const bedReady = item.orderStatus === readyStatus;
+    const displayStatus = item.orderStatus === "قيد الفرش" && item.layerCount > 0
+      ? `قيد الفرش - تم فرش ${new Intl.NumberFormat("ar-EG").format(item.layerCount)} رئات`
+      : item.orderStatus;
+    return `<article class="order-card cutting-order-card">
+    <header class="order-card-heading">${modelImageMarkup(item.modelImageUrl)}<div><p class="order-card-label">أمر قص · ${escapeHtml(item.order.slice(0, 8))} · الأولوية: ${escapeHtml(item.priority)}</p><h3>${escapeHtml(item.model)}</h3>${item.senderName ? `<p>تم الإرسال بواسطة: ${escapeHtml(item.senderName)}</p>` : ""}</div>${statusTag(displayStatus)}</header>
+    <p class="cutting-target">${item.total > 0 ? `العدد الحالي: ${new Intl.NumberFormat("ar-EG").format(item.total)} قطعة` : "العدد النهائي: بانتظار اعتماد القص"}</p>
     <form class="cutting-finish-form" data-finish-cutting="${escapeHtml(item.order)}">
       <div class="form-section-grid cutting-bed-inputs">
         <label class="field"><span>نوع / قماش الفرشة</span><input name="fabric" value="${escapeHtml(item.fabric === "—" ? "" : item.fabric)}" required></label>
@@ -1086,16 +1111,17 @@ function cuttingView(data) {
       <div class="cutting-breakdown" data-cutting-breakdown></div>
       <label class="field"><span>صورة الموديل (اختياري)</span><input type="file" name="modelImage" accept="image/jpeg,image/png,image/webp"><small>الحد الأقصى 5 ميجابايت.</small></label>
       <label class="field"><span>ملاحظات فنية للفرشة والقص</span><textarea name="technicalNotes" rows="3">${escapeHtml(item.technicalNotes || "")}</textarea></label>
-      <div class="form-actions"><button type="submit" class="button button-primary">إنهاء القص</button></div>
+      <div class="form-actions">${bedReady ? "" : `<button type="button" class="button button-secondary" data-save-cutting-progress="${escapeHtml(item.order)}">حفظ تحديث الفرش</button><button type="button" class="button button-primary" data-ready-cutting="${escapeHtml(item.order)}">تم الفرش / جاهز للقص</button>`}<button type="submit" class="button button-primary" ${bedReady ? "" : "hidden"}>تسجيل العدد النهائي وإنهاء القص</button></div>
     </form>
-  </article>`).join("")}</div>` : '<div class="empty-state">لا توجد أوامر قص نشطة حاليًا.</div>';
+  </article>`;
+  }).join("")}</div>` : '<div class="empty-state">لا توجد أوامر قص نشطة حاليًا.</div>';
   return panel("طلبات الإدارة · طاولة الفرش والقص", cards, "أوامر العمل المحولة من الإدارة");
 }
 
 function cuttingDashboardView(data) {
-  const active = data.cutting.filter((item) => item.status !== "مكتمل");
+  const active = data.cutting.filter((item) => ["قيد الانتظار", "معلق", "تحت الإنشاء", "قيد الفرش", "تم الفرش / جاهز للقص"].includes(item.orderStatus));
   const activeTotal = active.reduce((sum, item) => sum + Number(item.total), 0);
-  const completed = data.cutting.filter((item) => item.status === "مكتمل");
+  const completed = data.cutting.filter((item) => ["تم القص", "معلق - في انتظار الخياطة", "في الخياطة", "مكتمل"].includes(item.orderStatus));
   return `<div class="stats-grid">${stat("أوامر الإدارة النشطة", active.length, "بانتظار استكمال القص")}${stat("العدد المطلوب للأوامر النشطة", new Intl.NumberFormat("ar-EG").format(activeTotal), "قطعة")}${stat("عمليات قص مكتملة", completed.length, "مسجلة على أوامر الإنتاج")}</div>${panel("ملخص العمل الحالي", `<div class="empty-state">استخدم صفحة «طلبات الإدارة» لمراجعة الأوامر، تسجيل بيانات الفرشة والقص، أو إرسال قصة جديدة للإدارة.</div>`)}`;
 }
 
@@ -1118,8 +1144,8 @@ function cuttingRequestsView(data) {
       <div class="cutting-breakdown" data-cutting-breakdown></div>
       <label class="field"><span>صورة الموديل (اختياري)</span><input type="file" name="modelImage" accept="image/jpeg,image/png,image/webp"><small>الحد الأقصى 5 ميجابايت.</small></label>
       <label class="field"><span>ملاحظات فنية للفرشة والقص</span><textarea name="technicalNotes" rows="4"></textarea></label>
-      <div class="form-actions"><button type="submit" class="button button-primary">إرسال القصة للإدارة والعميل</button></div>
-    </form>`, "يرتبط الطلب بالعميل المحدد فور الحفظ، وتظهر بياناته وكمياته للإدارة وفي سجل العميل.")}`;
+      <div class="form-actions"><button type="submit" class="button button-primary">إرسال القصة وبدء الفرش</button></div>
+    </form>`, "يرتبط الطلب بالعميل المحدد فور الحفظ ويبدأ بحالة «قيد الفرش»؛ تُحفظ تحديثات الرئات تدريجيًا ثم يُعتمد جاهزًا للقص.")}`;
 }
 
 function cuttingPersonalAccountView(data) {
@@ -1158,21 +1184,21 @@ function clientView(data, session) {
     .filter((entry) => entry._ownerId === session.accountId)
     .sort((left, right) => new Date(right.date || right._createdAt).getTime() - new Date(left.date || left._createdAt).getTime());
   const latestSettlement = settlements[0] || null;
-  const openingBalance = Number(latestSettlement?.balance || 0);
+  const openingBalance = roundMoney(latestSettlement?.balance || 0);
   const currentOrders = data.models.filter((item) => !item.archivedAt);
   const archivedOrders = data.models.filter((item) => item.archivedAt);
   const payments = data.payments.filter((item) =>
     ((item.clientId || item._ownerId) === session.accountId || item.client === session.username)
     && (!latestSettlement || new Date(item._createdAt || item.created_at).getTime() >= new Date(latestSettlement.date || latestSettlement._createdAt).getTime())
   );
-  const totalAmount = currentOrders.reduce((sum, item) => sum + Number(item.totalAmount || 0), 0);
-  const paymentsTotal = payments.reduce((sum, item) => sum + Number(item.amount), 0);
-  const orderPaid = currentOrders.reduce((sum, item) => sum + Number(item.paidAmount || 0), 0);
-  const totalPaid = paymentsTotal + orderPaid;
-  const due = openingBalance + totalAmount;
-  const remaining = due - totalPaid;
+  const totalAmount = roundMoney(currentOrders.reduce((sum, item) => sum + Number(item.totalAmount || 0), 0));
+  const paymentsTotal = roundMoney(payments.reduce((sum, item) => sum + Number(item.amount || 0), 0));
+  const orderPaid = roundMoney(currentOrders.reduce((sum, item) => sum + Number(item.paidAmount || 0), 0));
+  const totalPaid = roundMoney(paymentsTotal + orderPaid);
+  const due = roundMoney(openingBalance + totalAmount);
+  const remaining = roundMoney(due - totalPaid);
   const deliveredUnits = currentOrders.reduce((sum, item) => sum + Number(item.quantity), 0);
-  return `<section id="dashboard" class="dashboard-section"><div class="stats-grid">${stat("موديلاتي الحالية", currentOrders.length, "ضمن الفترة الحالية")}${stat("العدد الفعلي", new Intl.NumberFormat("ar-EG").format(deliveredUnits), "قطعة بعد القص")}${latestSettlement ? stat("رصيد سابق مرحّل", money(openingBalance), "افتتاح الفترة الحالية") : ""}${stat("إجمالي المطلوب", money(due), "يشمل الرصيد السابق المرحّل")}${stat("إجمالي المدفوع", money(totalPaid))}${stat("الرصيد المتبقي", money(remaining))}</div></section><section id="orders" class="dashboard-section">${panel("موديلاتي والطلبيات الحالية", clientOrderCards(currentOrders))}${archivedOrders.length ? panel("الطلبات المؤرشفة", clientOrderCards(archivedOrders)) : ""}</section><section id="finance" class="dashboard-section">${panel("دفعاتي المالية", table(["المبلغ","تاريخ ووقت التسجيل","طريقة الدفع"], payments.map((item) => `<tr><td>${money(item.amount)}</td><td>${formatDateTime(item._createdAt || item.created_at || item.date)}</td><td>${escapeHtml(item.method)}</td></tr>`)))}</section>`;
+  return `<section id="dashboard" class="dashboard-section"><div class="stats-grid">${stat("موديلاتي الحالية", currentOrders.length, "ضمن الفترة الحالية")}${stat("العدد الفعلي", new Intl.NumberFormat("ar-EG").format(deliveredUnits), "قطعة بعد القص")}${latestSettlement ? stat("رصيد سابق مرحّل", money(openingBalance), "افتتاح الفترة الحالية") : ""}${stat("المطلوب بعد التسليم", money(totalAmount), "قيمة البضاعة المستلمة")}${stat("إجمالي المطلوب", money(due), "الرصيد السابق + المطلوب الحالي")}${stat("إجمالي المدفوع", money(totalPaid))}${stat("الرصيد المتبقي", money(remaining), remaining === 0 ? "تم السداد بالكامل" : remaining < 0 ? "رصيد دائن للعميل" : "مستحق على العميل")}</div></section><section id="orders" class="dashboard-section">${panel("موديلاتي والطلبيات الحالية", clientOrderCards(currentOrders))}${archivedOrders.length ? panel("الطلبات المؤرشفة", clientOrderCards(archivedOrders)) : ""}</section><section id="finance" class="dashboard-section">${panel("دفعاتي المالية", table(["المبلغ","تاريخ ووقت التسجيل","طريقة الدفع"], payments.map((item) => `<tr><td>${money(item.amount)}</td><td>${formatDateTime(item._createdAt || item.created_at || item.date)}</td><td>${escapeHtml(item.method)}</td></tr>`)))}</section>`;
 }
 
 let sidebarCollapsed = false;
@@ -1327,23 +1353,71 @@ async function persistFactoryOrder(order, changes = {}) {
 }
 
 function bindCuttingActions(session) {
-  document.querySelectorAll(".cutting-finish-form").forEach((form) => form.addEventListener("submit", async (event) => {
-    event.preventDefault();
+  const readCuttingInputs = (form) => {
     const cuttingData = updateCuttingCalculation(form);
-    const { sizeData, total } = cuttingData;
     const boltCount = Number(form.elements.boltCount.value);
     const fabric = String(form.elements.fabric.value).trim();
-    if (!fabric || !Number.isSafeInteger(boltCount) || boltCount < 1) {
-      window.factoryUI.toast("أدخل نوع القماش وعدد الأتواب كأعداد صحيحة موجبة.", "error");
-      return;
-    }
-    if (!sizeData.type || !sizeData.counts || !Object.keys(sizeData.counts).length || !Number.isSafeInteger(total) || total <= 0
+    const { sizeData, total } = cuttingData;
+    if (!fabric || !Number.isSafeInteger(boltCount) || boltCount < 1
+      || !sizeData.type || !Object.keys(sizeData.counts).length || !Number.isSafeInteger(total) || total <= 0
       || cuttingData.colorPlyData.colors.length === 0
       || cuttingData.colorPlyData.colors.some((entry) => !Number.isSafeInteger(entry.plys) || entry.plys < 1)
       || new Set(cuttingData.colorPlyData.colors.map((entry) => entry.color)).size !== cuttingData.colorPlyData.colors.length) {
-      window.factoryUI.toast("حدد مقاسًا واحدًا على الأقل، وأدخل عدد رئات موجبًا لكل لون دون تكرار درجات اللون.", "error");
-      return;
+      window.factoryUI.toast("تحقق من القماش والأتواب، وحدد مقاسًا وأدخل رئات صحيحة لكل لون دون تكرار اللون.", "error");
+      return null;
     }
+    return {
+      ...cuttingData,
+      fabric,
+      boltCount,
+      technicalNotes: String(form.elements.technicalNotes.value).trim()
+    };
+  };
+  const saveProgress = async (form, cuttingData) => {
+    const { data, error } = await supabaseClient.rpc("update_factory_cutting_progress", {
+      requested_order_id: form.dataset.finishCutting,
+      requested_size_data: cuttingData.sizeData,
+      requested_color_ply_data: cuttingData.colorPlyData,
+      requested_fabric: cuttingData.fabric,
+      requested_bolt_count: cuttingData.boltCount,
+      requested_technical_notes: cuttingData.technicalNotes
+    });
+    if (error?.code === "PGRST202") throw new Error("دالة تحديث الفرش غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+    if (error) throw error;
+    return data;
+  };
+  document.querySelectorAll("[data-save-cutting-progress], [data-ready-cutting]").forEach((button) => button.addEventListener("click", async () => {
+    const form = button.closest("form");
+    const cuttingData = readCuttingInputs(form);
+    if (!cuttingData) return;
+    button.disabled = true;
+    let progressSaved = false;
+    try {
+      const totalPlys = await saveProgress(form, cuttingData);
+      progressSaved = true;
+      if (button.matches("[data-ready-cutting]")) {
+        const { error } = await supabaseClient.rpc("mark_factory_cutting_ready", {
+          requested_order_id: form.dataset.finishCutting
+        });
+        if (error?.code === "PGRST202") throw new Error("دالة اعتماد جاهزية الفرش غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+        if (error) throw error;
+      }
+      await refreshDashboard(session);
+      window.factoryUI.toast(button.matches("[data-ready-cutting]")
+        ? `تم حفظ ${new Intl.NumberFormat("ar-EG").format(totalPlys)} رئات واعتماد الفرشة جاهزة للقص.`
+        : `تم تحديث الفرش وحفظ ${new Intl.NumberFormat("ar-EG").format(totalPlys)} رئات.`);
+    } catch (error) {
+      if (progressSaved) await refreshDashboard(session);
+      window.factoryUI.toast(`${progressSaved ? "تم حفظ الرئات لكن تعذر اعتماد جاهزية الفرشة. " : ""}تعذر تحديث الفرش: ${error.message}`, "error");
+    } finally {
+      button.disabled = false;
+    }
+  }));
+  document.querySelectorAll(".cutting-finish-form").forEach((form) => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const cuttingData = readCuttingInputs(form);
+    if (!cuttingData) return;
+    const { sizeData, total } = cuttingData;
     const button = form.querySelector('[type="submit"]');
     button.disabled = true;
     let imageUploaded = false;
@@ -1356,14 +1430,14 @@ function bindCuttingActions(session) {
         requested_size_data: sizeData,
         requested_color_ply_data: cuttingData.colorPlyData,
         requested_model_image_url: imageUrl,
-        requested_fabric: fabric,
-        requested_bolt_count: boltCount,
-        requested_technical_notes: String(form.elements.technicalNotes.value).trim()
+        requested_fabric: cuttingData.fabric,
+        requested_bolt_count: cuttingData.boltCount,
+        requested_technical_notes: cuttingData.technicalNotes
       });
       if (error?.code === "PGRST202") throw new Error("دالة إنهاء القص غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
       if (error) throw error;
       await refreshDashboard(session);
-      window.factoryUI.toast(`تم إرسال القص للإدارة وتسجيل ${new Intl.NumberFormat("ar-EG").format(data)} قطعة وتحويل الطلب إلى مرحلة الخط.`);
+      window.factoryUI.toast(`تم تسجيل ${new Intl.NumberFormat("ar-EG").format(data)} قطعة واعتماد حالة «تم القص».`);
     } catch (error) {
       button.disabled = false;
       window.factoryUI.toast(`${imageUploaded ? "تم رفع الصورة لكن لم يُسجل إنهاء القص. " : ""}تعذر إنهاء القص: ${error.message}`, "error");
@@ -1375,10 +1449,7 @@ function bindCuttingActions(session) {
     const modelName = String(submitForm.elements.modelName.value).trim();
     const modelNumber = String(submitForm.elements.modelNumber.value).trim();
     const customerId = submitForm.elements.customerId.value;
-    const fabric = String(submitForm.elements.fabric.value).trim();
-    const boltCount = Number(submitForm.elements.boltCount.value);
-    const cuttingData = updateCuttingCalculation(submitForm);
-    const { sizeData, total } = cuttingData;
+    updateCuttingCalculation(submitForm);
     if (!modelName && !modelNumber) {
       window.factoryUI.toast("أدخل اسم الموديل أو رقمه على الأقل.", "error");
       return;
@@ -1387,12 +1458,8 @@ function bindCuttingActions(session) {
       window.factoryUI.toast("اختر العميل الذي ستُسجل القصة على حسابه.", "error");
       return;
     }
-    if (!fabric || !Number.isSafeInteger(boltCount) || boltCount < 1
-      || !sizeData.type || !Object.keys(sizeData.counts).length || !Number.isSafeInteger(total) || total <= 0
-      || cuttingData.colorPlyData.colors.length === 0
-      || cuttingData.colorPlyData.colors.some((entry) => !Number.isSafeInteger(entry.plys) || entry.plys < 1)
-      || new Set(cuttingData.colorPlyData.colors.map((entry) => entry.color)).size !== cuttingData.colorPlyData.colors.length) {
-      window.factoryUI.toast("أكمل بيانات القماش والأتواب، وحدد مقاسًا واحدًا على الأقل وأدخل عدد رئات موجبًا لكل لون دون تكرار.", "error");
+    const validInputs = readCuttingInputs(submitForm);
+    if (!validInputs) {
       return;
     }
     const button = submitForm.querySelector('[type="submit"]');
@@ -1407,17 +1474,17 @@ function bindCuttingActions(session) {
         requested_customer_id: customerId,
         requested_model_name: modelName,
         requested_model_number: modelNumber,
-        requested_size_data: sizeData,
-        requested_color_ply_data: cuttingData.colorPlyData,
+        requested_size_data: validInputs.sizeData,
+        requested_color_ply_data: validInputs.colorPlyData,
         requested_model_image_url: imageUrl,
-        requested_fabric: fabric,
-        requested_bolt_count: boltCount,
-        requested_technical_notes: String(submitForm.elements.technicalNotes.value).trim()
+        requested_fabric: validInputs.fabric,
+        requested_bolt_count: validInputs.boltCount,
+        requested_technical_notes: validInputs.technicalNotes
       });
       if (error?.code === "PGRST202") throw new Error("دالة إرسال القصة غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
       if (error) throw error;
       await refreshDashboard(session);
-      window.factoryUI.toast(`تم إرسال القصة وربطها بالعميل وتسجيل ${new Intl.NumberFormat("ar-EG").format(data)} قطعة.`);
+      window.factoryUI.toast(`تم إرسال القصة للعميل والإدارة وبدء الفرش بعدد ${new Intl.NumberFormat("ar-EG").format(data)} رئات.`);
     } catch (error) {
       button.disabled = false;
       window.factoryUI.toast(`${imageUploaded ? "رُفعت الصورة لكن لم تُسجل القصة. " : ""}تعذر إرسال القصة: ${error.message}`, "error");
@@ -1559,7 +1626,7 @@ function bindActions(session) {
     if (button.dataset.editKind === "models") {
       form.elements.deliveredPieces.value = item.deliveredPieces;
       form.querySelector("#model-delivered-summary").textContent = `${new Intl.NumberFormat("ar-EG").format(item.deliveredPieces)} قطعة`;
-      form.elements.pricePerPiece.readOnly = item.deliveredPieces > 0;
+      form.elements.pricePerPiece.readOnly = false;
       form.querySelector("#model-price-history-note").hidden = item.deliveredPieces <= 0;
       setSizePicker(form.querySelector("[data-size-picker]"), item.sizes);
       setColorPicker(form.querySelector("[data-color-picker]"), item.colors);
@@ -1616,7 +1683,7 @@ function bindActions(session) {
     setSizePicker(orderForm.querySelector("[data-size-picker]"), order.sizes);
     setColorPicker(orderForm.querySelector("[data-color-picker]"), order.colors);
     orderForm.querySelector("[data-model-image-preview]").innerHTML = modelImageMarkup(order.modelImageUrl);
-    orderForm.elements.pricePerPiece.readOnly = order.deliveredPieces > 0;
+    orderForm.elements.pricePerPiece.readOnly = false;
     orderForm.querySelector("#model-price-history-note").hidden = order.deliveredPieces <= 0;
     orderForm.querySelector("#model-delivered-summary").textContent = `${new Intl.NumberFormat("ar-EG").format(order.deliveredPieces)} قطعة`;
     orderForm.querySelector('[type="submit"]').textContent = "حفظ التعديلات";
@@ -1807,12 +1874,12 @@ function bindActions(session) {
     const delivered = Number(orderForm.elements.deliveredPieces.value || 0);
     const price = Number(orderForm.elements.pricePerPiece.value || 0);
     const paid = Number(orderForm.elements.paidAmount.value || 0);
-    const total = delivered * price;
+    const total = roundMoney(delivered * price);
     const formatAmount = (value) => `${new Intl.NumberFormat("ar-EG", { maximumFractionDigits: 2 }).format(value)} ج.م`;
     orderForm.querySelector("#model-delivered-summary").textContent = `${new Intl.NumberFormat("ar-EG").format(delivered)} قطعة`;
     orderForm.elements.paidAmount.removeAttribute("max");
     orderForm.querySelector("#model-total").textContent = formatAmount(total);
-    orderForm.querySelector("#model-remaining").textContent = formatAmount(total - paid);
+    orderForm.querySelector("#model-remaining").textContent = formatAmount(roundMoney(total - paid));
     const selectedClient = dashboardData.clients.find((client) => client.id === orderForm.elements.customerId.value);
     const preview = orderForm.querySelector("#client-balance-preview");
     if (!selectedClient) {
@@ -1824,7 +1891,7 @@ function bindActions(session) {
         ? Number(existingOrder.totalAmount || 0) - Number(existingOrder.paidAmount || 0)
         : 0;
       preview.textContent = formatAmount(
-        clientAccountSummary(selectedClient, dashboardData).balance - previousImpact + total - paid
+        roundMoney(clientAccountSummary(selectedClient, dashboardData).balance - previousImpact + total - paid)
       );
     }
   };
@@ -1920,7 +1987,15 @@ function bindActions(session) {
       await refreshDashboard(session);
       window.factoryUI.toast(editIndex ? "تم تحديث أمر التشغيل بنجاح." : "تم حفظ أمر التشغيل بنجاح.");
     } catch (error) {
-      window.factoryUI.toast(`${savedOrderId ? "تم حفظ الطلبية لكن تعذر إكمال الصورة أو تحديث البيانات: " : "تعذر حفظ أمر التشغيل أونلاين: "}${error.message}`, "error");
+      let refreshError = "";
+      if (savedOrderId) {
+        try {
+          await refreshDashboard(session);
+        } catch (dashboardRefreshError) {
+          refreshError = ` كما تعذر تحديث العرض: ${dashboardRefreshError.message}`;
+        }
+      }
+      window.factoryUI.toast(`${savedOrderId ? "تم حفظ الطلبية لكن تعذر إكمال الصورة أو تحديث البيانات: " : "تعذر حفظ أمر التشغيل أونلاين: "}${error.message}${refreshError}`, "error");
     } finally {
       submitButton.disabled = false;
     }
@@ -1974,8 +2049,16 @@ function bindActions(session) {
       await refreshDashboard(session);
       window.factoryUI.toast(existingPayment ? "تم تحديث الدفعة بنجاح." : "تم تسجيل الدفعة بنجاح.");
     } catch (error) {
+      let refreshError = "";
+      if (paymentSaved) {
+        try {
+          await refreshDashboard(session);
+        } catch (dashboardRefreshError) {
+          refreshError = ` وتعذر تحديث العرض: ${dashboardRefreshError.message}`;
+        }
+      }
       window.factoryUI.toast(paymentSaved
-        ? `تم حفظ الدفعة، لكن تعذر تحديث البيانات المعروضة: ${error.message}`
+        ? `تم حفظ الدفعة، لكن تعذر تحديث البيانات المعروضة: ${error.message}${refreshError}`
         : `تعذر حفظ الدفعة أونلاين: ${error.message}`, "error");
     } finally {
       submitButton.disabled = false;
