@@ -924,7 +924,7 @@ function orderCards(models, withActions = false) {
       <div><dt>العدد الفعلي بعد القص</dt><dd>${item.quantity ? `${new Intl.NumberFormat("ar-EG").format(item.quantity)} قطعة` : "بانتظار الحصر بعد القص"}</dd></div><div><dt>الكمية المنجزة</dt><dd>${new Intl.NumberFormat("ar-EG").format(item.completedPieces)} قطعة</dd></div>
       ${item.fabric ? `<div><dt>القماش / الفرشة</dt><dd>${escapeHtml(item.fabric)} · ${new Intl.NumberFormat("ar-EG").format(item.boltCount)} أتواب · ${new Intl.NumberFormat("ar-EG").format(item.layerCount)} طوابق</dd></div>` : ""}
       ${item.cuttingNotes ? `<div><dt>ملاحظات فنية للقص</dt><dd>${escapeHtml(item.cuttingNotes)}</dd></div>` : ""}
-      <div><dt>الكمية المسلّمة فعليًا</dt><dd>${new Intl.NumberFormat("ar-EG").format(item.deliveredPieces)} قطعة</dd></div><div><dt>المتبقي (السالب يعني زيادة تسليم)</dt><dd>${item.quantity ? `${new Intl.NumberFormat("ar-EG").format(item.remainingPieces)} قطعة` : "بانتظار الحصر بعد القص"}</dd></div>
+      <div><dt>الكمية المسلّمة فعليًا</dt><dd>${new Intl.NumberFormat("ar-EG").format(item.deliveredPieces)} قطعة</dd></div><div><dt>الكمية المتبقية للتسليم</dt><dd>${item.quantity ? `${new Intl.NumberFormat("ar-EG").format(item.remainingPieces)} قطعة` : "بانتظار الحصر بعد القص"}</dd></div>
       <div><dt>سعر القطعة</dt><dd>${money(item.pricePerPiece)}</dd></div><div><dt>الإجمالي المتوقع (العدد × السعر)</dt><dd>${money(item.expectedAmount)}</dd></div><div><dt>قيمة الكمية المسلّمة</dt><dd>${money(item.totalAmount)}</dd></div>
       <div><dt>التسليم المتوقع</dt><dd>${formatDateOnly(item.expectedDeliveryDate)}</dd></div><div><dt>تاريخ الإنشاء</dt><dd>${formatDateTime(item.created_at)}</dd></div>
       ${item.senderName ? `<div><dt>تم الإرسال بواسطة</dt><dd>${escapeHtml(item.senderName)}</dd></div>` : ""}
@@ -993,8 +993,8 @@ function clientAccountSummary(client, data) {
   const latestSettlement = settlements[0] || null;
   const openingBalance = roundMoney(latestSettlement?.balance || 0);
   const orders = data.models.filter((order) => order.customerId === client.id && !order.archivedAt);
-  const deliveredTotal = sumMoney(orders.map((order) => order.totalAmount));
-  const expectedTotal = sumMoney(orders.map((order) => order.expectedAmount));
+  const deliveredTotal = sumMoney(orders.map((order) => Number(order.deliveredPieces) * Number(order.pricePerPiece)));
+  const expectedTotal = sumMoney(orders.map((order) => Number(order.quantity) * Number(order.pricePerPiece)));
   const orderPaid = sumMoney(orders.map((order) => order.paidAmount));
   const periodStart = client.account_period_started_at || latestSettlement?.date || null;
   const payments = data.payments.filter((payment) =>
@@ -1055,29 +1055,45 @@ function clientAccountCards(data) {
   const clients = data.clients;
   if (!clients.length) return '<div class="empty-state">لا توجد حسابات عملاء مسجلة.</div>';
   const previewList = (orders, id) => orders.length
-    ? `<div class="model-preview-list" id="${id}">${orders.map((order) => `<button class="model-preview-item model-preview-link" type="button" data-open-model-id="${escapeHtml(order.id)}" aria-label="فتح ${escapeHtml(order.name)} للتعديل"><strong>${escapeHtml(order.name)}</strong><span>${escapeHtml(order.modelNumber || "دون رقم")}</span>${statusTag(order.displayStatus || order.status)}</button>`).join("")}</div>`
+    ? `<div class="model-preview-list" id="${id}" role="group" aria-label="معاينة الموديلات">${orders.map((order) => `<button class="model-preview-item model-preview-link" type="button" data-open-model-id="${escapeHtml(order.id)}" aria-label="فتح ${escapeHtml(order.name)} للتعديل"><strong>${escapeHtml(order.name)}</strong><span>رقم الموديل: ${escapeHtml(order.modelNumber || "دون رقم")}</span><span>الكمية: ${order.quantity > 0 ? `${new Intl.NumberFormat("ar-EG").format(order.quantity)} قطعة` : "بانتظار الحصر"}</span><span>المقاسات: ${escapeHtml(sizeSummary(order.sizes))}</span><span>الألوان: ${colorSummaryMarkup(order.colors, order.colorNames, order.colorPlyData)}</span>${statusTag(order.displayStatus || order.status)}</button>`).join("")}</div>`
     : `<div class="model-preview-list" id="${id}" role="tooltip"><span>لا توجد موديلات ضمن هذه الفئة.</span></div>`;
   return `<div class="client-account-grid">${clients.map((client) => {
     const summary = clientAccountSummary(client, data);
     const linkedUser = data.users.find((user) => user.id === client.user_id);
-    const inProductionCount = summary.orders.filter((order) =>
-      ["تحت الإنشاء", "قيد الفرش", "تم الفرش / جاهز للقص", "تم القص", "معلق - في انتظار الخياطة", "في الخياطة"].includes(order.status)
-    ).length;
+    const underConstructionOrders = summary.orders.filter((order) => order.status === "تحت الإنشاء");
+    const inProductionOrders = summary.orders.filter((order) =>
+      ["قيد الفرش", "تم الفرش / جاهز للقص", "تم القص", "معلق - في انتظار الخياطة", "في الخياطة"].includes(order.status)
+    );
     const unpricedOrders = summary.orders.filter((order) => order.pricePerPiece <= 0);
     const uncountedOrders = summary.orders.filter((order) => order.quantity <= 0);
+    const modelMetric = (label, orders, id) => `<div class="model-preview"><span>${label}</span><button class="model-preview-trigger" type="button" aria-label="${orders.length} ${label}" aria-describedby="${id}"${orders.length === 1 ? ` data-open-model-id="${escapeHtml(orders[0].id)}"` : ""}>${orders.length}</button>${previewList(orders, id)}</div>`;
     return `<article class="client-account-card">
       <header><div><h3>${escapeHtml(client.name)}</h3><p>${escapeHtml(client.phone || "بدون هاتف")}${linkedUser ? ` · ${escapeHtml(linkedUser.username)}` : " · ملف عميل بلا حساب دخول"}</p></div>${statusTag(linkedUser?.status === "suspended" ? "متوقف" : "نشط")}</header>
       <div class="client-balance-grid"><div><span>المطلوب بعد خصم المدفوع</span><strong>${money(summary.due)}</strong></div><div><span>الإجمالي المتوقع للطلبات</span><strong>${money(summary.expectedTotal)}</strong></div><div><span>المطلوب بعد التسليم</span><strong>${money(summary.requiredAfterDelivery)}</strong></div><div><span>المدفوع</span><strong>${money(summary.paid)}</strong></div><div><span>الرصيد المتبقي</span><strong>${money(summary.balance)}</strong><small>${summary.balance === 0 ? "تم السداد بالكامل" : summary.balance < 0 ? "رصيد دائن للعميل" : "مستحق على العميل"}</small></div></div>
       ${unpricedOrders.length ? '<p class="client-unpriced-alert" role="status">يوجد موديلات لم تحدد أسعارها بعد</p>' : ""}
       <div class="client-activity-grid">
-        <div><span>تحت الإنشاء / التصنيع</span><strong>${inProductionCount}</strong></div>
-        <div class="model-preview"><span>لم يُحدد سعرها</span><button class="model-preview-trigger" type="button" aria-label="${unpricedOrders.length} موديلات لم يحدد سعرها" aria-describedby="unpriced-${escapeHtml(client.id)}">${unpricedOrders.length}</button>${previewList(unpricedOrders, `unpriced-${escapeHtml(client.id)}`)}</div>
-        <div class="model-preview"><span>لم يُحدد عددها</span><button class="model-preview-trigger" type="button" aria-label="${uncountedOrders.length} موديلات لم يحدد عددها" aria-describedby="uncounted-${escapeHtml(client.id)}">${uncountedOrders.length}</button>${previewList(uncountedOrders, `uncounted-${escapeHtml(client.id)}`)}</div>
+        ${modelMetric("تحت الإنشاء", underConstructionOrders, `construction-${escapeHtml(client.id)}`)}
+        ${modelMetric("قيد التصنيع", inProductionOrders, `production-${escapeHtml(client.id)}`)}
+        ${modelMetric("لم يُحدد سعرها", unpricedOrders, `unpriced-${escapeHtml(client.id)}`)}
+        ${modelMetric("لم يُحدد عددها", uncountedOrders, `uncounted-${escapeHtml(client.id)}`)}
       </div>
       <p class="client-notes-preview">${escapeHtml(client.notes || "لا توجد ملاحظات مسجلة.")}</p>
       <div class="client-card-actions"><button class="button button-primary" type="button" data-open-client-details="${escapeHtml(client.id)}">التفاصيل</button><button class="button button-secondary" type="button" data-quick-client-payment="${escapeHtml(client.id)}">＋ إضافة دفعة مالية</button><button class="row-action" type="button" data-edit-customer="${escapeHtml(client.id)}">تعديل بيانات العميل</button></div>
     </article>`;
   }).join("")}</div>`;
+}
+
+function clientAccountsOverview(data) {
+  const summaries = data.clients.map((client) => clientAccountSummary(client, data));
+  const totalGoods = sumMoney(summaries.map((summary) => summary.deliveredTotal));
+  const totalExpected = sumMoney(summaries.map((summary) => summary.expectedTotal));
+  const totalPaid = sumMoney(summaries.map((summary) => summary.paid));
+  const totalBalance = sumMoney(summaries.map((summary) => summary.balance));
+  const unpricedCount = summaries.reduce((count, summary) =>
+    count + summary.orders.filter((order) => order.pricePerPiece <= 0).length, 0);
+  return `<div class="clients-toolbar"><div><h2>ملخص العملاء والحسابات</h2><p>متابعة الأرصدة والدفعات وقيمة البضاعة وحالات الموديلات لكل عميل.</p></div></div>
+    <div class="stats-grid">${stat("قيمة البضاعة المسلّمة", money(totalGoods), "الكمية المسلّمة × سعر القطعة")}${stat("الإجمالي المتوقع", money(totalExpected), "الكمية الفعلية × سعر القطعة")}${stat("إجمالي المدفوع", money(totalPaid), "دفعات العملاء والمدفوع على الطلب")}${stat("الرصيد الصافي", money(totalBalance), totalBalance < 0 ? "أرصدة دائنة للعملاء" : "المطلوب من العملاء")}${stat("موديلات بلا سعر", unpricedCount, "تحتاج إلى استكمال التسعير")}</div>
+    ${clientAccountCards(data)}`;
 }
 
 function clientDetailsView(client, data) {
@@ -1260,9 +1276,13 @@ function adminView(data, accounts) {
     </section>
     <section id="workers-production" class="dashboard-section">${panel("طلبات وأذونات الانصراف", table(["الموظف","التاريخ","السبب","الحالة","إجراء"], data.leaves.map((item, index) => `<tr><td>${escapeHtml(item.name)}</td><td>${formatRecordDate(item.date)}</td><td>${escapeHtml(item.reason)}</td><td>${statusTag(item.status)}</td><td>${item.status === "قيد المراجعة" ? `<button class="row-action" data-action="approve-leave" data-index="${index}" type="button">اعتماد</button> <button class="row-action" data-action="deny-leave" data-index="${index}" type="button">رفض</button>` : "—"}</td></tr>`)))}</section>
     ${fabricStockView(data, true)}
+    <section id="client-accounts" class="dashboard-section">${clientAccountsOverview(data)}</section>
     <section id="clients" class="dashboard-section">
       <div class="clients-toolbar"><div><h2>العملاء</h2><p>إدارة ملفات العملاء ومتابعة الأرصدة.</p></div><button class="button button-primary" type="button" data-open-client-modal>＋ إضافة عميل جديد</button></div>
-      ${clientAccountCards(data)}
+      ${panel("ملفات العملاء", table(["العميل","رقم الهاتف","حساب الدخول","تاريخ إنشاء الملف","إجراء"], data.clients.map((client) => {
+        const linkedUser = data.users.find((user) => user.id === client.user_id);
+        return `<tr><td>${escapeHtml(client.name)}</td><td>${escapeHtml(client.phone || "—")}</td><td>${linkedUser ? `${escapeHtml(linkedUser.username)} · ${escapeHtml(linkedUser.status === "suspended" ? "متوقف" : "نشط")}` : "لا يوجد حساب دخول"}</td><td>${formatDateTime(client.created_at)}</td><td><button class="row-action" type="button" data-open-client-details="${escapeHtml(client.id)}">تفاصيل الحساب</button> <button class="row-action" type="button" data-edit-customer="${escapeHtml(client.id)}">تعديل البيانات</button></td></tr>`;
+      })))}
       <div class="modal-backdrop" id="client-modal" hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="client-modal-title"><button class="modal-close" type="button" data-close-client aria-label="إغلاق">×</button><h2 id="client-modal-title">إضافة عميل جديد</h2><p>إنشاء ملف عميل للتعاملات والطلبيات، دون إنشاء بيانات دخول.</p><form id="client-form" class="modal-form"><input type="hidden" name="clientId"><label for="client-name">اسم العميل</label><input id="client-name" name="name" required><label for="client-phone">رقم الهاتف</label><input id="client-phone" name="phone" type="tel"><label for="client-notes">ملاحظات</label><textarea id="client-notes" name="notes" rows="3"></textarea><div class="form-actions"><button class="button button-primary" type="submit">حفظ العميل</button><button class="row-action" type="button" data-close-client>إلغاء</button></div></form></section></div>
     </section>
     <section id="client-details" class="dashboard-section">${data.clients.some((client) => client.id === selectedClientId) ? clientDetailsView(data.clients.find((client) => client.id === selectedClientId), data) : '<div class="empty-state">اختر عميلاً لعرض تفاصيل حسابه.</div>'}</section>
@@ -1384,8 +1404,8 @@ function clientView(data, session) {
     ((item.clientId || item._ownerId) === session.accountId || item.client === session.username)
     && (!latestSettlement || new Date(item._createdAt || item.created_at).getTime() >= new Date(latestSettlement.date || latestSettlement._createdAt).getTime())
   );
-  const totalAmount = sumMoney(currentOrders.map((item) => item.totalAmount));
-  const expectedTotal = sumMoney(currentOrders.map((item) => item.expectedAmount));
+  const totalAmount = sumMoney(currentOrders.map((item) => Number(item.deliveredPieces) * Number(item.pricePerPiece)));
+  const expectedTotal = sumMoney(currentOrders.map((item) => Number(item.quantity) * Number(item.pricePerPiece)));
   const paymentsTotal = sumMoney(payments.map((item) => item.amount));
   const orderPaid = sumMoney(currentOrders.map((item) => item.paidAmount));
   const totalPaid = addMoney(paymentsTotal, orderPaid);
@@ -1406,6 +1426,7 @@ function navigationItems(role, info) {
   if (role === "admin") {
     return [
       { id: "dashboard", icon: "▦", label: "لوحة التحكم" },
+      { id: "client-accounts", icon: "ج.م", label: "ملخص العملاء والحسابات" },
       { id: "clients", icon: "◇", label: "إدارة العملاء" },
       { id: "orders", icon: "▤", label: "الموديلات والطلبيات" },
       { id: "workers-production", icon: "⌁", label: "العمال والإنتاج" },
@@ -2122,7 +2143,7 @@ function bindActions(session) {
   }
   if (session.role !== "admin") return;
   bindFabricAdminActions(session);
-  document.querySelectorAll("#clients [data-quick-client-payment]").forEach((button) => {
+  document.querySelectorAll("#client-accounts [data-quick-client-payment]").forEach((button) => {
     button.addEventListener("click", () => openClientPayment(button.dataset.quickClientPayment));
   });
   const orderModal = document.querySelector("#order-modal");
@@ -2217,7 +2238,7 @@ function bindActions(session) {
     orderModal.hidden = false;
     orderForm.elements.pricePerPiece.focus();
   };
-  document.querySelector("#clients").addEventListener("click", (event) => {
+  document.querySelector("#app").addEventListener("click", (event) => {
     const previewButton = event.target.closest("[data-open-model-id]");
     if (!previewButton) return;
     const order = dashboardData.models.find((item) => item.id === previewButton.dataset.openModelId);

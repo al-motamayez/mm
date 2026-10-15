@@ -1791,6 +1791,9 @@ begin
   if current_order.total_pieces <= 0 then
     raise exception 'Record the actual cut quantity before recording a delivery.';
   end if;
+  if current_order.delivered_pieces + requested_quantity > current_order.total_pieces then
+    raise exception 'The delivery quantity cannot exceed the remaining cut quantity.';
+  end if;
 
   insert into public.factory_deliveries (
     order_id, customer_id, quantity, price_per_piece, recipient_name, expected_delivery_date
