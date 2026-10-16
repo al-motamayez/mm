@@ -1100,7 +1100,7 @@ function clientAccountsOverview(data) {
   const totalBalance = sumMoney(summaries.map((summary) => summary.balance));
   const unpricedCount = summaries.reduce((count, summary) =>
     count + summary.orders.filter((order) => order.pricePerPiece <= 0).length, 0);
-  return `<div class="clients-toolbar"><div><h2>ملخص العملاء والحسابات</h2><p>متابعة الأرصدة والدفعات وقيمة البضاعة وحالات الموديلات لكل عميل.</p></div></div>
+  return `<div class="clients-toolbar"><div><h2>حسابات العملاء</h2><p>متابعة الأرصدة والدفعات وقيمة البضاعة وحالات الموديلات لكل عميل.</p></div></div>
     <div class="stats-grid">${stat("قيمة البضاعة المسلّمة", money(totalGoods), "الكمية المسلّمة × سعر القطعة")}${stat("الإجمالي المتوقع", money(totalExpected), "الكمية الفعلية × سعر القطعة")}${stat("إجمالي المدفوع", money(totalPaid), "دفعات العملاء والمدفوع على الطلب")}${stat("الرصيد الصافي", money(totalBalance), totalBalance < 0 ? "أرصدة دائنة للعملاء" : "المطلوب من العملاء")}${stat("موديلات بلا سعر", unpricedCount, "تحتاج إلى استكمال التسعير")}</div>
     ${clientAccountCards(data)}`;
 }
@@ -1160,7 +1160,7 @@ const FACTORY_ORDER_STATUSES = [
 function adminDashboardView(data) {
   const activeOrders = data.models.filter((order) => !order.archivedAt);
   const groups = [
-    ["الموديلات الحالية", activeOrders.length],
+    ["شغال حالياً", activeOrders.length],
     ["قيد الانتظار", activeOrders.filter((order) => order.status === "قيد الانتظار").length],
     ["في الفرش", activeOrders.filter((order) => order.status === "قيد الفرش").length],
     ["في الخياطة", activeOrders.filter((order) => order.status === "في الخياطة").length]
@@ -1176,7 +1176,7 @@ function modelStatusReviewView(data) {
   const statusOptions = (selected) => FACTORY_ORDER_STATUSES
     .map((status) => `<option value="${escapeHtml(status)}"${selected === status ? " selected" : ""}>${escapeHtml(status)}</option>`)
     .join("");
-  return `<div class="clients-toolbar"><div><h2>مراجعة وفرز الموديلات</h2><p>حالة الموديل لا تتغير تلقائياً؛ اختر الحالة المطلوبة واحفظها يدوياً.</p></div><label class="field model-status-filter"><span>تصفية حسب الحالة</span><select data-filter-model-status><option value="">كل الحالات</option>${statusOptions("")}</select></label></div>
+  return `<div class="clients-toolbar"><div><h2>الموديلات</h2><p>حالة الموديل لا تتغير تلقائياً؛ اختر الحالة المطلوبة واحفظها يدوياً.</p></div><label class="field model-status-filter"><span>تصفية حسب الحالة</span><select data-filter-model-status><option value="">كل الحالات</option>${statusOptions("")}</select></label></div>
     ${orders.length ? `<div class="model-status-list">${orders.map((order) => `<article class="model-status-row" data-model-status-row data-current-status="${escapeHtml(order.status)}">
       <div class="model-status-info"><strong>${escapeHtml(order.name)}</strong><span>العميل: ${escapeHtml(order.client || "—")}</span><span>العدد: ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity)} قطعة</span><span>السعر: ${money(order.pricePerPiece)}</span></div>
       ${statusTag(order.displayStatus || order.status)}
@@ -1276,7 +1276,7 @@ function modelDetailsModalView(order) {
       <div><span>المتبقي الحالي</span><strong>${money(order.remainingAmount)}</strong></div>
       <div><span>الألوان</span><strong>${colorSummaryMarkup(order.colors, order.colorNames, order.colorPlyData)}</strong></div>
       <div><span>المقاسات</span><strong>${escapeHtml(sizeSummary(order.sizes))}</strong></div>
-      <div><span>القماش / الفرشة</span><strong>${escapeHtml(order.fabric || "—")} · ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.boltCount)} توب · ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.layerCount)} رئات</strong></div>
+      <div><span>القماش / الفرشة</span><strong>${escapeHtml(order.fabric || "—")} · ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.boltCount)} طوب · ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.layerCount)} رئات</strong></div>
       <div><span>ملاحظات القص</span><strong>${escapeHtml(order.cuttingNotes || "—")}</strong></div>
       <div><span>تم الإرسال بواسطة</span><strong>${escapeHtml(order.senderName || "—")}</strong></div>
       <div><span>التسليم المتوقع</span><strong>${formatDateOnly(order.expectedDeliveryDate)}</strong></div>
@@ -1294,13 +1294,14 @@ function clientQuickDetailsModalView(client, data) {
       <div><span>المدفوع</span><strong>${money(summary.paid)}</strong></div>
       <div><span>الهاتف / واتساب</span><strong>${escapeHtml(client.phone || client.whatsapp || "—")}</strong></div>
     </div>
-    <h3 class="modal-subheading">الموديلات الحالية</h3>
+    <h3 class="modal-subheading">شغال حالياً</h3>
     ${orders.length ? `<div class="compact-model-list">${orders.map((order) => `<button type="button" class="compact-model-item" data-open-model-id="${escapeHtml(order.id)}"><strong>${escapeHtml(order.name || order.modelNumber || "موديل بدون اسم")}</strong><span>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity)} قطعة · ${money(order.pricePerPiece)}</span>${statusTag(order.displayStatus || order.status)}</button>`).join("")}</div>` : '<p class="empty-state">لا توجد موديلات حالية.</p>'}
     <div class="form-actions"><button class="button button-primary" type="button" data-quick-client-payment="${escapeHtml(client.id)}">إضافة دفعة</button><button class="button button-secondary" type="button" data-edit-customer="${escapeHtml(client.id)}">تعديل ملف العميل</button></div>`;
 }
 
 function fabricSelectOptions(fabrics, selectedId = "", clients = [], allowExternal = false) {
-  return `<option value="">اختر خامة من المخزون</option>${allowExternal ? `<option value="external" ${selectedId === "external" ? "selected" : ""}>خامة أخرى / خارجية غير مسجلة بالمخزن</option>` : ""}${fabrics.map((fabric) =>
+  const selectableFabrics = allowExternal ? fabrics.filter((fabric) => fabric.unit === "طوب") : fabrics;
+  return `<option value="">اختر خامة من المخزون</option>${allowExternal ? `<option value="external" ${selectedId === "external" ? "selected" : ""}>خامة أخرى / خارجية غير مسجلة بالمخزن</option>` : ""}${selectableFabrics.map((fabric) =>
     `<option value="${escapeHtml(fabric.id)}" data-name="${escapeHtml(fabric.name)}" data-unit="${escapeHtml(fabric.unit)}" data-customer="${escapeHtml(fabric.customer_id || "")}" data-color="${escapeHtml(fabric.color_name || "")}" data-available="${escapeHtml(fabric.quantity_available)}" ${fabric.stock_scope === "incoming" && !fabric.customer_id ? "disabled" : ""} ${fabric.id === selectedId ? "selected" : ""}>${escapeHtml(fabric.name)}${fabric.customer_id ? ` · ${escapeHtml(clients.find((client) => client.id === fabric.customer_id)?.name || "عميل مرتبط")}` : fabric.stock_scope === "incoming" ? " · بانتظار تعيين العميل" : ""} · ${escapeHtml(fabric.color_name || fabric.color_hex)} · متاح ${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(fabric.quantity_available)} ${escapeHtml(fabric.unit)}</option>`
   ).join("")}`;
 }
@@ -1310,7 +1311,7 @@ function incomingFabricColorRowMarkup() {
     <label class="field"><span>اسم اللون</span><input name="colorName" maxlength="64"></label>
     <label class="field"><span>درجة اللون</span><input name="colorHex" type="color" value="#ffffff" required></label>
     <label class="field"><span>الكمية</span><input name="quantity" type="number" min="0.001" step="0.001" required></label>
-    <label class="field"><span>الوحدة</span><select name="unit" required><option value="متر">متر</option><option value="توب">توب</option></select></label>
+    <label class="field"><span>الوحدة</span><select name="unit" required><option value="متر">متر</option><option value="طوب">طوب</option></select></label>
     <button type="button" class="row-action" data-remove-incoming-color>حذف اللون</button>
   </div>`;
 }
@@ -1319,10 +1320,10 @@ function syncIncomingFabricQuantity(row) {
   const unit = row.querySelector('[name="unit"]')?.value;
   const quantity = row.querySelector('[name="quantity"]');
   if (!quantity) return;
-  const wholeTobs = unit === "توب";
+  const wholeTobs = unit === "طوب";
   quantity.step = wholeTobs ? "1" : "0.001";
   quantity.min = wholeTobs ? "1" : "0.001";
-  quantity.placeholder = wholeTobs ? "عدد التوب" : "الكمية بالمتر";
+  quantity.placeholder = wholeTobs ? "عدد الطوب" : "الكمية بالمتر";
 }
 
 function incomingFabricGroupMarkup() {
@@ -1382,17 +1383,17 @@ function fabricStockView(data, isAdmin) {
   const incomingForm = `<form class="form-grid fabric-form incoming-fabric-form" id="incoming-fabric-form"><div class="field"><label for="incoming-fabric-client">اسم العميل</label><select id="incoming-fabric-client" name="customerId"><option value="">عميل غير معروف / غير محدد حالياً</option>${data.clients.map((client) => `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)}</option>`).join("")}</select></div><div class="field"><label for="incoming-fabric-date">تاريخ ووقت الاستلام</label><input id="incoming-fabric-date" name="receivedAt" type="datetime-local" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}" required></div><div class="field wide"><label for="incoming-fabric-notes">ملاحظات الحركة</label><input id="incoming-fabric-notes" name="notes" maxlength="500"></div><div class="wide incoming-fabric-groups" data-incoming-fabric-groups>${incomingFabricGroupMarkup()}</div><div class="form-actions"><button class="button button-secondary" type="button" data-add-incoming-type>＋ إضافة نوع قماش جديد</button><button class="button button-primary" type="submit">＋ تسجيل القماش الداخل</button></div></form>`;
   const incomingSection = `<section id="incoming-fabric" class="dashboard-section">
     <div class="stats-grid">${stat("سجلات القماش الداخل", incomingFabrics.length, "مرتبطة بعميل أو بانتظار التحديد")}${stat("المتاح حالياً للقص", new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(incomingFabrics.reduce((sum, fabric) => sum + Number(fabric.quantity_available), 0)), "بعد خصم القماش المستخدم")}${isAdmin ? stat("حركات القماش", totalTransactions, "استلام وسحب") : ""}</div>
-    ${panel("تسجيل القماش الداخل للقص", incomingForm, "اكتب نوع القماش مرة واحدة، ثم أضف لوناً وكمية ووحدة لكل لون. يمكن تسجيل عدة أنواع في الشحنة نفسها.")}
-    ${panel(isAdmin ? "القماش الداخل للقص وتعيين العميل" : "سجل القماش الداخل للقص", table(["اسم القماش","اللون","العميل","الكمية المتاحة","تاريخ الاستلام","إجراء"], incomingRows))}
+    ${panel("القماش الداخل", incomingForm, "اكتب نوع القماش مرة واحدة، ثم أضف لوناً وكمية ووحدة لكل لون. يمكن تسجيل عدة أنواع في الشحنة نفسها.")}
+    ${panel("القماش الداخل", table(["اسم القماش","اللون","العميل","الكمية المتاحة","تاريخ الاستلام","إجراء"], incomingRows))}
     ${isAdmin ? panel("سجل حركات القماش الداخل", table(["القماش","نوع الحركة","الكمية","رقم الطلب","ملاحظات","التاريخ والوقت","إجراء"], transactionRows.filter((transaction) => incomingFabrics.some((fabric) => fabric.id === transaction.fabric_id)))) : ""}
   </section>`;
   if (!isAdmin) return incomingSection;
   const ownerSection = `<section id="owner-fabric" class="dashboard-section">
     <div class="stats-grid">${stat("أصناف قماش الإدارة", ownerFabrics.length, "إدارة خاصة بالأدمن")}${stat("حركات المخزون", totalTransactions, "وارد وسحب")}</div>
     <div class="fabric-admin-tools">
-      ${panel("إضافة / تعديل صنف قماش", `<form class="form-grid fabric-form" id="fabric-form"><input type="hidden" name="fabricId"><div class="field"><label for="fabric-name">اسم القماش</label><input id="fabric-name" name="name" maxlength="120" required></div><div class="field fabric-color-name-field"><label for="fabric-color-name">اسم اللون</label><input id="fabric-color-name" name="colorName" maxlength="64"></div><div class="field fabric-color-picker-field"><label for="fabric-color-hex">درجة اللون</label><input id="fabric-color-hex" name="colorHex" type="color" value="#ffffff" required></div><div class="field"><label for="fabric-unit">وحدة القياس</label><select id="fabric-unit" name="unit" required><option value="متر">متر</option><option value="توب">توب</option></select></div><div class="form-actions"><button class="button button-primary" type="submit">حفظ بيانات القماش</button><button class="row-action" type="button" data-cancel-fabric-edit hidden>إلغاء التعديل</button></div></form>`, "تغيير الوحدة غير متاح بعد تسجيل حركات على الصنف")}
-      ${panel("تسجيل القماش الداخل للإدارة", `<form class="form-grid fabric-form" id="fabric-receipt-form"><div class="field"><label for="fabric-receipt-date">تاريخ الإدخال</label><input id="fabric-receipt-date" name="receivedAt" type="datetime-local" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}" required></div><div class="field"><label for="fabric-receipt-notes">ملاحظات / مرجع</label><input id="fabric-receipt-notes" name="notes" maxlength="500"></div><div class="wide fabric-entry-list" data-fabric-entry-list>${ownerFabricReceiptLineMarkup(ownerFabrics)}</div><div class="form-actions"><button class="button button-secondary" type="button" data-add-fabric-row>＋ إضافة صنف</button><button class="button button-primary" type="submit">＋ تسجيل الكميات الداخلة</button></div></form>`, "هذا رصيد الإدارة فقط، ولا يظهر في سجل القماش الداخل الخاص بمشرف القص")}
-      ${panel("تسوية رصيد قماش الإدارة", `<form class="form-grid fabric-form" id="fabric-adjustment-form"><div class="field"><label for="fabric-adjustment-item">صنف قماش الإدارة</label><select id="fabric-adjustment-item" name="fabricId" required>${fabricSelectOptions(ownerFabrics)}</select></div><div class="field"><label for="fabric-adjustment-quantity">فرق الكمية (+ زيادة / − نقص)</label><input id="fabric-adjustment-quantity" name="adjustment" type="number" step="0.001" required></div><div class="field"><label for="fabric-adjustment-date">تاريخ التسوية</label><input id="fabric-adjustment-date" name="adjustedAt" type="datetime-local" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}" required></div><div class="field"><label for="fabric-adjustment-notes">سبب التسوية</label><input id="fabric-adjustment-notes" name="notes" maxlength="500" required></div><div class="form-actions"><button class="button button-secondary" type="submit">حفظ تسوية المخزون</button></div></form>`, "يُسجل الفرق كحركة تدقيقية ولا يمكن أن يخفض الرصيد إلى أقل من صفر")}
+      ${panel("أنواع القماش", `<form class="form-grid fabric-form" id="fabric-form"><input type="hidden" name="fabricId"><div class="field"><label for="fabric-name">اسم القماش</label><input id="fabric-name" name="name" maxlength="120" required></div><div class="field fabric-color-name-field"><label for="fabric-color-name">اسم اللون</label><input id="fabric-color-name" name="colorName" maxlength="64"></div><div class="field fabric-color-picker-field"><label for="fabric-color-hex">درجة اللون</label><input id="fabric-color-hex" name="colorHex" type="color" value="#ffffff" required></div><div class="field"><label for="fabric-unit">وحدة القياس</label><select id="fabric-unit" name="unit" required><option value="متر">متر</option><option value="طوب">طوب</option></select></div><div class="form-actions"><button class="button button-primary" type="submit">حفظ بيانات القماش</button><button class="row-action" type="button" data-cancel-fabric-edit hidden>إلغاء التعديل</button></div></form>`, "تغيير الوحدة غير متاح بعد تسجيل حركات على الصنف")}
+      ${panel("القماش الداخل", `<form class="form-grid fabric-form" id="fabric-receipt-form"><div class="field"><label for="fabric-receipt-date">تاريخ الإدخال</label><input id="fabric-receipt-date" name="receivedAt" type="datetime-local" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}" required></div><div class="field"><label for="fabric-receipt-notes">ملاحظات / مرجع</label><input id="fabric-receipt-notes" name="notes" maxlength="500"></div><div class="wide fabric-entry-list" data-fabric-entry-list>${ownerFabricReceiptLineMarkup(ownerFabrics)}</div><div class="form-actions"><button class="button button-secondary" type="button" data-add-fabric-row>＋ إضافة صنف</button><button class="button button-primary" type="submit">＋ تسجيل الكميات الداخلة</button></div></form>`, "هذا رصيد الإدارة فقط، ولا يظهر في سجل القماش الداخل الخاص بمشرف القص")}
+      ${panel("تعديل المخزون", `<form class="form-grid fabric-form" id="fabric-adjustment-form"><div class="field"><label for="fabric-adjustment-item">صنف قماش الإدارة</label><select id="fabric-adjustment-item" name="fabricId" required>${fabricSelectOptions(ownerFabrics)}</select></div><div class="field"><label for="fabric-adjustment-quantity">فرق الكمية (+ زيادة / − نقص)</label><input id="fabric-adjustment-quantity" name="adjustment" type="number" step="0.001" required></div><div class="field"><label for="fabric-adjustment-date">تاريخ التعديل</label><input id="fabric-adjustment-date" name="adjustedAt" type="datetime-local" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}" required></div><div class="field"><label for="fabric-adjustment-notes">سبب التعديل</label><input id="fabric-adjustment-notes" name="notes" maxlength="500" required></div><div class="form-actions"><button class="button button-secondary" type="submit">حفظ التعديل</button></div></form>`, "يُسجل الفرق كحركة تدقيقية ولا يمكن أن يخفض الرصيد إلى أقل من صفر")}
     </div>
     ${panel("مخزون قماش الإدارة", table(["اسم القماش","النوع","اللون ورقمه","المتاح","آخر تحديث","إجراء"], fabricRows(ownerFabrics, true)))}
     ${panel("حركات مخزون الإدارة", table(["القماش","نوع الحركة","الكمية","رقم الطلب","ملاحظات","التاريخ والوقت"], transactionRows.filter((transaction) => ownerFabrics.some((fabric) => fabric.id === transaction.fabric_id))))}
@@ -1456,7 +1457,7 @@ function adminView(data, accounts) {
     ${fabricStockView(data, true)}
     <section id="clients" class="dashboard-section">
       <div class="client-management-tabs" role="tablist" aria-label="إدارة العملاء">
-        <button type="button" role="tab" aria-selected="${clientManagementTab === "summary"}" class="client-management-tab${clientManagementTab === "summary" ? " active" : ""}" data-client-tab="summary">ملخص العملاء والحسابات</button>
+        <button type="button" role="tab" aria-selected="${clientManagementTab === "summary"}" class="client-management-tab${clientManagementTab === "summary" ? " active" : ""}" data-client-tab="summary">حسابات العملاء</button>
         <button type="button" role="tab" aria-selected="${clientManagementTab === "profiles"}" class="client-management-tab${clientManagementTab === "profiles" ? " active" : ""}" data-client-tab="profiles">ملفات العملاء</button>
       </div>
       <div data-client-panel="summary"${clientManagementTab === "summary" ? "" : " hidden"}>${clientAccountsOverview(data)}</div>
@@ -1515,22 +1516,22 @@ function cuttingView(data) {
     </form>
   </article>`;
   }).join("")}</div>` : '<div class="empty-state">لا توجد أوامر قص نشطة حاليًا.</div>';
-  return panel("طلبات الإدارة · طاولة الفرش والقص", cards, "أوامر العمل المحولة من الإدارة");
+  return panel("طلبات الإدارة", cards, "أوامر العمل المحولة من الإدارة");
 }
 
 function cuttingDashboardView(data) {
   const active = data.cutting.filter((item) => ["قيد الانتظار", "معلق", "تحت الإنشاء", "قيد الفرش", "تم الفرش / جاهز للقص"].includes(item.orderStatus));
   const activeTotal = active.reduce((sum, item) => sum + Number(item.total), 0);
   const completed = data.cutting.filter((item) => ["تم القص", "معلق - في انتظار الخياطة", "في الخياطة", "مكتمل"].includes(item.orderStatus));
-  return `<div class="stats-grid">${stat("أوامر الإدارة النشطة", active.length, "بانتظار استكمال القص")}${stat("العدد المطلوب للأوامر النشطة", new Intl.NumberFormat("ar-EG-u-nu-latn").format(activeTotal), "قطعة")}${stat("عمليات قص مكتملة", completed.length, "مسجلة على أوامر الإنتاج")}${stat("أصناف القماش المتاحة", data.fabrics.length, "متابعة مباشرة للمخزون")}</div>${panel("ملخص العمل الحالي", `<div class="empty-state">استخدم صفحة «طلبات الإدارة» لمراجعة الأوامر، تسجيل بيانات الفرشة والقص، أو إرسال قصة جديدة للإدارة.</div>`)}`;
+  return `<div class="stats-grid">${stat("طلبات الإدارة", active.length, "بانتظار استكمال القص")}${stat("العدد المطلوب لطلبات الإدارة", new Intl.NumberFormat("ar-EG-u-nu-latn").format(activeTotal), "قطعة")}${stat("عمليات قص مكتملة", completed.length, "مسجلة على أوامر الإنتاج")}${stat("أصناف القماش المتاحة", data.fabrics.length, "متابعة مباشرة للمخزون")}</div>${panel("ملخص العمل الحالي", `<div class="empty-state">استخدم «طلبات الإدارة» لمراجعة الأوامر وتسجيل بيانات الفرشة والقص، أو «قصة جديدة» لإنشاء قصة مباشرة.</div>`)}`;
 }
 
 function cuttingRequestsView(data) {
   const clientOptions = data.clients.map((client) =>
     `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)}</option>`
   ).join("");
-  return `${cuttingView(data)}
-    ${panel("إرسال قصة جديدة للإدارة", `<form class="cutting-submit-form modal-form" id="cutting-submit-form">
+  return `<section id="admin-requests" class="dashboard-section">${cuttingView(data)}</section>
+    <section id="new-cutting" class="dashboard-section">${panel("قصة جديدة", `<form class="cutting-submit-form modal-form" id="cutting-submit-form">
       <section class="form-section"><h3>بيانات الموديل <span>إجباري</span></h3><div class="form-section-grid">
         <label class="field"><span>العميل</span><select name="customerId" required><option value="">اختر العميل</option>${clientOptions}</select></label>
         <label class="field model-name-field"><span>اسم الموديل</span><input name="modelName" autocomplete="off"></label>
@@ -1548,7 +1549,7 @@ function cuttingRequestsView(data) {
       <label class="field"><span>صورة الموديل (اختياري)</span><input type="file" name="modelImage" accept="image/jpeg,image/png,image/webp"><small>الحد الأقصى 5 ميجابايت.</small></label>
       <label class="field"><span>ملاحظات فنية للفرشة والقص</span><textarea name="technicalNotes" rows="4"></textarea></label>
       <div class="form-actions"><button type="submit" class="button button-primary">إرسال القصة وبدء الفرش</button></div>
-    </form>`, "يرتبط الطلب بالعميل المحدد فور الحفظ ويبدأ بحالة «قيد الفرش»؛ تُحفظ تحديثات الرئات تدريجيًا ثم يُعتمد جاهزًا للقص.")}`;
+    </form>`, "يرتبط الطلب بالعميل المحدد فور الحفظ ويبدأ بحالة «قيد الفرش»؛ تُحفظ تحديثات الرئات تدريجيًا ثم يُعتمد جاهزًا للقص.")}</section>`;
 }
 
 function cuttingPersonalAccountView(data) {
@@ -1616,13 +1617,13 @@ function navigationItems(role, info) {
   if (role === "admin") {
     return [
       { id: "dashboard", icon: "▦", label: "لوحة التحكم" },
-      { id: "model-review", icon: "⇅", label: "مراجعة وفرز الموديلات" },
+      { id: "model-review", icon: "⇅", label: "الموديلات" },
       { id: "clients", icon: "◇", label: "إدارة العملاء" },
       { id: "orders", icon: "▤", label: "الموديلات والطلبيات" },
       { id: "workers-production", icon: "⌁", label: "العمال والإنتاج" },
-      { id: "finance", icon: "ج.م", label: "الحسابات والماليات" },
+      { id: "finance", icon: "ج.م", label: "حسابات العملاء" },
       { id: "owner-fabric", icon: "▧", label: "قماش الإدارة" },
-      { id: "incoming-fabric", icon: "↘", label: "القماش الداخل للقص" },
+      { id: "incoming-fabric", icon: "↘", label: "القماش الداخل" },
       { id: "accounts", icon: "♙", label: "طلبات ومستخدمي النظام", last: true }
     ];
   }
@@ -1637,7 +1638,8 @@ function navigationItems(role, info) {
     return [
       { id: "dashboard", icon: info.icon, label: "لوحة التحكم" },
       { id: "admin-requests", icon: "✂", label: "طلبات الإدارة" },
-      { id: "incoming-fabric", icon: "↘", label: "القماش الداخل للقص" },
+      { id: "new-cutting", icon: "＋", label: "قصة جديدة" },
+      { id: "incoming-fabric", icon: "↘", label: "القماش الداخل" },
       { id: "personal-account", icon: "◷", label: "متابعة الحساب والراتب", last: true }
     ];
   }
@@ -1656,7 +1658,7 @@ function render(session, data, accounts) {
     : session.role === "client"
       ? clientView(data, session)
       : session.role === "cutting"
-        ? `<section id="dashboard" class="dashboard-section">${cuttingDashboardView(data)}</section><section id="admin-requests" class="dashboard-section">${cuttingRequestsView(data)}</section>${fabricStockView(data, false)}<section id="personal-account" class="dashboard-section">${cuttingPersonalAccountView(data)}</section>`
+        ? `<section id="dashboard" class="dashboard-section">${cuttingDashboardView(data)}</section>${cuttingRequestsView(data)}${fabricStockView(data, false)}<section id="personal-account" class="dashboard-section">${cuttingPersonalAccountView(data)}</section>`
       : `<section id="dashboard" class="dashboard-section">${session.role === "cutting" ? cuttingView(data) : session.role === "sewing" ? sewingView(data) : workerView(data, session)}</section>`;
   document.querySelector("#app").innerHTML = `
     <div class="app-shell${collapsedClass}">
@@ -1878,9 +1880,9 @@ function bindCuttingActions(session) {
       const selectedUnit = external ? "متر" : selected?.dataset.unit || "متر";
       if (unit) unit.textContent = selectedUnit;
       const quantityInput = form.elements.fabricQuantity;
-      quantityInput.step = selectedUnit === "توب" ? "1" : "0.001";
-      quantityInput.min = selectedUnit === "توب" ? "1" : "0.001";
-      quantityInput.placeholder = selectedUnit === "توب" ? "عدد التوب" : "الكمية بالمتر";
+      quantityInput.step = selectedUnit === "طوب" ? "1" : "0.001";
+      quantityInput.min = selectedUnit === "طوب" ? "1" : "0.001";
+      quantityInput.placeholder = selectedUnit === "طوب" ? "عدد الطوب" : "الكمية بالمتر";
       if (select.value === "external") {
         externalFields.forEach((field) => { field.hidden = false; });
         if (externalInput) externalInput.required = true;
@@ -1910,18 +1912,19 @@ function bindCuttingActions(session) {
     const fabricUnit = isExternal ? form.elements.externalFabricUnit.value : form.elements.fabricId.selectedOptions[0]?.dataset.unit || "";
     const fabricId = isExternal ? null : selectedFabricId;
     const fabricQuantity = Number(form.elements.fabricQuantity.value);
-    const boltCount = fabricUnit === "توب" ? fabricQuantity : 1;
+    const boltCount = fabricUnit === "طوب" ? fabricQuantity : 1;
     const externalFabricSource = isExternal ? String(form.elements.externalFabricSource.value).trim() : "";
     const fabric = isExternal ? externalFabricSource : form.elements.fabricId.selectedOptions[0]?.dataset.name || "";
     const { sizeData, total } = cuttingData;
     if ((!isExternal && !fabricId) || !fabric || !Number.isFinite(fabricQuantity) || fabricQuantity <= 0
       || (isExternal && fabricUnit !== "متر")
-      || (fabricUnit === "توب" && !Number.isSafeInteger(boltCount))
+      || (!isExternal && fabricUnit !== "طوب")
+      || (fabricUnit === "طوب" && !Number.isSafeInteger(boltCount))
       || !sizeData.type || !Object.keys(sizeData.counts).length || !Number.isSafeInteger(total) || total <= 0
       || cuttingData.colorPlyData.colors.length === 0
       || cuttingData.colorPlyData.colors.some((entry) => !entry.name || !Number.isSafeInteger(entry.plys) || entry.plys < 1)
       || new Set(cuttingData.colorPlyData.colors.map((entry) => entry.color)).size !== cuttingData.colorPlyData.colors.length) {
-      window.factoryUI.toast("اختر خامة من المخزون وحدد كميتها بوحدتها، أو اكتب مصدر الخامة الخارجية وحدد الكمية بالمتر، ثم راجع المقاسات والألوان والرئات.", "error");
+      window.factoryUI.toast("اختر خامة من المخزون وحدد عدد الطوب، أو اكتب مصدر الخامة الخارجية وحدد الكمية بالمتر، ثم راجع المقاسات والألوان والرئات.", "error");
       return null;
     }
     return {

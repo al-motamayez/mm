@@ -248,12 +248,18 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .model-color-chip small { color: var(--muted); font-size: 10px; }
 .cutting-calculated-total { margin: 0; padding: 13px 15px; border-radius: 9px; color: var(--green-dark); background: var(--green-pale); font-weight: 600; }
 .cutting-calculated-total strong { font-size: 20px; }
-.cutting-order-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 16px; padding: 18px; }
-.cutting-order-card { min-width: 0; }
-.cutting-order-card .cutting-finish-form { display: grid; gap: 16px; margin-top: 14px; }
+.cutting-order-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; padding: 10px; }
+.cutting-order-card { min-width: 0; padding: 12px; }
+.cutting-order-card .cutting-finish-form { display: grid; gap: 10px; margin-top: 10px; }
+.cutting-order-card .form-section { gap: 10px; padding: 12px; }
 .cutting-bed-inputs { grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); }
-.cutting-submit-form { max-width: 1100px; padding: 20px; }
+.cutting-submit-form { max-width: 1100px; padding: 12px; }
 .cutting-submit-form .form-section-grid > .field:first-child { grid-column: 1 / -1; }
+.cutting-submit-form .form-section { gap: 10px; padding: 12px; }
+.cutting-submit-form .form-section-grid { gap: 10px; }
+.cutting-submit-form .form-section-grid .field { gap: 6px; }
+.cutting-submit-form .form-section-grid .field input,
+.cutting-submit-form .form-section-grid .field select { min-height: 40px; }
 .form-help { margin: 0; color: var(--muted); line-height: 1.8; }
 .cutting-target { color: var(--green-dark); font-weight: 700; }
 .client-note-list { display: grid; gap: 10px; margin-bottom: 16px; }
@@ -492,6 +498,7 @@ input, select, .modal-form textarea { color: #1d3028; font-size: 16px; }
   .form-actions > * { flex: 1 1 auto; }
   .form-section { padding: 15px; }
   .form-section-grid { grid-template-columns: 1fr; }
+  .cutting-submit-form .form-section-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .payment-form .form-actions { grid-column: auto; }
   .client-form { grid-template-columns: minmax(0, 1fr); }
   .client-form .client-notes-field, .client-form .form-actions { grid-column: auto; }
@@ -525,7 +532,7 @@ input, select, .modal-form textarea { color: #1d3028; font-size: 16px; }
   .incoming-fabric-color-row { grid-template-columns: minmax(0, 1fr) 64px; gap: 6px; }
   .incoming-fabric-color-row > .field:nth-child(n+3) { grid-column: span 1; }
   .incoming-fabric-color-row > .row-action { justify-self: start; }
-  .cutting-submit-form .form-section-grid > .field:first-child { grid-column: auto; }
+  .cutting-submit-form .form-section-grid > .field:first-child { grid-column: 1 / -1; }
   .order-progress { min-width: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; }
   .order-progress-step:not(:last-child)::after { display: none; }
   .form-grid .wide { grid-column: span 2; }

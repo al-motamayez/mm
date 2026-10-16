@@ -1103,7 +1103,7 @@ create table if not exists public.factory_fabrics (
   fabric_type text not null default '',
   color_name text not null default '',
   color_hex text not null default '#FFFFFF' check (color_hex ~ '^#[0-9A-Fa-f]{6}$'),
-  unit text not null check (unit in ('متر', 'توب')),
+  unit text not null check (unit in ('متر', 'طوب')),
   quantity_available numeric(14, 3) not null default 0 check (quantity_available >= 0),
   received_at timestamptz,
   received_by uuid references auth.users (id) on delete set null,
@@ -1127,21 +1127,21 @@ begin
     from public.factory_fabrics
     where unit not in ('متر', 'توب', 'طوب', 'ثوب')
   ) then
-    raise exception 'Fabric inventory contains legacy units other than meter or toob. Reconcile those stock records manually before rerunning the schema; quantities were not converted.';
+    raise exception 'Fabric inventory contains units other than meter or طوب. Reconcile those stock records manually before rerunning the schema; quantities were not converted.';
   end if;
 end;
 $$;
 
 -- Normalize values saved by earlier UI/schema versions.
 update public.factory_fabrics
-set unit = 'توب'
-where unit in ('طوب', 'ثوب');
+set unit = 'طوب'
+where unit in ('توب', 'ثوب');
 
 alter table public.factory_fabrics drop column if exists color_number;
 
 alter table public.factory_fabrics
   add constraint factory_fabrics_unit_check
-    check (unit in ('متر', 'توب'));
+    check (unit in ('متر', 'طوب'));
 
 alter table public.factory_fabrics
   drop constraint if exists factory_fabrics_stock_scope_check,
@@ -1415,7 +1415,7 @@ begin
      or length(coalesce(requested_color_name, '')) > 64
      or upper(coalesce(requested_color_hex, '')) !~ '^#[0-9A-F]{6}$'
      or requested_unit is null
-     or requested_unit not in ('متر', 'توب') then
+     or requested_unit not in ('متر', 'طوب') then
     raise exception 'Enter a valid fabric name, type, color, HEX value, and stock unit.';
   end if;
 
@@ -1585,8 +1585,8 @@ begin
      or upper(coalesce(requested_color_hex, '')) !~ '^#[0-9A-F]{6}$'
      or requested_quantity is null or requested_quantity <= 0
      or requested_quantity > 99999999999.999
-     or requested_unit is null or requested_unit not in ('متر', 'توب')
-     or (requested_unit = 'توب' and requested_quantity <> trunc(requested_quantity)) then
+     or requested_unit is null or requested_unit not in ('متر', 'طوب')
+     or (requested_unit = 'طوب' and requested_quantity <> trunc(requested_quantity)) then
     raise exception 'Enter valid incoming fabric details and a positive quantity.';
   end if;
   if requested_customer_id is not null and not exists (
@@ -1666,8 +1666,8 @@ begin
        or length(item_color_name) > 64
        or item_color_hex !~ '^#[0-9A-F]{6}$'
        or item_quantity is null or item_quantity <= 0 or item_quantity > 99999999999.999
-       or item_unit not in ('متر', 'توب')
-       or (item_unit = 'توب' and item_quantity <> trunc(item_quantity)) then
+       or item_unit not in ('متر', 'طوب')
+       or (item_unit = 'طوب' and item_quantity <> trunc(item_quantity)) then
       raise exception 'Each incoming fabric line must include valid fabric, color, unit, and positive quantity details.';
     end if;
 
@@ -1874,6 +1874,12 @@ begin
   end if;
   if resolved_fabric.stock_scope <> 'incoming' then
     raise exception 'Cutting may only use fabric registered as incoming for cutting.';
+  end if;
+  if resolved_fabric.unit <> 'طوب' then
+    raise exception 'Fabric withdrawn from cutting stock must be measured in طوب.';
+  end if;
+  if requested_quantity <> trunc(requested_quantity) then
+    raise exception 'Fabric withdrawn from stock must use a whole number of طوب.';
   end if;
 
   select customer_id into order_customer_id
@@ -2209,6 +2215,14 @@ begin
      or requested_bolt_count is null or requested_bolt_count < 1 then
     raise exception 'A valid model, size and color ply selections, fabric, and bolt count are required.';
   end if;
+  if requested_fabric_id is null
+     and coalesce(nullif(trim(requested_external_fabric_unit), ''), 'متر') <> 'متر' then
+    raise exception 'External fabric quantity must be measured in meters.';
+  end if;
+  if requested_fabric_id is not null
+     and requested_bolt_count::numeric <> requested_fabric_quantity then
+    raise exception 'The cutting bolt count must match the number withdrawn from stock.';
+  end if;
 
   select *
     into matched_customer
@@ -2314,6 +2328,14 @@ begin
      or length(trim(coalesce(requested_fabric, ''))) = 0
      or requested_bolt_count is null or requested_bolt_count < 1 then
     raise exception 'A valid order, fabric, and positive bolt count are required.';
+  end if;
+  if requested_fabric_id is null
+     and coalesce(nullif(trim(requested_external_fabric_unit), ''), 'متر') <> 'متر' then
+    raise exception 'External fabric quantity must be measured in meters.';
+  end if;
+  if requested_fabric_id is not null
+     and requested_bolt_count::numeric <> requested_fabric_quantity then
+    raise exception 'The cutting bolt count must match the number withdrawn from stock.';
   end if;
 
   select *
@@ -2450,6 +2472,14 @@ begin
      or length(trim(coalesce(requested_fabric, ''))) = 0
      or requested_bolt_count is null or requested_bolt_count < 1 then
     raise exception 'A valid order, size and color ply selections, fabric, and bolt count are required.';
+  end if;
+  if requested_fabric_id is null
+     and coalesce(nullif(trim(requested_external_fabric_unit), ''), 'متر') <> 'متر' then
+    raise exception 'External fabric quantity must be measured in meters.';
+  end if;
+  if requested_fabric_id is not null
+     and requested_bolt_count::numeric <> requested_fabric_quantity then
+    raise exception 'The cutting bolt count must match the number withdrawn from stock.';
   end if;
 
   select breakdown.normalized_sizes, breakdown.normalized_colors,
