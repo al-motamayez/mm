@@ -26,7 +26,7 @@ const roleNames = {
 const SIZE_OPTIONS = {
   men: ["S", "M", "L", "XL", "2XL", "3XL", "4XL"],
   women: ["S", "M", "L", "XL", "2XL", "3XL", "4XL"],
-  children: ["2", "4", "6", "8", "10", "12", "14", "16"]
+  children: Array.from({ length: 16 }, (_, index) => String(index + 1))
 };
 const SIZE_TYPE_LABELS = { men: "رجالي", women: "حريمي", children: "أطفال" };
 const roleInfo = {
@@ -228,7 +228,7 @@ async function readDashboardData(session) {
   } else {
     let ordersQuery = supabaseClient
       .from("orders")
-      .select("id, model_name, model_number, sender_name, colors, sizes, total_pieces, model_image_url, priority, archived_at, status, created_at")
+      .select("id, model_name, model_number, sender_name, colors, color_size_distribution, production_type, sizes, total_pieces, model_image_url, priority, archived_at, status, created_at")
       .is("archived_at", null)
       .order("created_at", { ascending: false });
     ({ data: orders, error: ordersError } = await ordersQuery);
@@ -308,10 +308,14 @@ async function readDashboardData(session) {
         ...Object.fromEntries(parseColorPlyData(cuttingStage?.color_ply_data).map((entry) => [entry.color, entry.name]).filter(([, name]) => name)),
         ...parseColorNames(order.color_names)
       },
-      client: clientsById.get(order.customer_id)?.name || "",
+      client: clientsById.get(order.customer_id)
+        ? `${clientsById.get(order.customer_id).name}${clientsById.get(order.customer_id).brand_name ? ` · ${clientsById.get(order.customer_id).brand_name}` : ""}`
+        : "",
       quantity: order.total_pieces,
       completedPieces,
       colors: order.colors || "",
+      colorSizeDistribution: order.color_size_distribution || { colors: [] },
+      productionType: order.production_type || "full_cutting",
       sizes: order.sizes || "",
       modelImageUrl: order.model_image_url || "",
       priority: order.priority || "عادي",
@@ -629,7 +633,7 @@ function colorPickerMarkup(value, prefix) {
   const choices = [...new Set(selected)].map((color) => colorPickerChoice(color)).join("");
   return `<div class="field color-picker" data-color-picker="${prefix}">
     <label>اختيار درجات الألوان</label>
-    <div class="color-picker-controls"><input type="color" data-color-input value="#000000" aria-label="اختر درجة لون"><button class="row-action" type="button" data-add-color>إضافة الدرجة</button></div>
+    <div class="color-picker-controls"><input type="color" data-color-input value="#000000" aria-label="اختر درجة لون"><button class="row-action" type="button" data-add-color>إضافة لون آخر</button></div>
     <div class="color-swatch-list" data-color-list>${choices || '<span class="muted">لم يتم اختيار ألوان بعد.</span>'}</div>
     <input type="hidden" name="colors" data-color-value value="${escapeHtml(value || "")}">
     <input type="hidden" name="colorNames" data-color-names-value value="{}">
@@ -813,6 +817,9 @@ function bindPickers(form) {
       picker.querySelector("[data-color-ply-rows]").innerHTML = cuttingColorPlyRow("#000000", "", "");
       updateCuttingCalculation(picker.closest("form"));
     });
+    if (form.querySelector("[data-model-allocation-grid]")) {
+      renderModelAllocation(form, { colors: [] });
+    }
   }));
 }
 
@@ -842,6 +849,84 @@ function setColorPicker(root, value, colorNames = {}) {
     ? [...new Set(colors)].map((color) => colorPickerChoice(color, names[color.toUpperCase()] || "")).join("")
     : '<span class="muted">لم يتم اختيار ألوان بعد.</span>';
   updateColorPicker(root);
+}
+
+function renderModelAllocation(form, distribution) {
+  const grid = form.querySelector("[data-model-allocation-grid]");
+  const input = form.elements.colorSizeDistribution;
+  if (!grid || !input) return;
+  const colors = Array.isArray(distribution?.colors) ? distribution.colors : [];
+  input.value = JSON.stringify({ colors });
+  if (!colors.length) {
+    grid.innerHTML = '<p class="muted">أدخل العدد الكلي واختر الألوان والمقاسات لعرض التوزيع.</p>';
+    return;
+  }
+  const sizes = [...new Set(colors.flatMap((entry) => Object.keys(entry.sizes || {})))];
+  grid.innerHTML = table(
+    ["اللون", ...sizes, "الإجمالي"],
+    colors.map((entry) => {
+      const counts = sizes.map((size) => Number(entry.sizes?.[size] || 0));
+      const total = counts.reduce((sum, count) => sum + count, 0);
+      return `<tr><td><span class="model-color-chip"><span class="color-breakdown-swatch" style="--swatch-color:${escapeHtml(entry.color)}"></span><strong>${escapeHtml(entry.name)}</strong></span></td>${counts.map((count) => `<td>${new Intl.NumberFormat("en-US").format(count)}</td>`).join("")}<td><strong>${new Intl.NumberFormat("en-US").format(total)}</strong></td></tr>`;
+    })
+  );
+}
+
+function distributeModelQuantity(form, useEnteredTotal = true) {
+  const sizePicker = form.querySelector("[data-size-picker]");
+  const selectedSizes = [...sizePicker.querySelectorAll(".size-option-group:not([hidden]) .size-toggle[aria-pressed='true']")]
+    .map((button) => button.dataset.sizeToggle);
+  const colorPicker = form.querySelector("[data-color-picker]");
+  const selectedColors = [...colorPicker.querySelectorAll("[data-color-choice]")].map((choice) => ({
+    color: choice.dataset.colorChoice.toUpperCase(),
+    name: String(choice.querySelector("[data-color-name]").value).trim()
+  }));
+  const countInputs = new Map([...sizePicker.querySelectorAll(".size-option-group:not([hidden]) [data-size-count]")]
+    .map((input) => [input.dataset.sizeCount, input]));
+  const enteredTotal = Number(form.elements.quantity.value || 0);
+  const sizeCounts = new Map();
+  if (useEnteredTotal && Number.isSafeInteger(enteredTotal) && enteredTotal > 0 && selectedSizes.length) {
+    const cellCount = selectedSizes.length * Math.max(selectedColors.length, 1);
+    let cellIndex = 0;
+    for (const size of selectedSizes) {
+      let count = 0;
+      for (let colorIndex = 0; colorIndex < Math.max(selectedColors.length, 1); colorIndex += 1) {
+        count += Math.floor(enteredTotal / cellCount) + (cellIndex < enteredTotal % cellCount ? 1 : 0);
+        cellIndex += 1;
+      }
+      sizeCounts.set(size, count);
+    }
+    for (const size of selectedSizes) {
+      const input = countInputs.get(size);
+      if (input) input.value = String(sizeCounts.get(size));
+    }
+    updateSizePicker(sizePicker);
+  } else if (useEnteredTotal && enteredTotal === 0) {
+    for (const size of selectedSizes) {
+      const input = countInputs.get(size);
+      if (input) input.value = "";
+      sizeCounts.set(size, 0);
+    }
+    updateSizePicker(sizePicker);
+  } else {
+    for (const size of selectedSizes) {
+      sizeCounts.set(size, Number(countInputs.get(size)?.value || 0));
+    }
+  }
+  const quantityTotal = [...sizeCounts.values()].reduce((sum, count) => sum + count, 0);
+  if (!useEnteredTotal && quantityTotal > 0) form.elements.quantity.value = String(quantityTotal);
+  if (!selectedSizes.length || !selectedColors.length || quantityTotal <= 0) {
+    renderModelAllocation(form, { colors: [] });
+    return;
+  }
+  const colors = selectedColors.map((entry) => ({ ...entry, sizes: {} }));
+  for (const size of selectedSizes) {
+    const sizeTotal = sizeCounts.get(size) || 0;
+    colors.forEach((entry, index) => {
+      entry.sizes[size] = Math.floor(sizeTotal / colors.length) + (index < sizeTotal % colors.length ? 1 : 0);
+    });
+  }
+  renderModelAllocation(form, { colors });
 }
 
 async function uploadModelImage(orderId, file) {
@@ -907,6 +992,10 @@ function statusTag(value) {
   return `<span class="status ${statusClass(value)}">${escapeHtml(value)}</span>`;
 }
 
+function productionTypeLabel(value) {
+  return value === "ready_sewing" ? "مقصوص جاهز - خياطة مباشرة / أمبلاج" : "شغل كامل بدءاً من القص";
+}
+
 function table(headers, rows) {
   if (!rows.length) return '<div class="empty-state">لا توجد بيانات لعرضها حاليًا.</div>';
   return `<div class="table-wrap"><table><thead><tr>${headers.map((heading) => `<th>${heading}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
@@ -933,7 +1022,7 @@ function orderCards(models, withActions = false) {
     const index = dashboardData.models.findIndex((order) => order.id === item.id);
     return `<article class="order-card order-compact-row">
       ${modelImageMarkup(item.modelImageUrl)}
-      <div class="order-compact-name"><strong>${escapeHtml(item.name || item.modelNumber || "موديل بدون اسم")}</strong><small>رقم الموديل: ${escapeHtml(item.modelNumber || "—")}</small></div>
+      <div class="order-compact-name"><strong>${escapeHtml(item.name || item.modelNumber || "موديل بدون اسم")}</strong><small>رقم الموديل: ${escapeHtml(item.modelNumber || "—")} · ${escapeHtml(productionTypeLabel(item.productionType))}</small></div>
       <span class="order-compact-client">${escapeHtml(item.client || "غير مربوط بعميل")}</span>
       <span class="order-compact-quantity">${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.quantity)} قطعة</span>
       <span class="order-compact-price">${money(item.pricePerPiece)} / قطعة</span>
@@ -1276,7 +1365,8 @@ function modelDetailsModalView(order) {
       <div><span>المتبقي الحالي</span><strong>${money(order.remainingAmount)}</strong></div>
       <div><span>الألوان</span><strong>${colorSummaryMarkup(order.colors, order.colorNames, order.colorPlyData)}</strong></div>
       <div><span>المقاسات</span><strong>${escapeHtml(sizeSummary(order.sizes))}</strong></div>
-      <div><span>القماش / الفرشة</span><strong>${escapeHtml(order.fabric || "—")} · ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.boltCount)} طوب · ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.layerCount)} رئات</strong></div>
+      <div><span>القماش / الفرشة</span><strong>${escapeHtml(order.fabric || "—")} · ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.boltCount)} توب · ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.layerCount)} رئات</strong></div>
+      <div><span>طبيعة شغل الموديل</span><strong>${escapeHtml(productionTypeLabel(order.productionType))}</strong></div>
       <div><span>ملاحظات القص</span><strong>${escapeHtml(order.cuttingNotes || "—")}</strong></div>
       <div><span>تم الإرسال بواسطة</span><strong>${escapeHtml(order.senderName || "—")}</strong></div>
       <div><span>التسليم المتوقع</span><strong>${formatDateOnly(order.expectedDeliveryDate)}</strong></div>
@@ -1300,7 +1390,7 @@ function clientQuickDetailsModalView(client, data) {
 }
 
 function fabricSelectOptions(fabrics, selectedId = "", clients = [], allowExternal = false) {
-  const selectableFabrics = allowExternal ? fabrics.filter((fabric) => fabric.unit === "طوب") : fabrics;
+  const selectableFabrics = allowExternal ? fabrics.filter((fabric) => fabric.unit === "توب") : fabrics;
   return `<option value="">اختر خامة من المخزون</option>${allowExternal ? `<option value="external" ${selectedId === "external" ? "selected" : ""}>خامة أخرى / خارجية غير مسجلة بالمخزن</option>` : ""}${selectableFabrics.map((fabric) =>
     `<option value="${escapeHtml(fabric.id)}" data-name="${escapeHtml(fabric.name)}" data-unit="${escapeHtml(fabric.unit)}" data-customer="${escapeHtml(fabric.customer_id || "")}" data-color="${escapeHtml(fabric.color_name || "")}" data-available="${escapeHtml(fabric.quantity_available)}" ${fabric.stock_scope === "incoming" && !fabric.customer_id ? "disabled" : ""} ${fabric.id === selectedId ? "selected" : ""}>${escapeHtml(fabric.name)}${fabric.customer_id ? ` · ${escapeHtml(clients.find((client) => client.id === fabric.customer_id)?.name || "عميل مرتبط")}` : fabric.stock_scope === "incoming" ? " · بانتظار تعيين العميل" : ""} · ${escapeHtml(fabric.color_name || fabric.color_hex)} · متاح ${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(fabric.quantity_available)} ${escapeHtml(fabric.unit)}</option>`
   ).join("")}`;
@@ -1311,7 +1401,7 @@ function incomingFabricColorRowMarkup() {
     <label class="field"><span>اسم اللون</span><input name="colorName" maxlength="64"></label>
     <label class="field"><span>درجة اللون</span><input name="colorHex" type="color" value="#ffffff" required></label>
     <label class="field"><span>الكمية</span><input name="quantity" type="number" min="0.001" step="0.001" required></label>
-    <label class="field"><span>الوحدة</span><select name="unit" required><option value="متر">متر</option><option value="طوب">طوب</option></select></label>
+    <label class="field"><span>الوحدة</span><select name="unit" required><option value="متر">متر</option><option value="توب">توب</option></select></label>
     <button type="button" class="row-action" data-remove-incoming-color>حذف اللون</button>
   </div>`;
 }
@@ -1320,10 +1410,10 @@ function syncIncomingFabricQuantity(row) {
   const unit = row.querySelector('[name="unit"]')?.value;
   const quantity = row.querySelector('[name="quantity"]');
   if (!quantity) return;
-  const wholeTobs = unit === "طوب";
+  const wholeTobs = unit === "توب";
   quantity.step = wholeTobs ? "1" : "0.001";
   quantity.min = wholeTobs ? "1" : "0.001";
-  quantity.placeholder = wholeTobs ? "عدد الطوب" : "الكمية بالمتر";
+  quantity.placeholder = wholeTobs ? "عدد التوب" : "الكمية بالمتر";
 }
 
 function incomingFabricGroupMarkup() {
@@ -1391,7 +1481,7 @@ function fabricStockView(data, isAdmin) {
   const ownerSection = `<section id="owner-fabric" class="dashboard-section">
     <div class="stats-grid">${stat("أصناف قماش الإدارة", ownerFabrics.length, "إدارة خاصة بالأدمن")}${stat("حركات المخزون", totalTransactions, "وارد وسحب")}</div>
     <div class="fabric-admin-tools">
-      ${panel("أنواع القماش", `<form class="form-grid fabric-form" id="fabric-form"><input type="hidden" name="fabricId"><div class="field"><label for="fabric-name">اسم القماش</label><input id="fabric-name" name="name" maxlength="120" required></div><div class="field fabric-color-name-field"><label for="fabric-color-name">اسم اللون</label><input id="fabric-color-name" name="colorName" maxlength="64"></div><div class="field fabric-color-picker-field"><label for="fabric-color-hex">درجة اللون</label><input id="fabric-color-hex" name="colorHex" type="color" value="#ffffff" required></div><div class="field"><label for="fabric-unit">وحدة القياس</label><select id="fabric-unit" name="unit" required><option value="متر">متر</option><option value="طوب">طوب</option></select></div><div class="form-actions"><button class="button button-primary" type="submit">حفظ بيانات القماش</button><button class="row-action" type="button" data-cancel-fabric-edit hidden>إلغاء التعديل</button></div></form>`, "تغيير الوحدة غير متاح بعد تسجيل حركات على الصنف")}
+      ${panel("أنواع القماش", `<form class="form-grid fabric-form" id="fabric-form"><input type="hidden" name="fabricId"><div class="field"><label for="fabric-name">اسم القماش</label><input id="fabric-name" name="name" maxlength="120" required></div><div class="field fabric-color-name-field"><label for="fabric-color-name">اسم اللون</label><input id="fabric-color-name" name="colorName" maxlength="64"></div><div class="field fabric-color-picker-field"><label for="fabric-color-hex">درجة اللون</label><input id="fabric-color-hex" name="colorHex" type="color" value="#ffffff" required></div><div class="field"><label for="fabric-unit">وحدة القياس</label><select id="fabric-unit" name="unit" required><option value="متر">متر</option><option value="توب">توب</option></select></div><div class="form-actions"><button class="button button-primary" type="submit">حفظ بيانات القماش</button><button class="row-action" type="button" data-cancel-fabric-edit hidden>إلغاء التعديل</button></div></form>`, "تغيير الوحدة غير متاح بعد تسجيل حركات على الصنف")}
       ${panel("القماش الداخل", `<form class="form-grid fabric-form" id="fabric-receipt-form"><div class="field"><label for="fabric-receipt-date">تاريخ الإدخال</label><input id="fabric-receipt-date" name="receivedAt" type="datetime-local" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}" required></div><div class="field"><label for="fabric-receipt-notes">ملاحظات / مرجع</label><input id="fabric-receipt-notes" name="notes" maxlength="500"></div><div class="wide fabric-entry-list" data-fabric-entry-list>${ownerFabricReceiptLineMarkup(ownerFabrics)}</div><div class="form-actions"><button class="button button-secondary" type="button" data-add-fabric-row>＋ إضافة صنف</button><button class="button button-primary" type="submit">＋ تسجيل الكميات الداخلة</button></div></form>`, "هذا رصيد الإدارة فقط، ولا يظهر في سجل القماش الداخل الخاص بمشرف القص")}
       ${panel("تعديل المخزون", `<form class="form-grid fabric-form" id="fabric-adjustment-form"><div class="field"><label for="fabric-adjustment-item">صنف قماش الإدارة</label><select id="fabric-adjustment-item" name="fabricId" required>${fabricSelectOptions(ownerFabrics)}</select></div><div class="field"><label for="fabric-adjustment-quantity">فرق الكمية (+ زيادة / − نقص)</label><input id="fabric-adjustment-quantity" name="adjustment" type="number" step="0.001" required></div><div class="field"><label for="fabric-adjustment-date">تاريخ التعديل</label><input id="fabric-adjustment-date" name="adjustedAt" type="datetime-local" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}" required></div><div class="field"><label for="fabric-adjustment-notes">سبب التعديل</label><input id="fabric-adjustment-notes" name="notes" maxlength="500" required></div><div class="form-actions"><button class="button button-secondary" type="submit">حفظ التعديل</button></div></form>`, "يُسجل الفرق كحركة تدقيقية ولا يمكن أن يخفض الرصيد إلى أقل من صفر")}
     </div>
@@ -1406,7 +1496,7 @@ function adminView(data, accounts) {
   const totalUnits = activeOrders.reduce((sum, item) => sum + Number(item.quantity), 0);
   const paid = data.payments.reduce((sum, item) => sum + Number(item.amount), 0);
   const clientOptions = data.clients.map((client) =>
-    `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)}${client.phone ? ` · ${escapeHtml(client.phone)}` : ""}</option>`
+    `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)}${client.brand_name ? ` · ${escapeHtml(client.brand_name)}` : ""}</option>`
   ).join("");
   const paymentClientOptions = data.clients
     .map((client) => `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)}${client.phone ? ` (${escapeHtml(client.phone)})` : ""}</option>`)
@@ -1420,28 +1510,28 @@ function adminView(data, accounts) {
     <section id="orders" class="dashboard-section">
       <div class="clients-toolbar"><div><h2>الموديلات والطلبيات</h2><p>سجّل الموديل أولاً، ثم حدّث العدد الفعلي بعد الفرش والقص.</p></div><button class="button button-primary" type="button" data-open-order-modal>＋ إضافة موديل / طلبية</button></div>
       ${panel("إدارة الموديلات والطلبيات", orderCards(activeOrders, true))}
-      <div class="modal-backdrop" id="order-modal" hidden><section class="modal-card order-modal-card" role="dialog" aria-modal="true" aria-labelledby="order-modal-title"><button class="modal-close" type="button" data-close-order aria-label="إغلاق">×</button><h2 id="order-modal-title">إضافة موديل / طلبية</h2><p>يمكن ترك العدد فارغًا حتى انتهاء الفرش والقص، ثم إدخال العدد الفعلي عند تعديل الطلب.</p><form id="model-form" class="order-form modal-form"><input type="hidden" name="editIndex" value=""><input type="hidden" name="savedOrderId" value="">
+      <div class="modal-backdrop" id="order-modal" hidden><section class="modal-card order-modal-card" role="dialog" aria-modal="true" aria-labelledby="order-modal-title"><button class="modal-close" type="button" data-close-order aria-label="إغلاق">×</button><h2 id="order-modal-title">إضافة موديل / طلبية</h2><p>يمكن ترك العدد فارغًا حتى انتهاء الفرش والقص، ثم إدخال العدد الفعلي عند تعديل الطلب.</p>      <form id="model-form" class="order-form modal-form"><input type="hidden" name="editIndex" value=""><input type="hidden" name="savedOrderId" value=""><input type="hidden" name="deliveredPieces" value="0">
         <section class="form-section"><h3>المعلومات الأساسية <span>إجباري</span></h3><div class="form-section-grid">
-          <div class="field"><label for="model-client">العميل</label><select id="model-client" name="customerId" required><option value="">اختر العميل</option>${clientOptions}</select></div>
-          <div class="field"><label for="model-name">اسم الموديل (اختياري عند إدخال الرقم)</label><input id="model-name" name="name"></div>
-          <div class="field"><label for="model-number">رقم الموديل (اختياري عند إدخال الاسم)</label><input id="model-number" name="modelNumber"></div>
-          <div class="field"><label for="model-quantity">العدد الفعلي بعد الفرش والقص</label><input id="model-quantity" name="quantity" type="number" min="0" step="1" placeholder="اتركه فارغًا حتى يتم الحصر"><small>يُسجّل لاحقًا بعد انتهاء القص. إذا أدخلت أعداد المقاسات أعلاه فسيُحسب الإجمالي منها.</small></div>
+          <div class="field model-customer-field"><label for="model-client">اسم العميل / البراند</label><select id="model-client" name="customerId" required><option value="">اختر العميل أو البراند</option>${clientOptions}</select></div>
+          <div class="field model-name-field"><label for="model-name">اسم الموديل</label><input id="model-name" name="name"></div>
+          <div class="field model-number-field"><label for="model-number">رقم الموديل</label><input id="model-number" name="modelNumber"></div>
+          <div class="field model-quantity-field"><label for="model-quantity">العدد الكلي</label><input id="model-quantity" name="quantity" type="number" min="0" step="1" placeholder="أدخل العدد أو اتركه حتى انتهاء القص"><small>يمكن إدخال العدد الآن أو تأجيله؛ عند اختيار الألوان والمقاسات يوزع النظام العدد تلقائياً.</small></div>
         </div></section>
         <section class="form-section"><h3>التفاصيل التشغيلية <span>اختياري</span></h3><div class="form-section-grid">
+          <div class="field"><label for="model-production-type">طبيعة شغل الموديل</label><select id="model-production-type" name="productionType" required><option value="full_cutting">شغل كامل بدءاً من القص</option><option value="ready_sewing">شغل مقصوص جاهز - خياطة مباشرة / أمبلاج</option></select></div>
           ${colorPickerMarkup("", "model-colors")}
           ${sizePickerMarkup("", "model-sizes")}
+          <div class="model-allocation field"><label>توزيع العدد على الألوان والمقاسات</label><div data-model-allocation-grid><p class="muted">أدخل العدد الكلي واختر الألوان والمقاسات لعرض التوزيع.</p></div><input type="hidden" name="colorSizeDistribution" value='{"colors":[]}'></div>
           <label class="field model-image-field"><span>صورة الموديل (اختياري)</span><input type="file" name="modelImage" accept="image/jpeg,image/png,image/webp"><small>JPG أو PNG أو WEBP بحد أقصى 5 ميجابايت.</small><div data-model-image-preview></div></label>
           <div class="field"><label for="model-expected-delivery">تاريخ التسليم المتوقع (اختياري)</label><input id="model-expected-delivery" name="expectedDeliveryDate" type="date"></div>
-          <input type="hidden" name="deliveredPieces" value="0"><div class="field"><label>إجمالي الكمية المسلّمة</label><output id="model-delivered-summary" class="calculated-value">0 قطعة</output></div>
           <div class="field"><label for="model-status">حالة الطلب</label><select id="model-status" name="status"><option>قيد الانتظار</option><option>معلق</option><option>تحت الإنشاء</option><option>قيد الفرش</option><option>تم الفرش / جاهز للقص</option><option>تم القص</option><option>معلق - في انتظار الخياطة</option><option>في الخياطة</option><option>جاهز للتسليم</option><option>مكتمل</option></select></div>
           <div class="field"><label for="model-priority">أولوية التنفيذ</label><select id="model-priority" name="priority"><option>عادي</option><option>مرتفع</option><option>عاجل</option></select></div>
         </div></section>
         <section class="form-section"><h3>التفاصيل المالية <span>اختياري</span></h3><div class="form-section-grid">
           <div class="field"><label for="model-price">سعر القطعة (ج.م)</label><input id="model-price" name="pricePerPiece" type="number" min="0" step="0.01" value="0"><small id="model-price-history-note" hidden>تعديل السعر يعيد احتساب قيمة التسليمات المسجلة لهذا الموديل ورصيد العميل.</small></div>
-          <div class="field"><label for="model-paid">العربون على الطلب (لا تكرره في سجل الدفعات)</label><input id="model-paid" name="paidAmount" type="number" min="0" step="0.01" value="0"></div>
+          <div class="field"><label for="model-paid">العربون (اختياري)</label><input id="model-paid" name="paidAmount" type="number" min="0" step="0.01" value="0"></div>
           <div class="field"><label for="model-expected-total">الإجمالي المتوقع (العدد × السعر)</label><output id="model-expected-total" class="calculated-value">0 ج.م</output></div>
-          <div class="field"><label for="model-total">قيمة الكمية المسلّمة</label><output id="model-total" class="calculated-value">0 ج.م</output></div>
-          <div class="field"><label for="model-remaining">المتبقي من قيمة المسلّم</label><output id="model-remaining" class="calculated-value">0 ج.م</output></div>
+          <div class="field"><label for="model-remaining">المتبقي المتوقع بعد العربون</label><output id="model-remaining" class="calculated-value">0 ج.م</output></div>
           <div class="field"><label for="client-balance-preview">الرصيد المتوقع للعميل بعد الحفظ</label><output id="client-balance-preview" class="calculated-value">اختر العميل</output></div>
         </div></section>
         <div class="form-actions"><button class="button button-primary" type="submit">حفظ الطلبية</button><button class="row-action" type="button" data-cancel-edit hidden>إلغاء التعديل</button><button class="row-action" type="button" data-close-order>إغلاق</button></div>
@@ -1844,7 +1934,9 @@ async function persistFactoryOrder(order, changes = {}) {
     requested_expected_delivery_date: updated.expectedDeliveryDate || null,
     requested_model_image_url: updated.modelImageUrl || null,
     requested_priority: updated.priority || "عادي",
-    requested_color_names: parseColorNames(updated.colorNames)
+    requested_color_names: parseColorNames(updated.colorNames),
+    requested_production_type: updated.productionType || "full_cutting",
+    requested_color_size_distribution: updated.colorSizeDistribution || { colors: [] }
   });
   if (error?.code === "PGRST202") {
     throw new Error("دالة حفظ الطلبات المحدّثة غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
@@ -1880,9 +1972,9 @@ function bindCuttingActions(session) {
       const selectedUnit = external ? "متر" : selected?.dataset.unit || "متر";
       if (unit) unit.textContent = selectedUnit;
       const quantityInput = form.elements.fabricQuantity;
-      quantityInput.step = selectedUnit === "طوب" ? "1" : "0.001";
-      quantityInput.min = selectedUnit === "طوب" ? "1" : "0.001";
-      quantityInput.placeholder = selectedUnit === "طوب" ? "عدد الطوب" : "الكمية بالمتر";
+      quantityInput.step = selectedUnit === "توب" ? "1" : "0.001";
+      quantityInput.min = selectedUnit === "توب" ? "1" : "0.001";
+      quantityInput.placeholder = selectedUnit === "توب" ? "عدد التوب" : "الكمية بالمتر";
       if (select.value === "external") {
         externalFields.forEach((field) => { field.hidden = false; });
         if (externalInput) externalInput.required = true;
@@ -1912,19 +2004,19 @@ function bindCuttingActions(session) {
     const fabricUnit = isExternal ? form.elements.externalFabricUnit.value : form.elements.fabricId.selectedOptions[0]?.dataset.unit || "";
     const fabricId = isExternal ? null : selectedFabricId;
     const fabricQuantity = Number(form.elements.fabricQuantity.value);
-    const boltCount = fabricUnit === "طوب" ? fabricQuantity : 1;
+    const boltCount = fabricUnit === "توب" ? fabricQuantity : 1;
     const externalFabricSource = isExternal ? String(form.elements.externalFabricSource.value).trim() : "";
     const fabric = isExternal ? externalFabricSource : form.elements.fabricId.selectedOptions[0]?.dataset.name || "";
     const { sizeData, total } = cuttingData;
     if ((!isExternal && !fabricId) || !fabric || !Number.isFinite(fabricQuantity) || fabricQuantity <= 0
       || (isExternal && fabricUnit !== "متر")
-      || (!isExternal && fabricUnit !== "طوب")
-      || (fabricUnit === "طوب" && !Number.isSafeInteger(boltCount))
+      || (!isExternal && fabricUnit !== "توب")
+      || (fabricUnit === "توب" && !Number.isSafeInteger(boltCount))
       || !sizeData.type || !Object.keys(sizeData.counts).length || !Number.isSafeInteger(total) || total <= 0
       || cuttingData.colorPlyData.colors.length === 0
       || cuttingData.colorPlyData.colors.some((entry) => !entry.name || !Number.isSafeInteger(entry.plys) || entry.plys < 1)
       || new Set(cuttingData.colorPlyData.colors.map((entry) => entry.color)).size !== cuttingData.colorPlyData.colors.length) {
-      window.factoryUI.toast("اختر خامة من المخزون وحدد عدد الطوب، أو اكتب مصدر الخامة الخارجية وحدد الكمية بالمتر، ثم راجع المقاسات والألوان والرئات.", "error");
+      window.factoryUI.toast("اختر خامة من المخزون وحدد عدد التوب، أو اكتب مصدر الخامة الخارجية وحدد الكمية بالمتر، ثم راجع المقاسات والألوان والرئات.", "error");
       return null;
     }
     return {
@@ -2579,7 +2671,7 @@ function bindActions(session) {
   const clientAccountModal = document.querySelector("#client-account-modal");
   document.body.append(orderModal);
   const editConfigs = {
-    models: { form: "model-form", collection: "models", fields: ["customerId", "name", "modelNumber", "colors", "sizes", "quantity", "expectedDeliveryDate", "pricePerPiece", "paidAmount", "status", "priority"] },
+    models: { form: "model-form", collection: "models", fields: ["customerId", "name", "modelNumber", "colors", "sizes", "quantity", "productionType", "expectedDeliveryDate", "pricePerPiece", "paidAmount", "status", "priority"] },
     payments: { form: "payment-form", collection: "payments", fields: ["customerId", "amount", "date", "method", "reference", "notes"] }
   };
   document.querySelectorAll("[data-edit-kind]").forEach((button) => button.addEventListener("click", () => {
@@ -2600,11 +2692,11 @@ function bindActions(session) {
     form.querySelector("[data-cancel-edit]").hidden = false;
     if (button.dataset.editKind === "models") {
       form.elements.deliveredPieces.value = item.deliveredPieces;
-      form.querySelector("#model-delivered-summary").textContent = `${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.deliveredPieces)} قطعة`;
       form.elements.pricePerPiece.readOnly = false;
       form.querySelector("#model-price-history-note").hidden = item.deliveredPieces <= 0;
       setSizePicker(form.querySelector("[data-size-picker]"), item.sizes);
       setColorPicker(form.querySelector("[data-color-picker]"), item.colors, item.colorNames);
+      renderModelAllocation(form, item.colorSizeDistribution);
       form.querySelector("[data-model-image-preview]").innerHTML = modelImageMarkup(item.modelImageUrl);
       updateOrderTotals();
       activateDashboardView("orders");
@@ -2650,17 +2742,17 @@ function bindActions(session) {
     orderForm.reset();
     orderForm.elements.savedOrderId.value = "";
     orderForm.elements.editIndex.value = String(orderIndex);
-    for (const field of ["customerId", "name", "modelNumber", "pricePerPiece", "paidAmount", "status", "priority", "expectedDeliveryDate"]) {
+    for (const field of ["customerId", "name", "modelNumber", "pricePerPiece", "paidAmount", "status", "priority", "productionType", "expectedDeliveryDate"]) {
       orderForm.elements[field].value = order[field] ?? "";
     }
     orderForm.elements.quantity.value = order.quantity || "";
     orderForm.elements.deliveredPieces.value = order.deliveredPieces;
     setSizePicker(orderForm.querySelector("[data-size-picker]"), order.sizes);
     setColorPicker(orderForm.querySelector("[data-color-picker]"), order.colors, order.colorNames);
+    renderModelAllocation(orderForm, order.colorSizeDistribution);
     orderForm.querySelector("[data-model-image-preview]").innerHTML = modelImageMarkup(order.modelImageUrl);
     orderForm.elements.pricePerPiece.readOnly = false;
     orderForm.querySelector("#model-price-history-note").hidden = order.deliveredPieces <= 0;
-    orderForm.querySelector("#model-delivered-summary").textContent = `${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.deliveredPieces)} قطعة`;
     orderForm.querySelector('[type="submit"]').textContent = "حفظ التعديلات";
     orderForm.querySelector("[data-cancel-edit]").hidden = false;
     document.querySelector("#order-modal-title").textContent = "تعديل بيانات الموديل";
@@ -2892,18 +2984,14 @@ function bindActions(session) {
   });
   const updateOrderTotals = () => {
     if (!orderForm) return;
-    const quantity = sizePickerTotal(orderForm) || Number(orderForm.elements.quantity.value || 0);
-    const delivered = Number(orderForm.elements.deliveredPieces.value || 0);
+    const quantity = Number(orderForm.elements.quantity.value || sizePickerTotal(orderForm) || 0);
     const price = Number(orderForm.elements.pricePerPiece.value || 0);
     const paid = Number(orderForm.elements.paidAmount.value || 0);
-    const total = roundMoney(delivered * price);
-    const expectedTotal = roundMoney(Math.max(quantity - delivered, 0) * price);
+    const expectedTotal = roundMoney(quantity * price);
     const formatAmount = (value) => `${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 2 }).format(value)} ج.م`;
-    orderForm.querySelector("#model-delivered-summary").textContent = `${new Intl.NumberFormat("ar-EG-u-nu-latn").format(delivered)} قطعة`;
     orderForm.elements.paidAmount.removeAttribute("max");
     orderForm.querySelector("#model-expected-total").textContent = formatAmount(expectedTotal);
-    orderForm.querySelector("#model-total").textContent = formatAmount(total);
-    orderForm.querySelector("#model-remaining").textContent = formatAmount(subtractMoney(total, paid));
+    orderForm.querySelector("#model-remaining").textContent = formatAmount(subtractMoney(expectedTotal, paid));
     const selectedClient = dashboardData.clients.find((client) => client.id === orderForm.elements.customerId.value);
     const preview = orderForm.querySelector("#client-balance-preview");
     if (!selectedClient) {
@@ -2915,7 +3003,7 @@ function bindActions(session) {
         ? subtractMoney(existingOrder.totalAmount, existingOrder.paidAmount)
         : 0;
       preview.textContent = formatAmount(
-        addMoney(subtractMoney(clientAccountSummary(selectedClient, dashboardData).balance, previousImpact), subtractMoney(total, paid))
+        addMoney(subtractMoney(clientAccountSummary(selectedClient, dashboardData).balance, previousImpact), subtractMoney(expectedTotal, paid))
       );
     }
   };
@@ -2945,26 +3033,42 @@ function bindActions(session) {
     }
     openOrderEditor(order);
   });
-  ["quantity", "deliveredPieces", "pricePerPiece", "paidAmount"].forEach((name) => orderForm.elements[name].addEventListener("input", updateOrderTotals));
+  orderForm.elements.quantity.addEventListener("input", () => {
+    distributeModelQuantity(orderForm, true);
+    updateOrderTotals();
+  });
+  ["pricePerPiece", "paidAmount"].forEach((name) => orderForm.elements[name].addEventListener("input", updateOrderTotals));
   orderForm.addEventListener("input", (event) => {
-    if (event.target.closest("[data-size-picker]")) updateOrderTotals();
+    if (event.target.closest("[data-size-picker]")) {
+      distributeModelQuantity(orderForm, !event.target.matches("[data-size-count]") && Number(orderForm.elements.quantity.value) > 0);
+      updateOrderTotals();
+    } else if (event.target.closest("[data-color-picker]")) {
+      distributeModelQuantity(orderForm, Number(orderForm.elements.quantity.value) > 0);
+      updateOrderTotals();
+    }
   });
   orderForm.addEventListener("click", (event) => {
-    if (event.target.closest("[data-size-toggle]")) updateOrderTotals();
+    if (event.target.closest("[data-size-toggle], [data-add-color], [data-remove-color]")) {
+      distributeModelQuantity(orderForm, Number(orderForm.elements.quantity.value) > 0);
+      updateOrderTotals();
+    }
   });
   orderForm.addEventListener("change", (event) => {
-    if (event.target.matches("[data-size-type]")) updateOrderTotals();
+    if (event.target.matches("[data-size-type]")) {
+      distributeModelQuantity(orderForm, Number(orderForm.elements.quantity.value) > 0);
+      updateOrderTotals();
+    }
   });
   orderForm.elements.customerId.addEventListener("change", updateOrderTotals);
   updateOrderTotals();
   document.querySelector("#model-form").addEventListener("submit", async (event) => {
     event.preventDefault();
-    const formData = new FormData(event.currentTarget);
     const form = event.currentTarget;
+    const formData = new FormData(form);
     const submitButton = form.querySelector('[type="submit"]');
     const quantityValue = String(formData.get("quantity")).trim();
     const sizeQuantity = sizePickerTotal(form);
-    const quantity = sizeQuantity > 0 ? sizeQuantity : quantityValue ? Number(quantityValue) : 0;
+    const quantity = quantityValue ? Number(quantityValue) : sizeQuantity;
     const deliveredPieces = Number(formData.get("deliveredPieces"));
     const pricePerPiece = Number(formData.get("pricePerPiece"));
     const paidAmount = Number(formData.get("paidAmount"));
@@ -2973,6 +3077,7 @@ function bindActions(session) {
     const customerId = String(formData.get("customerId"));
     const colors = String(formData.get("colors") || "").trim();
     const colorNames = parseColorNames(formData.get("colorNames"));
+    const colorSizeDistribution = JSON.parse(String(formData.get("colorSizeDistribution") || '{"colors":[]}'));
     if (!modelName && !modelNumber) {
       window.factoryUI.toast("أدخل اسم الموديل أو رقمه على الأقل.", "error");
       return;
@@ -3013,10 +3118,12 @@ function bindActions(session) {
         paidAmount,
         status: String(formData.get("status")),
         priority: String(formData.get("priority")),
+        productionType: String(formData.get("productionType")),
         fabric: String(formData.get("fabric") || "").trim(),
         line: String(formData.get("line") || "").trim(),
         colors,
         colorNames,
+        colorSizeDistribution,
         sizes: String(formData.get("sizes") || "").trim(),
         modelImageUrl: existingOrder?.modelImageUrl || "",
         expectedDeliveryDate: String(formData.get("expectedDeliveryDate") || "")

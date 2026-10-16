@@ -404,12 +404,19 @@ alter table public.orders
   add column if not exists expected_delivery_date date,
   add column if not exists model_image_url text,
   add column if not exists priority text not null default 'عادي',
+  add column if not exists production_type text not null default 'full_cutting',
+  add column if not exists color_size_distribution jsonb not null default '{"colors":[]}'::jsonb,
   add column if not exists archived_at timestamptz;
 
 alter table public.orders
   drop column if exists remaining_amount,
   drop column if exists total_amount,
   drop column if exists expected_total_amount;
+
+alter table public.orders
+  drop constraint if exists orders_production_type_check,
+  add constraint orders_production_type_check
+    check (production_type in ('full_cutting', 'ready_sewing'));
 
 alter table public.orders
   add column total_amount numeric(14, 2)
@@ -667,8 +674,10 @@ returns table (
   customer_id uuid,
   model_name text,
   model_number text,
+  production_type text,
   sender_name text,
   colors text,
+  color_size_distribution jsonb,
   color_names jsonb,
   sizes text,
   total_pieces integer,
@@ -700,8 +709,10 @@ begin
            factory_order.customer_id,
            factory_order.model_name,
            factory_order.model_number,
+           factory_order.production_type,
            factory_order.sender_name,
            factory_order.colors,
+           factory_order.color_size_distribution,
            factory_order.color_names,
            factory_order.sizes,
            factory_order.total_pieces,
@@ -727,6 +738,7 @@ drop function if exists public.save_factory_order(uuid, uuid, text, text, intege
 drop function if exists public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text);
 drop function if exists public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text);
 drop function if exists public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb);
+drop function if exists public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb, text, jsonb);
 create function public.save_factory_order(
   requested_order_id uuid,
   requested_customer_id uuid,
@@ -744,7 +756,9 @@ create function public.save_factory_order(
   requested_expected_delivery_date date,
   requested_model_image_url text,
   requested_priority text,
-  requested_color_names jsonb
+  requested_color_names jsonb,
+  requested_production_type text,
+  requested_color_size_distribution jsonb
 )
 returns uuid
 language plpgsql
@@ -778,7 +792,71 @@ begin
     or requested_price_per_piece < 0
     or requested_paid_amount is null
     or requested_paid_amount < 0
+    or requested_production_type is null
+    or requested_production_type not in ('full_cutting', 'ready_sewing')
     or coalesce(jsonb_typeof(requested_color_names), '') <> 'object'
+    or coalesce(jsonb_typeof(requested_color_size_distribution), '') <> 'object'
+    or coalesce(jsonb_typeof(requested_color_size_distribution -> 'colors'), '') <> 'array'
+    or exists (
+      select 1
+      from jsonb_array_elements(
+        case
+          when jsonb_typeof(requested_color_size_distribution) = 'object'
+           and jsonb_typeof(requested_color_size_distribution -> 'colors') = 'array'
+            then requested_color_size_distribution -> 'colors'
+          else '[]'::jsonb
+        end
+      ) as color_entry(value)
+      where jsonb_typeof(color_entry.value) <> 'object'
+         or coalesce(color_entry.value ->> 'color', '') !~ '^#[0-9A-Fa-f]{6}$'
+         or length(trim(coalesce(color_entry.value ->> 'name', ''))) not between 1 and 64
+         or coalesce(jsonb_typeof(color_entry.value -> 'sizes'), '') <> 'object'
+         or exists (
+           select 1
+           from jsonb_each(
+             case
+               when jsonb_typeof(color_entry.value -> 'sizes') = 'object'
+                 then color_entry.value -> 'sizes'
+               else '{}'::jsonb
+             end
+           ) as size_entry(size_name, size_count)
+           where coalesce(size_entry.size_count #>> '{}', '') !~ '^[0-9]+$'
+         )
+    )
+    or (
+      jsonb_array_length(
+        case
+          when jsonb_typeof(requested_color_size_distribution) = 'object'
+           and jsonb_typeof(requested_color_size_distribution -> 'colors') = 'array'
+            then requested_color_size_distribution -> 'colors'
+          else '[]'::jsonb
+        end
+      ) > 0
+      and (
+        select coalesce(sum(
+          case
+            when size_entry.size_count #>> '{}' ~ '^[0-9]+$'
+              then (size_entry.size_count #>> '{}')::numeric
+            else 0
+          end
+        ), 0)
+        from jsonb_array_elements(
+          case
+            when jsonb_typeof(requested_color_size_distribution) = 'object'
+             and jsonb_typeof(requested_color_size_distribution -> 'colors') = 'array'
+              then requested_color_size_distribution -> 'colors'
+            else '[]'::jsonb
+          end
+        ) as color_entry(value)
+        cross join lateral jsonb_each(
+          case
+            when jsonb_typeof(color_entry.value -> 'sizes') = 'object'
+              then color_entry.value -> 'sizes'
+            else '{}'::jsonb
+          end
+        ) as size_entry(size_name, size_count)
+      ) <> requested_quantity
+    )
     or exists (
       select 1
       from jsonb_each_text(
@@ -839,14 +917,16 @@ begin
   if requested_order_id is null then
     insert into public.orders (
       client_id, customer_id, model_name, model_number, colors, color_names, sizes,
-      total_pieces, delivered_pieces, price_per_piece, paid_amount, expected_delivery_date, model_image_url, priority, status
+      total_pieces, delivered_pieces, price_per_piece, paid_amount, expected_delivery_date, model_image_url, priority,
+      production_type, color_size_distribution, status
     )
     values (
       matched_client_id, matched_customer_id, resolved_model_name,
       coalesce(trim(requested_model_number), ''),
       coalesce(trim(requested_colors), ''), normalized_color_names, coalesce(trim(requested_sizes), ''),
       requested_quantity, requested_delivered_pieces,
-      requested_price_per_piece, requested_paid_amount, requested_expected_delivery_date, requested_model_image_url, trim(requested_priority), trim(requested_status)
+      requested_price_per_piece, requested_paid_amount, requested_expected_delivery_date, requested_model_image_url,
+      trim(requested_priority), requested_production_type, requested_color_size_distribution, trim(requested_status)
     )
     returning id into saved_order_id;
     update public.production_stages
@@ -906,6 +986,8 @@ begin
         expected_delivery_date = requested_expected_delivery_date,
         model_image_url = requested_model_image_url,
         priority = trim(requested_priority),
+        production_type = requested_production_type,
+        color_size_distribution = requested_color_size_distribution,
         status = trim(requested_status)
     where id = requested_order_id;
     if current_price_per_piece is distinct from requested_price_per_piece then
@@ -1103,7 +1185,7 @@ create table if not exists public.factory_fabrics (
   fabric_type text not null default '',
   color_name text not null default '',
   color_hex text not null default '#FFFFFF' check (color_hex ~ '^#[0-9A-Fa-f]{6}$'),
-  unit text not null check (unit in ('متر', 'طوب')),
+  unit text not null check (unit in ('متر', 'توب')),
   quantity_available numeric(14, 3) not null default 0 check (quantity_available >= 0),
   received_at timestamptz,
   received_by uuid references auth.users (id) on delete set null,
@@ -1127,21 +1209,21 @@ begin
     from public.factory_fabrics
     where unit not in ('متر', 'توب', 'طوب', 'ثوب')
   ) then
-    raise exception 'Fabric inventory contains units other than meter or طوب. Reconcile those stock records manually before rerunning the schema; quantities were not converted.';
+    raise exception 'Fabric inventory contains unsupported units. Reconcile those stock records manually before rerunning the schema; quantities were not converted.';
   end if;
 end;
 $$;
 
 -- Normalize values saved by earlier UI/schema versions.
 update public.factory_fabrics
-set unit = 'طوب'
-where unit in ('توب', 'ثوب');
+set unit = 'توب'
+where unit in ('طوب', 'ثوب');
 
 alter table public.factory_fabrics drop column if exists color_number;
 
 alter table public.factory_fabrics
   add constraint factory_fabrics_unit_check
-    check (unit in ('متر', 'طوب'));
+    check (unit in ('متر', 'توب'));
 
 alter table public.factory_fabrics
   drop constraint if exists factory_fabrics_stock_scope_check,
@@ -1415,7 +1497,7 @@ begin
      or length(coalesce(requested_color_name, '')) > 64
      or upper(coalesce(requested_color_hex, '')) !~ '^#[0-9A-F]{6}$'
      or requested_unit is null
-     or requested_unit not in ('متر', 'طوب') then
+     or requested_unit not in ('متر', 'توب') then
     raise exception 'Enter a valid fabric name, type, color, HEX value, and stock unit.';
   end if;
 
@@ -1585,8 +1667,8 @@ begin
      or upper(coalesce(requested_color_hex, '')) !~ '^#[0-9A-F]{6}$'
      or requested_quantity is null or requested_quantity <= 0
      or requested_quantity > 99999999999.999
-     or requested_unit is null or requested_unit not in ('متر', 'طوب')
-     or (requested_unit = 'طوب' and requested_quantity <> trunc(requested_quantity)) then
+     or requested_unit is null or requested_unit not in ('متر', 'توب')
+     or (requested_unit = 'توب' and requested_quantity <> trunc(requested_quantity)) then
     raise exception 'Enter valid incoming fabric details and a positive quantity.';
   end if;
   if requested_customer_id is not null and not exists (
@@ -1666,8 +1748,8 @@ begin
        or length(item_color_name) > 64
        or item_color_hex !~ '^#[0-9A-F]{6}$'
        or item_quantity is null or item_quantity <= 0 or item_quantity > 99999999999.999
-       or item_unit not in ('متر', 'طوب')
-       or (item_unit = 'طوب' and item_quantity <> trunc(item_quantity)) then
+       or item_unit not in ('متر', 'توب')
+       or (item_unit = 'توب' and item_quantity <> trunc(item_quantity)) then
       raise exception 'Each incoming fabric line must include valid fabric, color, unit, and positive quantity details.';
     end if;
 
@@ -1875,11 +1957,11 @@ begin
   if resolved_fabric.stock_scope <> 'incoming' then
     raise exception 'Cutting may only use fabric registered as incoming for cutting.';
   end if;
-  if resolved_fabric.unit <> 'طوب' then
-    raise exception 'Fabric withdrawn from cutting stock must be measured in طوب.';
+  if resolved_fabric.unit <> 'توب' then
+    raise exception 'Fabric withdrawn from cutting stock must be measured in توب.';
   end if;
   if requested_quantity <> trunc(requested_quantity) then
-    raise exception 'Fabric withdrawn from stock must use a whole number of طوب.';
+    raise exception 'Fabric withdrawn from stock must use a whole number of توب.';
   end if;
 
   select customer_id into order_customer_id
@@ -2925,7 +3007,7 @@ create policy "Admins read factory cash transactions"
   on public.factory_cash_transactions for select to authenticated
   using (public.is_active_factory_admin());
 grant select on public.factory_cash_transactions to authenticated;
-grant select (id, client_id, customer_id, model_name, model_number, colors, sizes, total_pieces, delivered_pieces, archived_at, status, priority, created_at)
+grant select (id, client_id, customer_id, model_name, model_number, production_type, colors, color_size_distribution, sizes, total_pieces, delivered_pieces, archived_at, status, priority, created_at)
   on public.orders to authenticated;
 grant select (sender_name) on public.orders to authenticated;
 grant select (model_image_url) on public.orders to authenticated;
@@ -3053,8 +3135,8 @@ revoke all on function public.read_factory_orders_client() from public, anon, au
 grant execute on function public.read_factory_orders_client() to authenticated;
 revoke all on function public.read_factory_cutting_clients() from public, anon, authenticated;
 grant execute on function public.read_factory_cutting_clients() to authenticated;
-revoke all on function public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb) from public, anon, authenticated;
-grant execute on function public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb) to authenticated;
+revoke all on function public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb, text, jsonb) from public, anon, authenticated;
+grant execute on function public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb, text, jsonb) to authenticated;
 revoke all on function public.record_factory_delivery(uuid, integer, text) from public, anon, authenticated;
 grant execute on function public.record_factory_delivery(uuid, integer, text) to authenticated;
 revoke all on function public.calculate_factory_cutting_breakdown(jsonb, jsonb) from public, anon, authenticated;
