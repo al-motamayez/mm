@@ -34,7 +34,7 @@ const WORK_STAGES = [
   ["sewing", "خياطة"],
   ["finishing", "تشطيب"],
   ["ironing", "مكوى"],
-  ["packaging", "أمبلاج وتكييس"]
+  ["packaging", "تكييس"]
 ];
 const roleInfo = {
   admin: { title: "لوحة تحكم الإدارة", description: "نظرة شاملة على المصنع وإدارة بيانات التشغيل.", icon: "▦" },
@@ -1297,13 +1297,6 @@ function cashLedgerView(data) {
       method: payment.method || "غير محدد",
       date: payment._createdAt || payment.created_at || payment.date
     })),
-    ...data.cashTransactions.filter((entry) => entry.customer_id === client.id && entry.direction === "expense").map((entry) => ({
-      type: "مصروف / عهدة على حساب العميل",
-      reference: entry.category || "مصروف تشغيل",
-      detail: entry.description || "—",
-      amount: Number(entry.amount),
-      date: entry.occurred_at
-    })),
     ...data.models.filter((order) => Number(order.paidAmount) > 0).map((order) => ({
       direction: "income",
       category: "دفعة مثبتة على الموديل",
@@ -1326,9 +1319,9 @@ function cashLedgerView(data) {
   const localDateTime = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16);
   const totalIncome = sumMoney([customerIncome, orderPayments, otherIncome]);
   return `<div class="stats-grid">${stat("المقبوضات", money(totalIncome), "دفعات العملاء والمدفوعات المسجلة على الطلبات وإيرادات أخرى")}${stat("المصروفات", money(expenses), "المسجل في سجل النقدية")}${stat("صافي الحركة النقدية", money(subtractMoney(totalIncome, expenses)), "المقبوضات − المصروفات")}</div>
-    ${panel("تسجيل حركة نقدية", `<form id="cash-transaction-form" class="form-grid payment-form"><div class="field"><label for="cash-direction">نوع الحركة</label><select id="cash-direction" name="direction" required><option value="expense">مصروف / خروج نقدي</option><option value="income">إيراد آخر / دخول نقدي</option></select><small>دفعات العملاء تُسجل من نموذج الدفعات وتظهر تلقائياً ضمن المقبوضات.</small></div><div class="field"><label for="cash-category">البند</label><input id="cash-category" name="category" maxlength="120" placeholder="مثل: أجور، كهرباء، نقل، مبيعات أخرى" required></div><div class="field"><label for="cash-amount">المبلغ</label><input id="cash-amount" name="amount" type="number" min="0.01" step="0.01" required></div><div class="field"><label for="cash-method">طريقة الدفع</label><input id="cash-method" name="method" value="نقدي" maxlength="80"></div><div class="field wide"><label for="cash-description">التفاصيل / المرجع</label><input id="cash-description" name="description" maxlength="500"></div><div class="field"><label for="cash-date">تاريخ ووقت الحركة</label><input id="cash-date" name="occurredAt" type="datetime-local" value="${localDateTime}" required></div><div class="form-actions"><button class="button button-primary" type="submit">حفظ الحركة النقدية</button></div></form>`, "لا تسجل دفعة العميل مرة أخرى كإيراد يدوي حتى لا يتكرر احتسابها")}
+    ${panel("المصاريف والداخل والخارج", `<form id="cash-transaction-form" class="form-grid payment-form"><input type="hidden" name="transactionId"><div class="field"><label for="cash-direction">نوع الحركة</label><select id="cash-direction" name="direction" required><option value="expense">مصروف / خروج نقدي</option><option value="income">إيراد آخر / دخول نقدي</option></select><small>دفعات العملاء تُسجل من نموذج الدفعات وتظهر تلقائياً ضمن المقبوضات.</small></div><div class="field"><label for="cash-category">البند</label><input id="cash-category" name="category" maxlength="120" placeholder="مثل: أجور، كهرباء، نقل، مبيعات أخرى" required></div><div class="field"><label for="cash-amount">المبلغ</label><input id="cash-amount" name="amount" type="number" min="0.01" step="0.01" required></div><div class="field"><label for="cash-method">طريقة الدفع</label><input id="cash-method" name="method" value="نقدي" maxlength="80"></div><div class="field wide"><label for="cash-description">التفاصيل / المرجع</label><input id="cash-description" name="description" maxlength="500"></div><div class="field"><label for="cash-date">تاريخ ووقت الحركة</label><input id="cash-date" name="occurredAt" type="datetime-local" value="${localDateTime}" required></div><div class="form-actions"><button class="button button-primary" type="submit">حفظ الحركة النقدية</button><button class="row-action" type="button" data-cancel-cash-edit hidden>إلغاء التعديل</button></div></form>`, "دفعات العملاء تُدار من قسم الدفعات؛ لا تُسجل مرة أخرى كإيراد يدوي")}
     ${panel("سجل المقبوضات والمصروفات", entries.length
-      ? table(["النوع","البند","التفاصيل","المبلغ","طريقة الدفع","التاريخ والوقت","إجراء"], entries.map((entry) => `<tr><td>${entry.direction === "income" ? "مقبوض" : "مصروف"}</td><td>${escapeHtml(entry.category)}</td><td>${escapeHtml(entry.description || "—")}</td><td class="${entry.direction === "income" ? "financial-credit" : "financial-debit"}">${entry.direction === "income" ? "+" : "−"}${money(entry.amount)}</td><td>${escapeHtml(entry.method)}</td><td>${formatDateTime(entry.date)}</td><td>${entry.id ? entry.orderId ? '<span class="order-delete-protected">مرتبطة بمصاريف موديل</span>' : `<button type="button" class="row-action order-delete-action" data-delete-cash-transaction="${escapeHtml(entry.id)}">حذف الحركة</button>` : "—"}</td></tr>`))
+      ? table(["النوع","البند","التفاصيل","المبلغ","طريقة الدفع","التاريخ والوقت","إجراء"], entries.map((entry) => `<tr><td>${entry.direction === "income" ? "مقبوض" : "مصروف"}</td><td>${escapeHtml(entry.category)}</td><td>${escapeHtml(entry.description || "—")}</td><td class="${entry.direction === "income" ? "financial-credit" : "financial-debit"}">${entry.direction === "income" ? "+" : "−"}${money(entry.amount)}</td><td>${escapeHtml(entry.method)}</td><td>${formatDateTime(entry.date)}</td><td>${entry.id ? entry.orderId ? '<span class="order-delete-protected">مرتبطة بمصاريف موديل</span>' : `<button type="button" class="row-action" data-edit-cash-transaction="${escapeHtml(entry.id)}">تعديل</button> <button type="button" class="row-action order-delete-action" data-delete-cash-transaction="${escapeHtml(entry.id)}">حذف الحركة</button>` : "—"}</td></tr>`))
       : '<div class="empty-state">لا توجد حركات نقدية مسجلة.</div>')}`;
 }
 
@@ -1621,7 +1614,7 @@ function fabricStockView(data, isAdmin) {
   const incomingRows = incomingFabrics.map((fabric) => {
     const color = `<span class="fabric-color"><i style="--fabric-color:${escapeHtml(fabric.color_hex)}"></i>${escapeHtml(fabric.color_name || "دون اسم")} · ${escapeHtml(fabric.color_hex)}</span>`;
     const assignment = isAdmin
-      ? `<div class="incoming-assignment"><select aria-label="تعيين العميل للقماش" data-incoming-customer="${escapeHtml(fabric.id)}"><option value="">عميل غير معروف / غير محدد حالياً</option>${data.clients.map((client) => `<option value="${escapeHtml(client.id)}" ${client.id === fabric.customer_id ? "selected" : ""}>${escapeHtml(client.name)}</option>`).join("")}</select><button class="row-action" type="button" data-assign-incoming-fabric="${escapeHtml(fabric.id)}">حفظ العميل</button></div>`
+      ? `<div class="incoming-assignment"><select aria-label="تعيين العميل للقماش" data-incoming-customer="${escapeHtml(fabric.id)}"><option value="">عميل غير معروف / غير محدد حالياً</option>${data.clients.map((client) => `<option value="${escapeHtml(client.id)}" ${client.id === fabric.customer_id ? "selected" : ""}>${escapeHtml(client.name)}</option>`).join("")}</select><button class="row-action" type="button" data-assign-incoming-fabric="${escapeHtml(fabric.id)}">حفظ العميل</button><button class="row-action" type="button" data-edit-fabric="${escapeHtml(fabric.id)}">تعديل</button><button class="row-action order-delete-action" type="button" data-delete-fabric="${escapeHtml(fabric.id)}">حذف</button></div>`
       : "";
     return `<tr><td>${escapeHtml(fabric.name)}</td><td>${color}</td><td>${escapeHtml(customerName(fabric.customer_id) || "عميل غير معروف / غير محدد حالياً")}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(fabric.quantity_available)} ${escapeHtml(fabric.unit)}</td><td>${formatDateTime(fabric.received_at || fabric.created_at)}</td><td>${assignment}</td></tr>`;
   });
@@ -1643,19 +1636,13 @@ function fabricStockView(data, isAdmin) {
     return `<tr><td>${escapeHtml(fabric?.name || "خامة محذوفة")}</td><td>${escapeHtml(labels[transaction.transaction_type] || transaction.transaction_type)}</td><td>${amount}</td><td>${escapeHtml(order?.name || (transaction.order_id ? transaction.order_id.slice(0, 8) : "—"))}</td><td>${escapeHtml(transaction.notes || "—")}</td><td>${formatDateTime(transaction.created_at)}</td><td>${movementAction}</td></tr>`;
   });
   const incomingForm = `<form class="form-grid fabric-form incoming-fabric-form" id="incoming-fabric-form"><div class="field"><label for="incoming-fabric-client">اسم العميل</label><select id="incoming-fabric-client" name="customerId"><option value="">عميل غير معروف / غير محدد حالياً</option>${data.clients.map((client) => `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)}</option>`).join("")}</select></div><div class="field"><label for="incoming-fabric-date">تاريخ ووقت الاستلام</label><input id="incoming-fabric-date" name="receivedAt" type="datetime-local" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}" required></div><div class="field wide"><label for="incoming-fabric-notes">ملاحظات الحركة</label><input id="incoming-fabric-notes" name="notes" maxlength="500"></div><div class="wide incoming-fabric-groups" data-incoming-fabric-groups>${incomingFabricGroupMarkup(data.fabrics)}</div><div class="form-actions"><button class="button button-secondary" type="button" data-add-incoming-type>＋ إضافة نوع قماش جديد</button><button class="button button-primary" type="submit">＋ تسجيل القماش الداخل</button></div></form>`;
-  const outgoingOptions = data.fabrics.filter((fabric) => Number(fabric.quantity_available) > 0)
-    .map((fabric) => `<option value="${escapeHtml(fabric.id)}" data-unit="${escapeHtml(fabric.unit)}" data-available="${escapeHtml(fabric.quantity_available)}">${escapeHtml(fabric.name)} · ${escapeHtml(fabric.color_name || "دون اسم")} · متاح ${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(fabric.quantity_available)} ${escapeHtml(fabric.unit)}</option>`).join("");
-  const outgoingForm = `<form class="form-grid fabric-form" id="fabric-withdrawal-form"><div class="field"><label for="fabric-withdrawal-item">صنف القماش</label><select id="fabric-withdrawal-item" name="fabricId" data-outgoing-fabric-select required><option value="">اختر من المخزون</option>${outgoingOptions}</select></div><div class="field"><label for="fabric-withdrawal-quantity">الكمية المنصرفة <span data-outgoing-unit></span></label><input id="fabric-withdrawal-quantity" name="quantity" type="number" min="0.001" step="0.001" required></div><div class="field"><label for="fabric-withdrawal-date">التاريخ والوقت</label><input id="fabric-withdrawal-date" name="occurredAt" type="datetime-local" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}" required></div><div class="field wide"><label for="fabric-withdrawal-notes">بيان الصرف / الاستخدام</label><input id="fabric-withdrawal-notes" name="notes" maxlength="500" required></div><div class="form-actions"><button class="button button-primary" type="submit">تسجيل القماش الخارج</button></div></form>`;
   const incomingSection = `<section id="incoming-fabric" class="dashboard-section">
     <div class="stats-grid">${stat("سجلات القماش الداخل", incomingFabrics.length, "مرتبطة بعميل أو بانتظار التحديد")}${stat("المتاح حالياً للقص", new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(incomingFabrics.reduce((sum, fabric) => sum + Number(fabric.quantity_available), 0)), "بعد خصم القماش المستخدم")}${isAdmin ? stat("حركات القماش", totalTransactions, "استلام وسحب") : ""}</div>
     ${panel("القماش الداخل", incomingForm, "اكتب نوع القماش مرة واحدة، ثم أضف لوناً وكمية ووحدة لكل لون. يمكن تسجيل عدة أنواع في الشحنة نفسها.")}
     ${panel("مخزون القماش الحالي للقص", table(["اسم القماش","اللون","العميل","المتاح","تاريخ الاستلام","إجراء"], incomingRows))}
+    ${isAdmin ? panel("حركات المخزون", table(["القماش","الحركة","الكمية","رقم الطلب","البيان","التاريخ والوقت","إجراء"], transactionRows)) : ""}
   </section>`;
-  const outgoingSection = `<section id="outgoing-fabric" class="dashboard-section">
-    ${panel("القماش الخارج", outgoingForm, "يسجل الصرف اليدوي؛ سحب القماش المرتبط بالقص يُسجل تلقائياً ضمن حركات المخزون.")}
-    ${panel("سجل القماش الخارج", table(["القماش","الحركة","الكمية","رقم الطلب","بيان الصرف","التاريخ والوقت","إجراء"], transactionRows.filter((transaction) => ["withdrawal", "adjustment_out"].includes(transaction.transaction_type))))}
-  </section>`;
-  if (!isAdmin) return `${incomingSection}${outgoingSection}`;
+  if (!isAdmin) return incomingSection;
   const ownerSection = `<section id="owner-fabric" class="dashboard-section">
     <div class="stats-grid">${stat("أصناف قماش الإدارة", ownerFabrics.length, "إدارة خاصة بالأدمن")}${stat("حركات المخزون", totalTransactions, "وارد وسحب")}</div>
     <div class="fabric-admin-tools">
@@ -1666,7 +1653,7 @@ function fabricStockView(data, isAdmin) {
     ${panel("مخزون القماش الحالي للإدارة", table(["اسم القماش","اللون","المتاح","آخر تحديث","إجراء"], fabricRows(ownerFabrics, true)))}
     ${panel("سجل حركات مخزون الإدارة", table(["القماش","نوع الحركة","الكمية","رقم الطلب","ملاحظات","التاريخ والوقت"], transactionRows.filter((transaction) => ownerFabrics.some((fabric) => fabric.id === transaction.fabric_id))))}
   </section>`;
-  return `${ownerSection}${incomingSection}${outgoingSection}`;
+  return `${ownerSection}${incomingSection}`;
 }
 
 function adminView(data, accounts) {
@@ -1674,10 +1661,10 @@ function adminView(data, accounts) {
   const totalUnits = activeOrders.reduce((sum, item) => sum + Number(item.quantity), 0);
   const paid = data.payments.reduce((sum, item) => sum + Number(item.amount), 0);
   const clientOptions = data.clients.map((client) =>
-    `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)}${client.brand_name ? ` · ${escapeHtml(client.brand_name)}` : ""}</option>`
+    `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)}</option>`
   ).join("");
   const brandOptions = data.clients.filter((client) => client.brand_name)
-    .map((client) => `<option value="${escapeHtml(client.id)}">${escapeHtml(client.brand_name)} · ${escapeHtml(client.name)}</option>`)
+    .map((client) => `<option value="${escapeHtml(client.id)}">${escapeHtml(client.brand_name)}</option>`)
     .join("");
   const paymentClientOptions = data.clients
     .map((client) => `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)}</option>`)
@@ -1915,10 +1902,9 @@ function navigationItems(role, info) {
       { id: "clients", icon: "◇", label: "إدارة العملاء" },
       { id: "orders", icon: "▤", label: "الموديلات والطلبيات" },
       { id: "workers-production", icon: "⌁", label: "العمال والإنتاج" },
-      { id: "finance", icon: "ج.م", label: "حسابات العملاء" },
+      { id: "finance", icon: "ج.م", label: "حسابات العملاء / المصاريف" },
       { id: "owner-fabric", icon: "▧", label: "قماش الإدارة" },
       { id: "incoming-fabric", icon: "↘", label: "القماش الداخل" },
-      { id: "outgoing-fabric", icon: "↗", label: "القماش الخارج" },
       { id: "accounts", icon: "♙", label: "طلبات ومستخدمي النظام", last: true }
     ];
   }
@@ -1935,7 +1921,6 @@ function navigationItems(role, info) {
       { id: "admin-requests", icon: "✂", label: "طلبات الإدارة" },
       { id: "new-cutting", icon: "＋", label: "قصة جديدة" },
       { id: "incoming-fabric", icon: "↘", label: "القماش الداخل" },
-      { id: "outgoing-fabric", icon: "↗", label: "القماش الخارج" },
       { id: "personal-account", icon: "◷", label: "متابعة الحساب والراتب", last: true }
     ];
   }
@@ -2508,7 +2493,6 @@ function openClientPayment(clientId) {
 
 function bindIncomingFabricActions(session) {
   const form = document.querySelector("#incoming-fabric-form");
-  const withdrawalForm = document.querySelector("#fabric-withdrawal-form");
   if (form) form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const button = form.querySelector('[type="submit"]');
@@ -2554,50 +2538,6 @@ function bindIncomingFabricActions(session) {
       button.disabled = false;
     }
   });
-
-  if (withdrawalForm) {
-    const fabricSelect = withdrawalForm.elements.fabricId;
-    const quantityInput = withdrawalForm.elements.quantity;
-    const unitOutput = withdrawalForm.querySelector("[data-outgoing-unit]");
-    const updateWithdrawalUnit = () => {
-      const option = fabricSelect.selectedOptions[0];
-      const unit = option?.dataset.unit || "";
-      unitOutput.textContent = unit ? `(${unit})` : "";
-      quantityInput.step = unit === "توب" ? "1" : "0.001";
-      quantityInput.min = unit === "توب" ? "1" : "0.001";
-      quantityInput.placeholder = unit === "توب" ? "عدد التوب" : "الكمية";
-    };
-    fabricSelect.addEventListener("change", updateWithdrawalUnit);
-    updateWithdrawalUnit();
-    withdrawalForm.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const occurredAt = new Date(withdrawalForm.elements.occurredAt.value);
-      const selectedUnit = fabricSelect.selectedOptions[0]?.dataset.unit;
-      const quantity = Number(quantityInput.value);
-      if (Number.isNaN(occurredAt.getTime()) || !Number.isFinite(quantity) || quantity <= 0
-        || (selectedUnit === "توب" && !Number.isSafeInteger(quantity))) {
-        window.factoryUI.toast("أدخل كمية صالحة وتاريخًا صحيحًا لصرف القماش.", "error");
-        return;
-      }
-      const submitButton = withdrawalForm.querySelector('[type="submit"]');
-      submitButton.disabled = true;
-      try {
-        const { error } = await supabaseClient.rpc("record_factory_fabric_withdrawal", {
-          requested_fabric_id: fabricSelect.value,
-          requested_quantity: quantity,
-          requested_occurred_at: occurredAt.toISOString(),
-          requested_notes: String(withdrawalForm.elements.notes.value).trim()
-        });
-        if (error?.code === "PGRST202") throw new Error("دالة تسجيل القماش الخارج غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
-        if (error) throw error;
-        await refreshDashboard(session);
-        window.factoryUI.toast("تم تسجيل القماش الخارج وتحديث الرصيد المتاح.");
-      } catch (error) {
-        submitButton.disabled = false;
-        window.factoryUI.toast(`تعذر تسجيل القماش الخارج: ${error.message}`, "error");
-      }
-    });
-  }
 
   if (session.role !== "admin") return;
   document.querySelectorAll("[data-assign-incoming-fabric]").forEach((button) => button.addEventListener("click", async () => {
@@ -2822,7 +2762,7 @@ function bindFabricAdminActions(session) {
     }
     if (!await window.factoryUI.confirmAction({
       title: "حذف صنف القماش",
-      message: `سيُحذف ${fabric.name} فقط إذا كان رصيده صفرًا ولم تُسجل عليه أي حركة. لا يمكن حذف السجل التاريخي للمخزون.`,
+      message: `سيُحذف ${fabric.name} ورصيده وحركاته غير المرتبطة بقصة قص نهائياً. لا يمكن حذف صنف مرتبط بقصة قص مسجلة.`,
       confirmLabel: "حذف الصنف",
       danger: true
     })) return;
@@ -2886,6 +2826,14 @@ function bindActions(session) {
   if (session.role !== "admin") return;
   bindFabricAdminActions(session);
   const cashTransactionForm = document.querySelector("#cash-transaction-form");
+  const resetCashTransactionForm = () => {
+    cashTransactionForm.reset();
+    cashTransactionForm.elements.transactionId.value = "";
+    cashTransactionForm.elements.method.value = "نقدي";
+    cashTransactionForm.elements.occurredAt.value = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+    cashTransactionForm.querySelector('[type="submit"]').textContent = "حفظ الحركة النقدية";
+    cashTransactionForm.querySelector("[data-cancel-cash-edit]").hidden = true;
+  };
   cashTransactionForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const button = cashTransactionForm.querySelector('[type="submit"]');
@@ -2894,23 +2842,30 @@ function bindActions(session) {
     try {
       const occurredAt = new Date(cashTransactionForm.elements.occurredAt.value);
       if (Number.isNaN(occurredAt.getTime())) throw new Error("أدخل تاريخ ووقتًا صالحين.");
-      const { error } = await supabaseClient.rpc("save_factory_cash_transaction", {
+      const transactionId = cashTransactionForm.elements.transactionId.value;
+      const args = {
         requested_direction: cashTransactionForm.elements.direction.value,
         requested_category: String(cashTransactionForm.elements.category.value).trim(),
         requested_description: String(cashTransactionForm.elements.description.value).trim(),
         requested_amount: Number(cashTransactionForm.elements.amount.value),
         requested_payment_method: String(cashTransactionForm.elements.method.value).trim(),
-        requested_occurred_at: occurredAt.toISOString(),
-        requested_customer_id: null
-      });
+        requested_occurred_at: occurredAt.toISOString()
+      };
+      const { error } = transactionId
+        ? await supabaseClient.rpc("update_factory_cash_transaction", {
+          requested_transaction_id: transactionId,
+          ...args
+        })
+        : await supabaseClient.rpc("save_factory_cash_transaction", {
+          ...args,
+          requested_customer_id: null
+        });
       if (error?.code === "PGRST202") throw new Error("دالة سجل النقدية غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
       if (error) throw error;
       saved = true;
-      cashTransactionForm.reset();
-      cashTransactionForm.elements.method.value = "نقدي";
-      cashTransactionForm.elements.occurredAt.value = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+      resetCashTransactionForm();
       await refreshDashboard(session);
-      window.factoryUI.toast("تم تسجيل الحركة النقدية وتحديث رصيد السجل.");
+      window.factoryUI.toast(transactionId ? "تم تعديل الحركة النقدية وتحديث السجل." : "تم تسجيل الحركة النقدية وتحديث رصيد السجل.");
     } catch (error) {
       window.factoryUI.toast(saved
         ? `تم تسجيل الحركة، لكن تعذر تحديث الشاشة: ${error.message}`
@@ -2919,6 +2874,30 @@ function bindActions(session) {
       button.disabled = false;
     }
   });
+  cashTransactionForm.querySelector("[data-cancel-cash-edit]").addEventListener("click", resetCashTransactionForm);
+  document.querySelectorAll("[data-edit-cash-transaction]").forEach((button) => button.addEventListener("click", () => {
+    const transaction = dashboardData.cashTransactions.find((entry) => entry.id === button.dataset.editCashTransaction);
+    if (!transaction) {
+      window.factoryUI.toast("تعذر العثور على الحركة النقدية.", "error");
+      return;
+    }
+    if (transaction.order_id) {
+      window.factoryUI.toast("مصاريف التشغيل المرتبطة بالموديل تُعدّل من شاشة تعديل الطلبية.", "error");
+      return;
+    }
+    const occurredAt = new Date(transaction.occurred_at);
+    cashTransactionForm.elements.transactionId.value = transaction.id;
+    cashTransactionForm.elements.direction.value = transaction.direction;
+    cashTransactionForm.elements.category.value = transaction.category;
+    cashTransactionForm.elements.description.value = transaction.description || "";
+    cashTransactionForm.elements.amount.value = transaction.amount;
+    cashTransactionForm.elements.method.value = transaction.payment_method || "غير محدد";
+    cashTransactionForm.elements.occurredAt.value = new Date(occurredAt.getTime() - occurredAt.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+    cashTransactionForm.querySelector('[type="submit"]').textContent = "حفظ تعديل الحركة";
+    cashTransactionForm.querySelector("[data-cancel-cash-edit]").hidden = false;
+    cashTransactionForm.scrollIntoView({ behavior: "smooth", block: "center" });
+    cashTransactionForm.elements.category.focus({ preventScroll: true });
+  }));
   document.querySelectorAll("[data-delete-cash-transaction]").forEach((button) => button.addEventListener("click", async () => {
     const transaction = dashboardData.cashTransactions.find((entry) => entry.id === button.dataset.deleteCashTransaction);
     if (!transaction) {

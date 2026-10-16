@@ -1289,6 +1289,80 @@ begin
 end;
 $$;
 
+create or replace function public.update_factory_cash_transaction(
+  requested_transaction_id uuid,
+  requested_direction text,
+  requested_category text,
+  requested_description text,
+  requested_amount numeric,
+  requested_payment_method text,
+  requested_occurred_at timestamptz
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  current_customer_id uuid;
+  current_order_id uuid;
+  account_period_start timestamptz;
+begin
+  if not public.is_active_factory_admin() then
+    raise exception 'Only active admins can edit cash transactions.';
+  end if;
+  if requested_transaction_id is null
+     or requested_direction not in ('income', 'expense')
+     or length(trim(coalesce(requested_category, ''))) not between 1 and 120
+     or requested_amount is null
+     or requested_amount <= 0
+     or requested_amount > 999999999999.99
+     or requested_occurred_at is null then
+    raise exception 'Enter a valid cash direction, category, positive amount, and date.';
+  end if;
+
+  select customer_id, order_id
+    into current_customer_id, current_order_id
+  from public.factory_cash_transactions
+  where id = requested_transaction_id
+  for update;
+  if not found then
+    raise exception 'Cash transaction not found.';
+  end if;
+  if current_order_id is not null then
+    raise exception 'Order operating expenses must be changed from the order editor.';
+  end if;
+  if current_customer_id is not null and requested_direction <> 'expense' then
+    raise exception 'A client-account expense cannot be changed to income.';
+  end if;
+  if current_customer_id is not null then
+    select account_period_started_at
+      into account_period_start
+    from public.factory_clients
+    where id = current_customer_id;
+    if account_period_start is not null
+       and (requested_occurred_at < account_period_start
+         or exists (
+           select 1
+           from public.factory_cash_transactions
+           where id = requested_transaction_id
+             and occurred_at < account_period_start
+         )) then
+      raise exception 'Cash transactions in a settled client period are immutable.';
+    end if;
+  end if;
+
+  update public.factory_cash_transactions
+  set direction = requested_direction,
+      category = trim(requested_category),
+      description = coalesce(trim(requested_description), ''),
+      amount = round(requested_amount, 2),
+      payment_method = coalesce(nullif(trim(requested_payment_method), ''), 'غير محدد'),
+      occurred_at = requested_occurred_at
+  where id = requested_transaction_id;
+end;
+$$;
+
 create or replace function public.read_factory_client_cash_transactions()
 returns table (
   id uuid,
@@ -1782,9 +1856,6 @@ begin
     if not found then
       raise exception 'Fabric stock item not found.';
     end if;
-    if current_scope <> 'owner' then
-      raise exception 'Incoming fabric records cannot be edited as owner inventory.';
-    end if;
     if current_unit is distinct from requested_unit and exists (
       select 1 from public.factory_fabric_transactions
       where fabric_id = requested_fabric_id
@@ -2142,54 +2213,8 @@ language plpgsql
 security definer
 set search_path = public
 as $$
-declare
-  stock_item public.factory_fabrics%rowtype;
-  saved_transaction_id uuid;
 begin
-  if not public.has_active_factory_role(array['admin', 'cutting']) then
-    raise exception 'Only active admins and cutting supervisors can withdraw fabric.';
-  end if;
-  if requested_fabric_id is null
-     or requested_quantity is null
-     or requested_quantity <= 0
-     or requested_quantity > 99999999999.999
-     or length(trim(coalesce(requested_notes, ''))) not between 1 and 500
-     or requested_occurred_at is null then
-    raise exception 'Select fabric and enter a positive quantity, description, and date.';
-  end if;
-
-  select *
-    into stock_item
-  from public.factory_fabrics
-  where id = requested_fabric_id
-  for update;
-  if not found then
-    raise exception 'The selected fabric stock item was not found.';
-  end if;
-  if stock_item.stock_scope = 'owner' and not public.is_active_factory_admin() then
-    raise exception 'Cutting supervisors cannot withdraw owner fabric.';
-  end if;
-  if stock_item.unit = 'توب' and requested_quantity <> trunc(requested_quantity) then
-    raise exception 'Fabric measured in توب must be withdrawn as a whole number.';
-  end if;
-  if stock_item.quantity_available < requested_quantity then
-    raise exception 'The requested withdrawal exceeds available fabric stock.';
-  end if;
-
-  update public.factory_fabrics
-  set quantity_available = quantity_available - requested_quantity,
-      updated_at = now()
-  where id = requested_fabric_id;
-
-  insert into public.factory_fabric_transactions (
-    fabric_id, transaction_type, quantity, notes, actor_id, created_at
-  )
-  values (
-    requested_fabric_id, 'withdrawal', requested_quantity,
-    trim(requested_notes), auth.uid(), requested_occurred_at
-  )
-  returning id into saved_transaction_id;
-  return saved_transaction_id;
+  raise exception 'Fabric outflow must be recorded through a cutting order.';
 end;
 $$;
 
@@ -2208,19 +2233,33 @@ begin
   if requested_fabric_id is null then
     raise exception 'A valid fabric stock item is required.';
   end if;
+  perform 1
+  from public.factory_fabrics
+  where id = requested_fabric_id
+  for update;
+  if not found then
+    raise exception 'Fabric stock item not found.';
+  end if;
   if exists (
-    select 1 from public.factory_fabric_transactions
+    select 1
+    from public.factory_fabric_transactions
+    where fabric_id = requested_fabric_id
+      and order_id is not null
+  ) then
+    raise exception 'Fabric used by a cutting order cannot be deleted; preserve its stock history.';
+  end if;
+  if exists (
+    select 1
+    from public.production_stages
     where fabric_id = requested_fabric_id
   ) then
-    raise exception 'Fabric items with inventory history cannot be deleted.';
+    raise exception 'Fabric referenced by a production stage cannot be deleted; preserve its production history.';
   end if;
+
+  delete from public.factory_fabric_transactions
+  where fabric_id = requested_fabric_id;
   delete from public.factory_fabrics
-  where id = requested_fabric_id
-    and stock_scope = 'owner'
-    and quantity_available = 0;
-  if not found then
-    raise exception 'Only an unused fabric item with zero stock can be deleted.';
-  end if;
+  where id = requested_fabric_id;
 end;
 $$;
 
@@ -3501,6 +3540,8 @@ revoke all on function public.delete_factory_payment(uuid) from public, anon, au
 grant execute on function public.delete_factory_payment(uuid) to authenticated;
 revoke all on function public.delete_factory_cash_transaction(uuid) from public, anon, authenticated;
 grant execute on function public.delete_factory_cash_transaction(uuid) to authenticated;
+revoke all on function public.update_factory_cash_transaction(uuid, text, text, text, numeric, text, timestamptz) from public, anon, authenticated;
+grant execute on function public.update_factory_cash_transaction(uuid, text, text, text, numeric, text, timestamptz) to authenticated;
 revoke all on function public.delete_factory_fabric_transaction(uuid) from public, anon, authenticated;
 grant execute on function public.delete_factory_fabric_transaction(uuid) to authenticated;
 
