@@ -1276,7 +1276,7 @@ function modelDetailsModalView(order) {
       <div><span>المتبقي الحالي</span><strong>${money(order.remainingAmount)}</strong></div>
       <div><span>الألوان</span><strong>${colorSummaryMarkup(order.colors, order.colorNames, order.colorPlyData)}</strong></div>
       <div><span>المقاسات</span><strong>${escapeHtml(sizeSummary(order.sizes))}</strong></div>
-      <div><span>القماش / الفرشة</span><strong>${escapeHtml(order.fabric || "—")} · ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.boltCount)} طوب · ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.layerCount)} رئات</strong></div>
+      <div><span>القماش / الفرشة</span><strong>${escapeHtml(order.fabric || "—")} · ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.boltCount)} توب · ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.layerCount)} رئات</strong></div>
       <div><span>ملاحظات القص</span><strong>${escapeHtml(order.cuttingNotes || "—")}</strong></div>
       <div><span>تم الإرسال بواسطة</span><strong>${escapeHtml(order.senderName || "—")}</strong></div>
       <div><span>التسليم المتوقع</span><strong>${formatDateOnly(order.expectedDeliveryDate)}</strong></div>
@@ -1305,21 +1305,40 @@ function fabricSelectOptions(fabrics, selectedId = "", clients = [], allowExtern
   ).join("")}`;
 }
 
-function incomingFabricLineMarkup(index) {
-  return `<div class="fabric-entry-row" data-fabric-entry-row>
-    <label class="field"><span>اسم القماش</span><input name="name" maxlength="120" required></label>
-    <label class="field fabric-color-name-field"><span>اسم اللون</span><input name="colorName" maxlength="64"></label>
-    <label class="field fabric-color-picker-field"><span>درجة اللون</span><input name="colorHex" type="color" value="#ffffff" required></label>
+function incomingFabricColorRowMarkup() {
+  return `<div class="incoming-fabric-color-row" data-incoming-fabric-color-row>
+    <label class="field"><span>اسم اللون</span><input name="colorName" maxlength="64"></label>
+    <label class="field"><span>درجة اللون</span><input name="colorHex" type="color" value="#ffffff" required></label>
     <label class="field"><span>الكمية</span><input name="quantity" type="number" min="0.001" step="0.001" required></label>
-    <label class="field"><span>وحدة القياس</span><select name="unit" required><option value="متر">متر</option><option value="طوب">طوب</option></select></label>
-    ${index ? '<button type="button" class="row-action" data-remove-fabric-row>حذف الصنف</button>' : ""}
+    <label class="field"><span>الوحدة</span><select name="unit" required><option value="متر">متر</option><option value="توب">توب</option></select></label>
+    <button type="button" class="row-action" data-remove-incoming-color>حذف اللون</button>
   </div>`;
+}
+
+function syncIncomingFabricQuantity(row) {
+  const unit = row.querySelector('[name="unit"]')?.value;
+  const quantity = row.querySelector('[name="quantity"]');
+  if (!quantity) return;
+  const wholeTobs = unit === "توب";
+  quantity.step = wholeTobs ? "1" : "0.001";
+  quantity.min = wholeTobs ? "1" : "0.001";
+  quantity.placeholder = wholeTobs ? "عدد التوب" : "الكمية بالمتر";
+}
+
+function incomingFabricGroupMarkup() {
+  return `<fieldset class="incoming-fabric-group" data-incoming-fabric-group>
+    <legend>نوع القماش</legend>
+    <label class="field"><span>اسم / نوع القماش</span><input name="name" maxlength="120" required></label>
+    <div class="incoming-fabric-color-list" data-incoming-fabric-color-list>${incomingFabricColorRowMarkup()}</div>
+    <button type="button" class="row-action" data-add-incoming-color>＋ إضافة لون آخر</button>
+    <button type="button" class="row-action order-delete-action" data-remove-incoming-type hidden>حذف نوع القماش</button>
+  </fieldset>`;
 }
 
 function ownerFabricReceiptLineMarkup(fabrics) {
   return `<div class="fabric-entry-row owner-fabric-entry-row" data-fabric-entry-row>
     <label class="field"><span>صنف قماش الإدارة</span><select name="fabricId" required>${fabricSelectOptions(fabrics)}</select></label>
-    <label class="field"><span>الكمية الواردة</span><input name="quantity" type="number" min="0.001" step="0.001" required></label>
+    <label class="field"><span>الكمية الداخلة</span><input name="quantity" type="number" min="0.001" step="0.001" required></label>
     <button type="button" class="row-action" data-remove-fabric-row>حذف الصنف</button>
   </div>`;
 }
@@ -1360,10 +1379,10 @@ function fabricStockView(data, isAdmin) {
       : `<button class="row-action order-delete-action" type="button" data-delete-fabric-transaction="${escapeHtml(transaction.id)}">حذف الحركة</button>`;
     return `<tr><td>${escapeHtml(fabric?.name || "خامة محذوفة")}</td><td>${escapeHtml(labels[transaction.transaction_type] || transaction.transaction_type)}</td><td>${amount}</td><td>${escapeHtml(order?.name || (transaction.order_id ? transaction.order_id.slice(0, 8) : "—"))}</td><td>${escapeHtml(transaction.notes || "—")}</td><td>${formatDateTime(transaction.created_at)}</td><td>${movementAction}</td></tr>`;
   });
-  const incomingForm = `<form class="form-grid fabric-form" id="incoming-fabric-form"><div class="field"><label for="incoming-fabric-client">اسم العميل</label><select id="incoming-fabric-client" name="customerId"><option value="">عميل غير معروف / غير محدد حالياً</option>${data.clients.map((client) => `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)}</option>`).join("")}</select></div><div class="field"><label for="incoming-fabric-date">تاريخ ووقت الاستلام</label><input id="incoming-fabric-date" name="receivedAt" type="datetime-local" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}" required></div><div class="field wide"><label for="incoming-fabric-notes">ملاحظات الحركة</label><input id="incoming-fabric-notes" name="notes" maxlength="500"></div><div class="wide fabric-entry-list" data-fabric-entry-list>${incomingFabricLineMarkup(0)}</div><div class="form-actions"><button class="button button-secondary" type="button" data-add-fabric-row>＋ إضافة لون / قماش</button><button class="button button-primary" type="submit">＋ تسجيل القماش الداخل</button></div></form>`;
+  const incomingForm = `<form class="form-grid fabric-form incoming-fabric-form" id="incoming-fabric-form"><div class="field"><label for="incoming-fabric-client">اسم العميل</label><select id="incoming-fabric-client" name="customerId"><option value="">عميل غير معروف / غير محدد حالياً</option>${data.clients.map((client) => `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)}</option>`).join("")}</select></div><div class="field"><label for="incoming-fabric-date">تاريخ ووقت الاستلام</label><input id="incoming-fabric-date" name="receivedAt" type="datetime-local" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}" required></div><div class="field wide"><label for="incoming-fabric-notes">ملاحظات الحركة</label><input id="incoming-fabric-notes" name="notes" maxlength="500"></div><div class="wide incoming-fabric-groups" data-incoming-fabric-groups>${incomingFabricGroupMarkup()}</div><div class="form-actions"><button class="button button-secondary" type="button" data-add-incoming-type>＋ إضافة نوع قماش جديد</button><button class="button button-primary" type="submit">＋ تسجيل القماش الداخل</button></div></form>`;
   const incomingSection = `<section id="incoming-fabric" class="dashboard-section">
     <div class="stats-grid">${stat("سجلات القماش الداخل", incomingFabrics.length, "مرتبطة بعميل أو بانتظار التحديد")}${stat("المتاح حالياً للقص", new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(incomingFabrics.reduce((sum, fabric) => sum + Number(fabric.quantity_available), 0)), "بعد خصم القماش المستخدم")}${isAdmin ? stat("حركات القماش", totalTransactions, "استلام وسحب") : ""}</div>
-    ${panel("تسجيل القماش الداخل للقص", incomingForm, "يمكن اختيار العميل الآن أو تركه غير محدد ليعينه الأدمن لاحقاً.")}
+    ${panel("تسجيل القماش الداخل للقص", incomingForm, "اكتب نوع القماش مرة واحدة، ثم أضف لوناً وكمية ووحدة لكل لون. يمكن تسجيل عدة أنواع في الشحنة نفسها.")}
     ${panel(isAdmin ? "القماش الداخل للقص وتعيين العميل" : "سجل القماش الداخل للقص", table(["اسم القماش","اللون","العميل","الكمية المتاحة","تاريخ الاستلام","إجراء"], incomingRows))}
     ${isAdmin ? panel("سجل حركات القماش الداخل", table(["القماش","نوع الحركة","الكمية","رقم الطلب","ملاحظات","التاريخ والوقت","إجراء"], transactionRows.filter((transaction) => incomingFabrics.some((fabric) => fabric.id === transaction.fabric_id)))) : ""}
   </section>`;
@@ -1371,8 +1390,8 @@ function fabricStockView(data, isAdmin) {
   const ownerSection = `<section id="owner-fabric" class="dashboard-section">
     <div class="stats-grid">${stat("أصناف قماش الإدارة", ownerFabrics.length, "إدارة خاصة بالأدمن")}${stat("حركات المخزون", totalTransactions, "وارد وسحب")}</div>
     <div class="fabric-admin-tools">
-      ${panel("إضافة / تعديل صنف قماش", `<form class="form-grid fabric-form" id="fabric-form"><input type="hidden" name="fabricId"><div class="field"><label for="fabric-name">اسم القماش</label><input id="fabric-name" name="name" maxlength="120" required></div><div class="field fabric-color-name-field"><label for="fabric-color-name">اسم اللون</label><input id="fabric-color-name" name="colorName" maxlength="64"></div><div class="field fabric-color-picker-field"><label for="fabric-color-hex">درجة اللون</label><input id="fabric-color-hex" name="colorHex" type="color" value="#ffffff" required></div><div class="field"><label for="fabric-unit">وحدة القياس</label><select id="fabric-unit" name="unit" required><option value="متر">متر</option><option value="طوب">طوب</option></select></div><div class="form-actions"><button class="button button-primary" type="submit">حفظ بيانات القماش</button><button class="row-action" type="button" data-cancel-fabric-edit hidden>إلغاء التعديل</button></div></form>`, "تغيير الوحدة غير متاح بعد تسجيل حركات على الصنف")}
-      ${panel("تسجيل أقمشة واردة للإدارة", `<form class="form-grid fabric-form" id="fabric-receipt-form"><div class="field"><label for="fabric-receipt-date">تاريخ الورود</label><input id="fabric-receipt-date" name="receivedAt" type="datetime-local" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}" required></div><div class="field"><label for="fabric-receipt-notes">ملاحظات / مرجع</label><input id="fabric-receipt-notes" name="notes" maxlength="500"></div><div class="wide fabric-entry-list" data-fabric-entry-list>${ownerFabricReceiptLineMarkup(ownerFabrics)}</div><div class="form-actions"><button class="button button-secondary" type="button" data-add-fabric-row>＋ إضافة صنف</button><button class="button button-primary" type="submit">＋ تسجيل الكميات الواردة</button></div></form>`, "هذا رصيد الإدارة فقط، ولا يظهر في سجل الوارد الخاص بمشرف القص")}
+      ${panel("إضافة / تعديل صنف قماش", `<form class="form-grid fabric-form" id="fabric-form"><input type="hidden" name="fabricId"><div class="field"><label for="fabric-name">اسم القماش</label><input id="fabric-name" name="name" maxlength="120" required></div><div class="field fabric-color-name-field"><label for="fabric-color-name">اسم اللون</label><input id="fabric-color-name" name="colorName" maxlength="64"></div><div class="field fabric-color-picker-field"><label for="fabric-color-hex">درجة اللون</label><input id="fabric-color-hex" name="colorHex" type="color" value="#ffffff" required></div><div class="field"><label for="fabric-unit">وحدة القياس</label><select id="fabric-unit" name="unit" required><option value="متر">متر</option><option value="توب">توب</option></select></div><div class="form-actions"><button class="button button-primary" type="submit">حفظ بيانات القماش</button><button class="row-action" type="button" data-cancel-fabric-edit hidden>إلغاء التعديل</button></div></form>`, "تغيير الوحدة غير متاح بعد تسجيل حركات على الصنف")}
+      ${panel("تسجيل القماش الداخل للإدارة", `<form class="form-grid fabric-form" id="fabric-receipt-form"><div class="field"><label for="fabric-receipt-date">تاريخ الإدخال</label><input id="fabric-receipt-date" name="receivedAt" type="datetime-local" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}" required></div><div class="field"><label for="fabric-receipt-notes">ملاحظات / مرجع</label><input id="fabric-receipt-notes" name="notes" maxlength="500"></div><div class="wide fabric-entry-list" data-fabric-entry-list>${ownerFabricReceiptLineMarkup(ownerFabrics)}</div><div class="form-actions"><button class="button button-secondary" type="button" data-add-fabric-row>＋ إضافة صنف</button><button class="button button-primary" type="submit">＋ تسجيل الكميات الداخلة</button></div></form>`, "هذا رصيد الإدارة فقط، ولا يظهر في سجل القماش الداخل الخاص بمشرف القص")}
       ${panel("تسوية رصيد قماش الإدارة", `<form class="form-grid fabric-form" id="fabric-adjustment-form"><div class="field"><label for="fabric-adjustment-item">صنف قماش الإدارة</label><select id="fabric-adjustment-item" name="fabricId" required>${fabricSelectOptions(ownerFabrics)}</select></div><div class="field"><label for="fabric-adjustment-quantity">فرق الكمية (+ زيادة / − نقص)</label><input id="fabric-adjustment-quantity" name="adjustment" type="number" step="0.001" required></div><div class="field"><label for="fabric-adjustment-date">تاريخ التسوية</label><input id="fabric-adjustment-date" name="adjustedAt" type="datetime-local" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}" required></div><div class="field"><label for="fabric-adjustment-notes">سبب التسوية</label><input id="fabric-adjustment-notes" name="notes" maxlength="500" required></div><div class="form-actions"><button class="button button-secondary" type="submit">حفظ تسوية المخزون</button></div></form>`, "يُسجل الفرق كحركة تدقيقية ولا يمكن أن يخفض الرصيد إلى أقل من صفر")}
     </div>
     ${panel("مخزون قماش الإدارة", table(["اسم القماش","النوع","اللون ورقمه","المتاح","آخر تحديث","إجراء"], fabricRows(ownerFabrics, true)))}
@@ -1480,11 +1499,11 @@ function cuttingView(data) {
     <p class="cutting-target">${item.total > 0 ? `العدد الحالي: ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.total)} قطعة` : "العدد النهائي: بانتظار اعتماد القص"}</p>
     <form class="cutting-finish-form" data-finish-cutting="${escapeHtml(item.order)}" data-customer-id="${escapeHtml(item.customerId || "")}">
       <div class="form-section-grid cutting-bed-inputs">
-        <label class="field"><span>قماش الفرشة من الوارد المخصص للقص</span><select name="fabricId" data-fabric-select required>${fabricSelectOptions(data.fabrics, item.fabricId, data.clients, true)}</select><small data-fabric-stock-hint></small></label>
-        <label class="field"><span>الكمية المستخدمة (<span data-fabric-unit>${escapeHtml(data.fabrics.find((fabric) => fabric.id === item.fabricId)?.unit || "متر")}</span>)</span><input name="fabricQuantity" type="number" min="0.001" step="0.001" value="${item.fabricQuantity || ""}" required></label>
+        <label class="field"><span>اختيار قماش الفرشة</span><select name="fabricId" data-fabric-select required>${fabricSelectOptions(data.fabrics, item.fabricId, data.clients, true)}</select><small data-fabric-stock-hint></small></label>
+        <label class="field"><span>الكمية المستخدمة — <span data-fabric-unit>${escapeHtml(data.fabrics.find((fabric) => fabric.id === item.fabricId)?.unit || "متر")}</span></span><input name="fabricQuantity" type="number" min="0.001" step="0.001" value="${item.fabricQuantity || ""}" required></label>
         <input type="hidden" name="boltCount" value="${item.boltCount || 1}">
         <label class="field" data-external-fabric-source-field hidden><span>مصدر الخامة الخارجية</span><input name="externalFabricSource" maxlength="160" value="${escapeHtml(item.externalFabricSource || "")}" placeholder="مثال: بواقي قماش قديم من المخزن"></label>
-        <label class="field" data-external-fabric-source-field hidden><span>وحدة الخامة الخارجية</span><select name="externalFabricUnit"><option value="متر" ${item.externalFabricUnit === "متر" ? "selected" : ""}>متر</option><option value="طوب" ${item.externalFabricUnit === "طوب" ? "selected" : ""}>طوب</option></select></label>
+        <input type="hidden" name="externalFabricUnit" value="متر">
       </div>
       ${sizePickerMarkup(item.sizes, `cutting-${item.order}`, false)}
       ${cuttingColorPlyMarkup(item.colorPlyData, item.colors, item.layerCount, `cutting-${item.order}`)}
@@ -1516,11 +1535,11 @@ function cuttingRequestsView(data) {
         <label class="field"><span>العميل</span><select name="customerId" required><option value="">اختر العميل</option>${clientOptions}</select></label>
         <label class="field model-name-field"><span>اسم الموديل</span><input name="modelName" autocomplete="off"></label>
         <label class="field model-number-field"><span>رقم الموديل</span><input name="modelNumber" autocomplete="off"></label>
-        <label class="field"><span>قماش الفرشة من الوارد المخصص للقص</span><select name="fabricId" data-fabric-select required>${fabricSelectOptions(data.fabrics, "", data.clients, true)}</select><small data-fabric-stock-hint></small></label>
-        <label class="field"><span>الكمية المستخدمة (<span data-fabric-unit>متر</span>)</span><input name="fabricQuantity" type="number" min="0.001" step="0.001" required></label>
+        <label class="field"><span>اختيار قماش الفرشة</span><select name="fabricId" data-fabric-select required>${fabricSelectOptions(data.fabrics, "", data.clients, true)}</select><small data-fabric-stock-hint></small></label>
+        <label class="field"><span>الكمية المستخدمة — <span data-fabric-unit>متر</span></span><input name="fabricQuantity" type="number" min="0.001" step="0.001" placeholder="الكمية بالمتر" required></label>
         <input type="hidden" name="boltCount" value="1">
         <label class="field" data-external-fabric-source-field hidden><span>مصدر الخامة الخارجية</span><input name="externalFabricSource" maxlength="160" placeholder="مثال: بواقي قماش قديم من المخزن"></label>
-        <label class="field" data-external-fabric-source-field hidden><span>وحدة الخامة الخارجية</span><select name="externalFabricUnit"><option value="متر">متر</option><option value="طوب">طوب</option></select></label>
+        <input type="hidden" name="externalFabricUnit" value="متر">
       </div></section>
       ${sizePickerMarkup("", "new-cutting", false)}
       ${cuttingColorPlyMarkup(null, "", 0, "new-cutting")}
@@ -1854,21 +1873,22 @@ function bindCuttingActions(session) {
       const hint = form.querySelector("[data-fabric-stock-hint]");
       const externalFields = form.querySelectorAll("[data-external-fabric-source-field]");
       const externalInput = form.elements.externalFabricSource;
-      const externalUnit = form.elements.externalFabricUnit;
       const available = selected?.dataset.available;
       const external = select.value === "external";
-      const selectedUnit = external ? externalUnit.value : selected?.dataset.unit || "متر";
+      const selectedUnit = external ? "متر" : selected?.dataset.unit || "متر";
       if (unit) unit.textContent = selectedUnit;
+      const quantityInput = form.elements.fabricQuantity;
+      quantityInput.step = selectedUnit === "توب" ? "1" : "0.001";
+      quantityInput.min = selectedUnit === "توب" ? "1" : "0.001";
+      quantityInput.placeholder = selectedUnit === "توب" ? "عدد التوب" : "الكمية بالمتر";
       if (select.value === "external") {
         externalFields.forEach((field) => { field.hidden = false; });
         if (externalInput) externalInput.required = true;
-        if (externalUnit) externalUnit.required = true;
         if (select.required) select.required = false;
         if (hint) hint.textContent = "الخامة الخارجية لا تخصم من مخزون القماش.";
       } else {
         externalFields.forEach((field) => { field.hidden = true; });
         if (externalInput) externalInput.required = false;
-        if (externalUnit) externalUnit.required = false;
         if (!select.required) select.required = true;
         if (hint) hint.textContent = select.value
           ? `المتاح حاليًا: ${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(Number(available || 0))} ${selected.dataset.unit || ""}`
@@ -1881,7 +1901,6 @@ function bindCuttingActions(session) {
       refreshFabricHint();
     });
     applyClientStockFilter();
-    select.closest("form").elements.externalFabricUnit.addEventListener("change", refreshFabricHint);
     refreshFabricHint();
   });
   const readCuttingInputs = (form) => {
@@ -1891,18 +1910,18 @@ function bindCuttingActions(session) {
     const fabricUnit = isExternal ? form.elements.externalFabricUnit.value : form.elements.fabricId.selectedOptions[0]?.dataset.unit || "";
     const fabricId = isExternal ? null : selectedFabricId;
     const fabricQuantity = Number(form.elements.fabricQuantity.value);
-    const boltCount = fabricUnit === "طوب" ? fabricQuantity : 1;
+    const boltCount = fabricUnit === "توب" ? fabricQuantity : 1;
     const externalFabricSource = isExternal ? String(form.elements.externalFabricSource.value).trim() : "";
     const fabric = isExternal ? externalFabricSource : form.elements.fabricId.selectedOptions[0]?.dataset.name || "";
     const { sizeData, total } = cuttingData;
     if ((!isExternal && !fabricId) || !fabric || !Number.isFinite(fabricQuantity) || fabricQuantity <= 0
-      || (isExternal && !["متر", "طوب"].includes(fabricUnit))
-      || (fabricUnit === "طوب" && !Number.isSafeInteger(boltCount))
+      || (isExternal && fabricUnit !== "متر")
+      || (fabricUnit === "توب" && !Number.isSafeInteger(boltCount))
       || !sizeData.type || !Object.keys(sizeData.counts).length || !Number.isSafeInteger(total) || total <= 0
       || cuttingData.colorPlyData.colors.length === 0
       || cuttingData.colorPlyData.colors.some((entry) => !entry.name || !Number.isSafeInteger(entry.plys) || entry.plys < 1)
       || new Set(cuttingData.colorPlyData.colors.map((entry) => entry.color)).size !== cuttingData.colorPlyData.colors.length) {
-      window.factoryUI.toast("اختر خامة من المخزون أو اكتب مصدر الخامة الخارجية، وحدد الكمية وعدد الطوب/الأتواب، ثم راجع المقاسات والألوان والرئات.", "error");
+      window.factoryUI.toast("اختر خامة من المخزون وحدد كميتها بوحدتها، أو اكتب مصدر الخامة الخارجية وحدد الكمية بالمتر، ثم راجع المقاسات والألوان والرئات.", "error");
       return null;
     }
     return {
@@ -2145,13 +2164,16 @@ function bindIncomingFabricActions(session) {
     try {
       const receivedAt = new Date(form.elements.receivedAt.value);
       if (Number.isNaN(receivedAt.getTime())) throw new Error("أدخل تاريخ ووقت استلام صالحين.");
-      const items = [...form.querySelectorAll("[data-fabric-entry-row]")].map((row) => ({
-        name: String(row.querySelector('[name="name"]').value).trim(),
-        colorName: String(row.querySelector('[name="colorName"]').value).trim(),
-        colorHex: row.querySelector('[name="colorHex"]').value,
-        quantity: Number(row.querySelector('[name="quantity"]').value),
-        unit: row.querySelector('[name="unit"]').value
-      }));
+      const items = [...form.querySelectorAll("[data-incoming-fabric-group]")].flatMap((group) => {
+        const name = String(group.querySelector('[name="name"]').value).trim();
+        return [...group.querySelectorAll("[data-incoming-fabric-color-row]")].map((row) => ({
+          name,
+          colorName: String(row.querySelector('[name="colorName"]').value).trim(),
+          colorHex: row.querySelector('[name="colorHex"]').value,
+          quantity: Number(row.querySelector('[name="quantity"]').value),
+          unit: row.querySelector('[name="unit"]').value
+        }));
+      });
       const { error } = await supabaseClient.rpc("register_factory_incoming_fabrics", {
         requested_customer_id: form.elements.customerId.value || null,
         requested_items: items,
@@ -2162,6 +2184,7 @@ function bindIncomingFabricActions(session) {
       if (error) throw error;
       registered = true;
       form.reset();
+      form.querySelector("[data-incoming-fabric-groups]").innerHTML = incomingFabricGroupMarkup();
       form.querySelectorAll('[name="colorHex"]').forEach((input) => { input.value = "#ffffff"; });
       form.elements.receivedAt.value = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16);
       await refreshDashboard(session);
@@ -2203,12 +2226,44 @@ function bindIncomingFabricActions(session) {
 function bindFabricEntryRows() {
   document.querySelectorAll("#incoming-fabric-form, #fabric-receipt-form").forEach((form) => {
     form.addEventListener("click", (event) => {
+      if (form.id === "incoming-fabric-form") {
+        const addTypeButton = event.target.closest("[data-add-incoming-type]");
+        if (addTypeButton) {
+          const groups = form.querySelector("[data-incoming-fabric-groups]");
+          groups.insertAdjacentHTML("beforeend", incomingFabricGroupMarkup());
+          groups.lastElementChild.querySelector("[data-remove-incoming-type]").hidden = false;
+          groups.lastElementChild.querySelector('[name="name"]').focus();
+          return;
+        }
+        const addColorButton = event.target.closest("[data-add-incoming-color]");
+        if (addColorButton) {
+          const list = addColorButton.closest("[data-incoming-fabric-group]").querySelector("[data-incoming-fabric-color-list]");
+          list.insertAdjacentHTML("beforeend", incomingFabricColorRowMarkup());
+          const row = list.lastElementChild;
+          syncIncomingFabricQuantity(row);
+          row.querySelector('[name="colorName"]').focus();
+          return;
+        }
+        const removeTypeButton = event.target.closest("[data-remove-incoming-type]");
+        if (removeTypeButton) {
+          if (form.querySelectorAll("[data-incoming-fabric-group]").length > 1) {
+            removeTypeButton.closest("[data-incoming-fabric-group]").remove();
+          }
+          return;
+        }
+        const removeColorButton = event.target.closest("[data-remove-incoming-color]");
+        if (removeColorButton) {
+          const list = removeColorButton.closest("[data-incoming-fabric-color-list]");
+          if (list.querySelectorAll("[data-incoming-fabric-color-row]").length > 1) {
+            removeColorButton.closest("[data-incoming-fabric-color-row]").remove();
+          }
+          return;
+        }
+      }
       const addButton = event.target.closest("[data-add-fabric-row]");
       if (addButton) {
         const list = form.querySelector("[data-fabric-entry-list]");
-        const markup = form.id === "fabric-receipt-form"
-          ? ownerFabricReceiptLineMarkup(dashboardData.fabrics.filter((fabric) => fabric.stock_scope === "owner"))
-          : incomingFabricLineMarkup(list.querySelectorAll("[data-fabric-entry-row]").length);
+        const markup = ownerFabricReceiptLineMarkup(dashboardData.fabrics.filter((fabric) => fabric.stock_scope === "owner"));
         list.insertAdjacentHTML("beforeend", markup);
         return;
       }
@@ -2216,6 +2271,13 @@ function bindFabricEntryRows() {
       const row = removeButton?.closest("[data-fabric-entry-row]");
       if (row && row.parentElement.querySelectorAll("[data-fabric-entry-row]").length > 1) row.remove();
     });
+    if (form.id === "incoming-fabric-form") {
+      form.addEventListener("change", (event) => {
+        const unitSelect = event.target.closest('[data-incoming-fabric-color-row] [name="unit"]');
+        if (unitSelect) syncIncomingFabricQuantity(unitSelect.closest("[data-incoming-fabric-color-row]"));
+      });
+      form.querySelectorAll("[data-incoming-fabric-color-row]").forEach(syncIncomingFabricQuantity);
+    }
   });
 }
 

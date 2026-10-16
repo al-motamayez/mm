@@ -865,6 +865,7 @@ begin
     if current_customer_id is not null and current_customer_id is distinct from matched_customer_id then
       raise exception 'An existing factory order cannot be reassigned to another customer.';
     end if;
+    -- Accept only canonical units plus legacy values that are normalized below.
     if exists (
       select 1 from public.orders
       where id = requested_order_id and archived_at is not null
@@ -1102,7 +1103,7 @@ create table if not exists public.factory_fabrics (
   fabric_type text not null default '',
   color_name text not null default '',
   color_hex text not null default '#FFFFFF' check (color_hex ~ '^#[0-9A-Fa-f]{6}$'),
-  unit text not null check (unit in ('متر', 'طوب')),
+  unit text not null check (unit in ('متر', 'توب')),
   quantity_available numeric(14, 3) not null default 0 check (quantity_available >= 0),
   received_at timestamptz,
   received_by uuid references auth.users (id) on delete set null,
@@ -1124,22 +1125,23 @@ begin
   if exists (
     select 1
     from public.factory_fabrics
-    where unit not in ('متر', 'طوب', 'ثوب')
+    where unit not in ('متر', 'توب', 'طوب', 'ثوب')
   ) then
     raise exception 'Fabric inventory contains legacy units other than meter or toob. Reconcile those stock records manually before rerunning the schema; quantities were not converted.';
   end if;
 end;
 $$;
 
+-- Normalize values saved by earlier UI/schema versions.
 update public.factory_fabrics
-set unit = 'طوب'
-where unit = 'ثوب';
+set unit = 'توب'
+where unit in ('طوب', 'ثوب');
 
 alter table public.factory_fabrics drop column if exists color_number;
 
 alter table public.factory_fabrics
   add constraint factory_fabrics_unit_check
-    check (unit in ('متر', 'طوب'));
+    check (unit in ('متر', 'توب'));
 
 alter table public.factory_fabrics
   drop constraint if exists factory_fabrics_stock_scope_check,
@@ -1413,7 +1415,7 @@ begin
      or length(coalesce(requested_color_name, '')) > 64
      or upper(coalesce(requested_color_hex, '')) !~ '^#[0-9A-F]{6}$'
      or requested_unit is null
-     or requested_unit not in ('متر', 'طوب') then
+     or requested_unit not in ('متر', 'توب') then
     raise exception 'Enter a valid fabric name, type, color, HEX value, and stock unit.';
   end if;
 
@@ -1583,7 +1585,8 @@ begin
      or upper(coalesce(requested_color_hex, '')) !~ '^#[0-9A-F]{6}$'
      or requested_quantity is null or requested_quantity <= 0
      or requested_quantity > 99999999999.999
-     or requested_unit is null or requested_unit not in ('متر', 'طوب') then
+     or requested_unit is null or requested_unit not in ('متر', 'توب')
+     or (requested_unit = 'توب' and requested_quantity <> trunc(requested_quantity)) then
     raise exception 'Enter valid incoming fabric details and a positive quantity.';
   end if;
   if requested_customer_id is not null and not exists (
@@ -1663,7 +1666,8 @@ begin
        or length(item_color_name) > 64
        or item_color_hex !~ '^#[0-9A-F]{6}$'
        or item_quantity is null or item_quantity <= 0 or item_quantity > 99999999999.999
-       or item_unit not in ('متر', 'طوب') then
+       or item_unit not in ('متر', 'توب')
+       or (item_unit = 'توب' and item_quantity <> trunc(item_quantity)) then
       raise exception 'Each incoming fabric line must include valid fabric, color, unit, and positive quantity details.';
     end if;
 
