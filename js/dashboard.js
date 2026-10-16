@@ -29,6 +29,13 @@ const SIZE_OPTIONS = {
   children: Array.from({ length: 16 }, (_, index) => String(index + 1))
 };
 const SIZE_TYPE_LABELS = { men: "رجالي", women: "حريمي", children: "أطفال" };
+const WORK_STAGES = [
+  ["cutting", "قص"],
+  ["sewing", "خياطة"],
+  ["finishing", "تشطيب"],
+  ["ironing", "مكوى"],
+  ["packaging", "أمبلاج وتكييس"]
+];
 const roleInfo = {
   admin: { title: "لوحة تحكم الإدارة", description: "نظرة شاملة على المصنع وإدارة بيانات التشغيل.", icon: "▦" },
   cutting: { title: "لوحة مشرف القص", description: "متابعة أوامر الإدارة وتسجيل بيانات الفرش والقص.", icon: "✂" },
@@ -135,6 +142,11 @@ async function saveFlexibleRecord(collection, payload, recordId = null, ownerId 
 
 async function readDashboardData(session) {
   const data = emptyDashboardData();
+  const fabricTransactionsPromise = ["admin", "cutting"].includes(session.role)
+    ? supabaseClient.from("factory_fabric_transactions")
+      .select("id, fabric_id, order_id, transaction_type, quantity, notes, actor_id, created_at")
+      .order("created_at", { ascending: false })
+    : Promise.resolve({ data: [], error: null });
   const fabricPromises = ["admin", "cutting"].includes(session.role)
     ? [
       (() => {
@@ -144,11 +156,7 @@ async function readDashboardData(session) {
         if (session.role === "cutting") query = query.eq("stock_scope", "incoming");
         return query;
       })(),
-      session.role === "admin"
-        ? supabaseClient.from("factory_fabric_transactions")
-          .select("id, fabric_id, order_id, transaction_type, quantity, notes, actor_id, created_at")
-          .order("created_at", { ascending: false })
-        : Promise.resolve({ data: [], error: null })
+      fabricTransactionsPromise
     ]
     : [Promise.resolve({ data: [], error: null }), Promise.resolve({ data: [], error: null })];
   const authEventsPromise = session.role === "admin"
@@ -164,9 +172,11 @@ async function readDashboardData(session) {
     : Promise.resolve({ data: [], error: null });
   const cashTransactionsPromise = session.role === "admin"
     ? supabaseClient.from("factory_cash_transactions")
-      .select("id, direction, category, description, amount, payment_method, occurred_at, created_by, created_at")
+      .select("id, customer_id, order_id, direction, category, description, amount, payment_method, occurred_at, created_by, created_at")
       .order("occurred_at", { ascending: false })
-    : Promise.resolve({ data: [], error: null });
+    : session.role === "client"
+      ? supabaseClient.rpc("read_factory_client_cash_transactions")
+      : Promise.resolve({ data: [], error: null });
   const [payments, leaves, tasks, settlements, deliveriesResult, cashTransactionsResult, personalAttendance, personalAdvances, personalPayroll, fabricsResult, fabricTransactionsResult, authEventsResult] = await Promise.all([
     readFlexibleRecords("payments"),
     readFlexibleRecords("leaves"),
@@ -184,6 +194,9 @@ async function readDashboardData(session) {
     throw new Error("سجل التسليمات غير موجود في قاعدة البيانات. شغّل supabase/schema.sql كاملًا في SQL Editor.");
   }
   if (deliveriesResult.error) throw deliveriesResult.error;
+  if (session.role === "client" && cashTransactionsResult.error?.code === "PGRST202") {
+    throw new Error("دالة قراءة مصروفات حساب العميل غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+  }
   if (cashTransactionsResult.error) throw cashTransactionsResult.error;
   if (["42P01", "PGRST205"].includes(fabricsResult.error?.code)
       || ["42P01", "PGRST205"].includes(fabricTransactionsResult.error?.code)) {
@@ -228,7 +241,7 @@ async function readDashboardData(session) {
   } else {
     let ordersQuery = supabaseClient
       .from("orders")
-      .select("id, model_name, model_number, sender_name, colors, color_size_distribution, production_type, sizes, total_pieces, model_image_url, priority, archived_at, status, created_at")
+      .select("id, model_name, model_number, sender_name, colors, color_size_distribution, production_type, work_stages, sizes, total_pieces, model_image_url, priority, archived_at, status, created_at")
       .is("archived_at", null)
       .order("created_at", { ascending: false });
     ({ data: orders, error: ordersError } = await ordersQuery);
@@ -295,7 +308,7 @@ async function readDashboardData(session) {
     const cuttingStage = orderStages.find((stage) => ["cutting", "قص", "تقطيع"].includes(stage.stage_name));
     const sewingStage = orderStages.find((stage) => ["sewing", "خياطة"].includes(stage.stage_name));
     const completedPieces = orderStages
-      .filter((stage) => ["cutting", "sewing", "finishing"].includes(stage.stage_name))
+      .filter((stage) => ["cutting", "sewing", "finishing", "ironing", "packaging"].includes(stage.stage_name))
       .reduce((maximum, stage) => Math.max(maximum, Number(stage.completed_quantity || 0)), 0);
     return {
       id: order.id,
@@ -316,6 +329,9 @@ async function readDashboardData(session) {
       colors: order.colors || "",
       colorSizeDistribution: order.color_size_distribution || { colors: [] },
       productionType: order.production_type || "full_cutting",
+      workStages: order.work_stages || ["cutting", "sewing", "finishing"],
+      pricingMode: order.pricing_mode || "total",
+      stagePrices: order.stage_prices || {},
       sizes: order.sizes || "",
       modelImageUrl: order.model_image_url || "",
       priority: order.priority || "عادي",
@@ -325,6 +341,7 @@ async function readDashboardData(session) {
       pricePerPiece: Number(order.price_per_piece || 0),
       totalAmount: Number(order.total_amount || 0),
       expectedAmount: Number(order.expected_total_amount ?? (Math.max(Number(order.total_pieces || 0) - Number(order.delivered_pieces || 0), 0) * Number(order.price_per_piece || 0))),
+      operationalExpenses: Number(order.operational_expenses || 0),
       paidAmount: Number(order.paid_amount || 0),
       remainingAmount: Number(order.remaining_amount || 0),
       expectedDeliveryDate: order.expected_delivery_date || "",
@@ -996,6 +1013,64 @@ function productionTypeLabel(value) {
   return value === "ready_sewing" ? "مقصوص جاهز - خياطة مباشرة / أمبلاج" : "شغل كامل بدءاً من القص";
 }
 
+function workStageLabels(stages) {
+  const selected = new Set(Array.isArray(stages) ? stages : []);
+  return WORK_STAGES.filter(([key]) => selected.has(key)).map(([, label]) => label);
+}
+
+function readStagePrices(form) {
+  try {
+    const value = JSON.parse(String(form.elements.stagePrices.value || "{}"));
+    return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  } catch {
+    return {};
+  }
+}
+
+function updateStagePricing(form, initialPrices = readStagePrices(form)) {
+  const selectedStages = [...form.querySelectorAll('[name="workStage"]:checked')].map((input) => input.value);
+  const mode = form.elements.pricingMode.value;
+  const field = form.querySelector("[data-stage-prices-field]");
+  const list = form.querySelector("[data-stage-prices-list]");
+  const priceInput = form.elements.pricePerPiece;
+  field.hidden = mode !== "stages";
+  priceInput.readOnly = mode === "stages";
+  if (mode !== "stages") {
+    list.querySelectorAll("input").forEach((input) => { input.disabled = true; });
+    form.elements.stagePrices.value = "{}";
+    return;
+  }
+  list.innerHTML = selectedStages.length
+    ? selectedStages.map((stage) => {
+      const label = WORK_STAGES.find(([key]) => key === stage)?.[1] || stage;
+      const rawValue = initialPrices[stage];
+      const hasValue = Object.hasOwn(initialPrices, stage) && rawValue !== "" && rawValue !== null;
+      const value = Number(rawValue);
+      return `<label class="stage-price-row"><span>${escapeHtml(label)}</span><input type="number" min="0" max="9999999999.99" step="0.01" data-stage-price="${escapeHtml(stage)}" value="${hasValue && Number.isFinite(value) ? value : ""}" required aria-label="سعر القطعة لقسم ${escapeHtml(label)}"></label>`;
+    }).join("")
+    : '<p class="muted">اختر قسماً واحداً على الأقل أولاً.</p>';
+  const prices = Object.fromEntries([...list.querySelectorAll("[data-stage-price]")]
+    .map((input) => [input.dataset.stagePrice, input.value.trim() ? Number(input.value) : ""]));
+  form.elements.stagePrices.value = JSON.stringify(prices);
+  priceInput.value = String(roundMoney(Object.values(prices).reduce((sum, price) => sum + Number(price || 0), 0)));
+}
+
+function syncStagePriceInputs(form) {
+  const inputs = [...form.querySelectorAll("[data-stage-price]")];
+  const prices = Object.fromEntries(inputs.map((input) => [
+    input.dataset.stagePrice,
+    input.value.trim() ? Number(input.value) : ""
+  ]));
+  form.elements.stagePrices.value = JSON.stringify(prices);
+  form.elements.pricePerPiece.value = String(roundMoney(Object.values(prices).reduce((sum, price) => sum + Number(price || 0), 0)));
+}
+
+function syncOrderCustomerSelection(form, customerId = form.elements.customerId.value, source = "customerSelection") {
+  form.elements.customerId.value = customerId || "";
+  form.elements.customerSelection.value = source === "customerSelection" ? customerId || "" : "";
+  form.elements.brandSelection.value = source === "brandSelection" ? customerId || "" : "";
+}
+
 function table(headers, rows) {
   if (!rows.length) return '<div class="empty-state">لا توجد بيانات لعرضها حاليًا.</div>';
   return `<div class="table-wrap"><table><thead><tr>${headers.map((heading) => `<th>${heading}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
@@ -1013,6 +1088,7 @@ function orderCanBeDeleted(item) {
   return !item.archivedAt
     && Number(item.deliveredPieces) === 0
     && Number(item.paidAmount) === 0
+    && Number(item.operationalExpenses) === 0
     && !dashboardData.deliveries.some((delivery) => delivery.order_id === item.id);
 }
 
@@ -1080,7 +1156,7 @@ function userRows(users, withActions = false) {
     const actions = item.roleKey === "admin"
       ? "حساب إدارة محمي"
       : `${withActions && item.roleKey === "client" ? `<button class="row-action" type="button" data-edit-client="${escapeHtml(item.id)}">تعديل البيانات</button> ` : ""}<button class="row-action" type="button" data-action="toggle-user-status" data-account-id="${escapeHtml(item.id)}" data-next-status="${suspended ? "active" : "suspended"}">${suspended ? "إعادة تفعيل" : "توقيف / تعطيل"}</button> <button class="row-action" type="button" data-action="delete-user" data-account-id="${escapeHtml(item.id)}">حذف الحساب</button>`;
-    return `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.username)}</td><td>${escapeHtml(item.phone || "—")}</td><td>${escapeHtml(item.role)}</td><td>${suspended ? "متوقف" : "نشط"}</td><td>${actions}</td></tr>`;
+    return `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.username)}</td><td>${escapeHtml(item.role)}</td><td>${suspended ? "متوقف" : "نشط"}</td><td>${actions}</td></tr>`;
   });
 }
 
@@ -1091,7 +1167,7 @@ function clientAccountSummary(client, data) {
   const latestSettlement = settlements[0] || null;
   const openingBalance = roundMoney(latestSettlement?.balance || 0);
   const orders = data.models.filter((order) => order.customerId === client.id && !order.archivedAt);
-  const deliveredTotal = sumMoney(orders.map((order) => Number(order.deliveredPieces) * Number(order.pricePerPiece)));
+  const deliveredTotal = sumMoney(orders.map((order) => Number(order.totalAmount)));
   const expectedTotal = sumMoney(orders.map((order) => order.expectedAmount));
   const orderPaid = sumMoney(orders.map((order) => order.paidAmount));
   const periodStart = client.account_period_started_at || latestSettlement?.date || null;
@@ -1100,7 +1176,13 @@ function clientAccountSummary(client, data) {
     && (!periodStart || new Date(payment._createdAt || payment.created_at).getTime() >= new Date(periodStart).getTime())
   );
   const paymentsTotal = sumMoney(payments.map((payment) => payment.amount));
-  const grossDue = addMoney(openingBalance, deliveredTotal);
+  const clientExpenses = data.cashTransactions.filter((entry) =>
+    entry.customer_id === client.id
+    && entry.direction === "expense"
+    && (!periodStart || new Date(entry.occurred_at).getTime() >= new Date(periodStart).getTime())
+  );
+  const clientExpensesTotal = sumMoney(clientExpenses.map((entry) => entry.amount));
+  const grossDue = addMoney(addMoney(openingBalance, deliveredTotal), clientExpensesTotal);
   const paid = addMoney(orderPaid, paymentsTotal);
   const due = subtractMoney(grossDue, paid);
   const balance = due;
@@ -1120,6 +1202,8 @@ function clientAccountSummary(client, data) {
     orderPaid,
     payments,
     paymentsTotal,
+    clientExpenses,
+    clientExpensesTotal,
     due,
     paid,
     remainingOpeningBalance,
@@ -1190,7 +1274,7 @@ function clientAccountsOverview(data) {
   const unpricedCount = summaries.reduce((count, summary) =>
     count + summary.orders.filter((order) => order.pricePerPiece <= 0).length, 0);
   return `<div class="clients-toolbar"><div><h2>حسابات العملاء</h2><p>متابعة الأرصدة والدفعات وقيمة البضاعة وحالات الموديلات لكل عميل.</p></div></div>
-    <div class="stats-grid">${stat("قيمة البضاعة المسلّمة", money(totalGoods), "الكمية المسلّمة × سعر القطعة")}${stat("الإجمالي المتوقع", money(totalExpected), "الكمية الفعلية × سعر القطعة")}${stat("إجمالي المدفوع", money(totalPaid), "دفعات العملاء والمدفوع على الطلب")}${stat("الرصيد الصافي", money(totalBalance), totalBalance < 0 ? "أرصدة دائنة للعملاء" : "المطلوب من العملاء")}${stat("موديلات بلا سعر", unpricedCount, "تحتاج إلى استكمال التسعير")}</div>
+    <div class="stats-grid">${stat("قيمة البضاعة المسلّمة", money(totalGoods), "تشمل مصاريف التشغيل المحملة")}${stat("الإجمالي المتوقع", money(totalExpected), "غير المسلم ومصاريف التشغيل")}${stat("إجمالي المدفوع", money(totalPaid), "دفعات العملاء والمدفوع على الطلب")}${stat("الرصيد الصافي", money(totalBalance), totalBalance < 0 ? "أرصدة دائنة للعملاء" : "المطلوب من العملاء")}${stat("موديلات بلا سعر", unpricedCount, "تحتاج إلى استكمال التسعير")}</div>
     ${clientAccountCards(data)}`;
 }
 
@@ -1213,6 +1297,13 @@ function cashLedgerView(data) {
       method: payment.method || "غير محدد",
       date: payment._createdAt || payment.created_at || payment.date
     })),
+    ...data.cashTransactions.filter((entry) => entry.customer_id === client.id && entry.direction === "expense").map((entry) => ({
+      type: "مصروف / عهدة على حساب العميل",
+      reference: entry.category || "مصروف تشغيل",
+      detail: entry.description || "—",
+      amount: Number(entry.amount),
+      date: entry.occurred_at
+    })),
     ...data.models.filter((order) => Number(order.paidAmount) > 0).map((order) => ({
       direction: "income",
       category: "دفعة مثبتة على الموديل",
@@ -1223,9 +1314,10 @@ function cashLedgerView(data) {
     })),
     ...data.cashTransactions.map((entry) => ({
       id: entry.id,
+      orderId: entry.order_id,
       direction: entry.direction,
       category: entry.category,
-      description: entry.description,
+      description: `${entry.customer_id ? `${data.clients.find((client) => client.id === entry.customer_id)?.name || "عميل"} · ` : ""}${entry.description}`,
       amount: Number(entry.amount),
       method: entry.payment_method,
       date: entry.occurred_at
@@ -1236,7 +1328,7 @@ function cashLedgerView(data) {
   return `<div class="stats-grid">${stat("المقبوضات", money(totalIncome), "دفعات العملاء والمدفوعات المسجلة على الطلبات وإيرادات أخرى")}${stat("المصروفات", money(expenses), "المسجل في سجل النقدية")}${stat("صافي الحركة النقدية", money(subtractMoney(totalIncome, expenses)), "المقبوضات − المصروفات")}</div>
     ${panel("تسجيل حركة نقدية", `<form id="cash-transaction-form" class="form-grid payment-form"><div class="field"><label for="cash-direction">نوع الحركة</label><select id="cash-direction" name="direction" required><option value="expense">مصروف / خروج نقدي</option><option value="income">إيراد آخر / دخول نقدي</option></select><small>دفعات العملاء تُسجل من نموذج الدفعات وتظهر تلقائياً ضمن المقبوضات.</small></div><div class="field"><label for="cash-category">البند</label><input id="cash-category" name="category" maxlength="120" placeholder="مثل: أجور، كهرباء، نقل، مبيعات أخرى" required></div><div class="field"><label for="cash-amount">المبلغ</label><input id="cash-amount" name="amount" type="number" min="0.01" step="0.01" required></div><div class="field"><label for="cash-method">طريقة الدفع</label><input id="cash-method" name="method" value="نقدي" maxlength="80"></div><div class="field wide"><label for="cash-description">التفاصيل / المرجع</label><input id="cash-description" name="description" maxlength="500"></div><div class="field"><label for="cash-date">تاريخ ووقت الحركة</label><input id="cash-date" name="occurredAt" type="datetime-local" value="${localDateTime}" required></div><div class="form-actions"><button class="button button-primary" type="submit">حفظ الحركة النقدية</button></div></form>`, "لا تسجل دفعة العميل مرة أخرى كإيراد يدوي حتى لا يتكرر احتسابها")}
     ${panel("سجل المقبوضات والمصروفات", entries.length
-      ? table(["النوع","البند","التفاصيل","المبلغ","طريقة الدفع","التاريخ والوقت","إجراء"], entries.map((entry) => `<tr><td>${entry.direction === "income" ? "مقبوض" : "مصروف"}</td><td>${escapeHtml(entry.category)}</td><td>${escapeHtml(entry.description || "—")}</td><td class="${entry.direction === "income" ? "financial-credit" : "financial-debit"}">${entry.direction === "income" ? "+" : "−"}${money(entry.amount)}</td><td>${escapeHtml(entry.method)}</td><td>${formatDateTime(entry.date)}</td><td>${entry.id ? `<button type="button" class="row-action order-delete-action" data-delete-cash-transaction="${escapeHtml(entry.id)}">حذف الحركة</button>` : "—"}</td></tr>`))
+      ? table(["النوع","البند","التفاصيل","المبلغ","طريقة الدفع","التاريخ والوقت","إجراء"], entries.map((entry) => `<tr><td>${entry.direction === "income" ? "مقبوض" : "مصروف"}</td><td>${escapeHtml(entry.category)}</td><td>${escapeHtml(entry.description || "—")}</td><td class="${entry.direction === "income" ? "financial-credit" : "financial-debit"}">${entry.direction === "income" ? "+" : "−"}${money(entry.amount)}</td><td>${escapeHtml(entry.method)}</td><td>${formatDateTime(entry.date)}</td><td>${entry.id ? entry.orderId ? '<span class="order-delete-protected">مرتبطة بمصاريف موديل</span>' : `<button type="button" class="row-action order-delete-action" data-delete-cash-transaction="${escapeHtml(entry.id)}">حذف الحركة</button>` : "—"}</td></tr>`))
       : '<div class="empty-state">لا توجد حركات نقدية مسجلة.</div>')}`;
 }
 
@@ -1302,7 +1394,7 @@ function clientDetailsView(client, data) {
       amount: -Number(payment.amount || 0),
       date: payment._createdAt || payment.created_at || payment.date
     })),
-    ...summary.orders.filter((order) => Number(order.paidAmount) > 0).map((order) => ({
+    ...data.models.filter((order) => order.customerId === client.id && Number(order.paidAmount) > 0).map((order) => ({
       type: "دفعة مثبتة على الموديل",
       reference: order.name || order.modelNumber || "—",
       detail: `الموديل ${order.modelNumber || ""}`,
@@ -1318,6 +1410,7 @@ function clientDetailsView(client, data) {
     }))
   ].sort((left, right) => new Date(right.date).getTime() - new Date(left.date).getTime());
   const orderCard = (order, archived = false) => `<article class="order-card client-history-card">
+    <label class="print-model-select"><input type="checkbox" data-print-model-select="${escapeHtml(order.id)}"><span>اختيار للطباعة</span></label>
     <header class="order-card-heading">${modelImageMarkup(order.modelImageUrl)}<div><p class="order-card-label">${archived ? "طلب مؤرشف" : "طلب حالي"}${order.modelNumber ? ` · رقم ${escapeHtml(order.modelNumber)}` : ""}</p><h3>${escapeHtml(order.name || "موديل بدون اسم")}</h3></div>${statusTag(order.displayStatus || order.status)}</header>
     <dl class="order-card-details">
       <div><dt>العدد الإجمالي بعد القص</dt><dd>${order.quantity ? `${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity)} قطعة` : "بانتظار الحصر"}</dd></div>
@@ -1325,40 +1418,50 @@ function clientDetailsView(client, data) {
       <div><dt>المتبقي</dt><dd>${order.quantity ? `${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.remainingPieces)} قطعة` : "بانتظار الحصر"}</dd></div>
       <div><dt>الألوان</dt><dd>${colorSummaryMarkup(order.colors, order.colorNames, order.colorPlyData)}</dd></div>
       <div><dt>المقاسات / العدد لكل مقاس</dt><dd>${escapeHtml(sizeSummary(order.sizes))}</dd></div>
-      ${order.pricePerPiece > 0 ? `<div><dt>سعر القطعة</dt><dd>${money(order.pricePerPiece)}</dd></div><div><dt>المتوقع للكمية غير المسلّمة</dt><dd>${money(order.expectedAmount)}</dd></div><div><dt>إجمالي قيمة المسلّم</dt><dd>${money(order.totalAmount)}</dd></div>` : '<div><dt>التسعير</dt><dd>لم يُسعّر بعد</dd></div>'}
+      ${order.pricePerPiece > 0 ? `<div><dt>سعر القطعة</dt><dd>${money(order.pricePerPiece)}</dd></div>` : '<div><dt>التسعير</dt><dd>لم يُسعّر بعد</dd></div>'}
+      <div><dt>مصاريف التشغيل الإضافية</dt><dd>${money(order.operationalExpenses)}</dd></div>
+      ${order.expectedAmount > 0 ? `<div><dt>المتوقع للكمية غير المسلّمة</dt><dd>${money(order.expectedAmount)}</dd></div>` : ""}
+      ${order.totalAmount > 0 ? `<div><dt>إجمالي المستحق بعد التسليم</dt><dd>${money(order.totalAmount)}</dd></div>` : ""}
       <div><dt>التسليم المتوقع</dt><dd>${formatDateOnly(order.expectedDeliveryDate)}</dd></div>
       <div><dt>تاريخ الإنشاء</dt><dd>${formatDateTime(order.created_at)}</dd></div>
       ${order.senderName ? `<div><dt>تم الإرسال بواسطة</dt><dd>${escapeHtml(order.senderName)}</dd></div>` : ""}
       ${archived ? `<div><dt>تاريخ الأرشفة</dt><dd>${formatDateTime(order.archivedAt)}</dd></div>` : ""}
     </dl>
-    ${!archived ? `<footer class="order-card-actions"><button class="row-action" type="button" data-edit-client-order="${escapeHtml(order.id)}">تعديل السعر أو بيانات الموديل</button>${orderCanBeDeleted(order) ? `<button class="row-action order-delete-action" type="button" data-action="delete-order" data-order-id="${escapeHtml(order.id)}">حذف الموديل</button>` : '<span class="order-delete-protected" title="لا يمكن حذف طلب له تسليمات أو مبالغ مسجلة">محمي بسجل مالي / تسليم</span>'}</footer>` : ""}
+    ${!archived ? `<footer class="order-card-actions"><button class="row-action" type="button" data-edit-client-order="${escapeHtml(order.id)}">تعديل السعر أو بيانات الموديل</button>${orderCanBeDeleted(order) ? `<button class="row-action order-delete-action" type="button" data-action="delete-order" data-order-id="${escapeHtml(order.id)}">حذف الموديل</button>` : '<span class="order-delete-protected" title="لا يمكن حذف طلب له تسليمات أو مصروفات تشغيل أو مبالغ مسجلة">محمي بسجل مالي / مصروفات / تسليم</span>'}</footer>` : ""}
   </article>`;
   const clientNotes = data.clientNotes.filter((note) => note.customerId === client.id);
-  return `<div class="clients-toolbar client-detail-toolbar"><div><h2>${escapeHtml(client.name)} · تفاصيل الحساب والعمولة</h2><p>${escapeHtml(client.brand_name || "لا يوجد اسم محل/براند")} · رقم العميل: ${escapeHtml(client.client_number || "—")} · واتساب: ${escapeHtml(client.whatsapp || "—")}</p></div><div class="client-detail-actions"><button class="button button-primary" type="button" data-quick-client-payment="${escapeHtml(client.id)}">＋ إضافة دفعة</button><button class="button button-secondary" type="button" data-print-account>طباعة / PDF</button><button class="row-action" type="button" data-return-clients>العودة للعملاء</button></div></div>
+  return `<div class="clients-toolbar client-detail-toolbar"><div><h2>${escapeHtml(client.name)} · تفاصيل الحساب والعمولة</h2><p>${escapeHtml(client.brand_name || "لا يوجد اسم محل/براند")} · رقم العميل: ${escapeHtml(client.client_number || "—")} · واتساب: ${escapeHtml(client.whatsapp || "—")}</p></div><div class="client-detail-actions"><button class="button button-primary" type="button" data-quick-client-payment="${escapeHtml(client.id)}">＋ إضافة دفعة</button><button class="button button-secondary" type="button" data-print-account>طباعة كشف الحساب</button><button class="button button-secondary" type="button" data-print-selected-models>طباعة الموديلات المحددة</button><button class="row-action" type="button" data-return-clients>العودة للعملاء</button></div></div>
     <div class="client-profile-compact"><span>الهاتف: ${escapeHtml(client.phone || "—")}</span><span>كاش: ${escapeHtml(client.cash_phone || "—")}</span><span>إنستا: ${escapeHtml(client.instagram || "—")}</span><span>تاريخ الملف: ${formatDateTime(client.created_at)}</span></div>
-    <div class="stats-grid client-finance-summary">${summary.latestSettlement ? stat("الرصيد السابق المرحّل", money(summary.remainingOpeningBalance)) : ""}${stat("المطلوب المتوقع غير المسلّم", money(summary.expectedTotal), "باقي الكمية × سعر القطعة")}${stat("المبلغ المستحق فعلياً", money(summary.requiredAfterDelivery), "الكمية المسلّمة × سعر القطعة")}${stat("إجمالي المطلوب بعد المدفوع", money(summary.due), "الرصيد المرحّل + المستحق فعلياً − المدفوع")}${stat("إجمالي المدفوع", money(summary.paid))}${stat("الرصيد الحالي", money(summary.balance), summary.balance === 0 ? "تم السداد بالكامل" : summary.balance < 0 ? "رصيد دائن للعميل" : "مستحق على العميل")}</div>
+    <div class="stats-grid client-finance-summary">${summary.latestSettlement ? stat("الرصيد السابق المرحّل", money(summary.remainingOpeningBalance)) : ""}${stat("المطلوب المتوقع غير المسلّم", money(summary.expectedTotal), "الكمية غير المسلّمة + مصاريف التشغيل")}${stat("المبلغ المستحق فعلياً", money(summary.requiredAfterDelivery), "قيمة المسلّم + مصاريف التشغيل")}${stat("مصروفات وعهد العميل", money(summary.clientExpensesTotal))}${stat("إجمالي المطلوب بعد المدفوع", money(summary.due), "الرصيد المرحّل + المستحق + المصروفات − المدفوع")}${stat("إجمالي المدفوع", money(summary.paid))}${stat("الرصيد الحالي", money(summary.balance), summary.balance === 0 ? "تم السداد بالكامل" : summary.balance < 0 ? "رصيد دائن للعميل" : "مستحق على العميل")}</div>
     <section class="client-detail-section"><header class="section-heading"><div><h2>الموديلات التي تم تسعيرها</h2><p>يُحتسب المطلوب المالي على الكمية التي تم تسليمها.</p></div><button class="button button-secondary" type="button" data-open-order-for-client="${escapeHtml(client.id)}">＋ إضافة موديل للعميل</button></header>${pricedOrders.length ? `<div class="order-cards">${pricedOrders.map((order) => orderCard(order)).join("")}</div>` : '<div class="empty-state">لا توجد موديلات مسعّرة في الفترة الحالية.</div>'}</section>
     <section class="client-detail-section"><header class="section-heading"><div><h2>موديلات لم تُسعّر بعد</h2><p>طلبات في القص أو الانتظار أو مراحل التشغيل الأخرى.</p></div></header>${unpricedOrders.length ? `<div class="order-cards">${unpricedOrders.map((order) => orderCard(order)).join("")}</div>` : '<div class="empty-state">لا توجد موديلات بانتظار التسعير.</div>'}</section>
     <section class="client-detail-section">${panel("الموديلات المسلّمة", deliveries.length ? table(["الموديل","الكمية","سعر القطعة","القيمة المستحقة","المستلم","التاريخ"], deliveries.map((delivery) => { const order = data.models.find((item) => item.id === delivery.order_id); return `<tr><td>${escapeHtml(order?.name || "طلب مؤرشف")}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(delivery.quantity)} قطعة</td><td>${money(delivery.price_per_piece)}</td><td>${money(delivery.amount)}</td><td>${escapeHtml(delivery.recipient_name || "—")}</td><td>${formatDateTime(delivery.delivered_at)}</td></tr>`; })) : '<div class="empty-state">لا توجد تسليمات مسجلة لهذا العميل.</div>')}</section>
     <section class="client-detail-section">${panel("سجل القماش الداخل للعميل", clientFabrics.length ? table(["القماش / اللون","المتاح","الحركة","الكمية","التاريخ"], clientFabricTransactions.map((transaction) => { const fabric = clientFabrics.find((item) => item.id === transaction.fabric_id); return `<tr><td>${escapeHtml(fabric?.name || "—")} · ${escapeHtml(fabric?.color_name || "لون غير مسمى")}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(fabric?.quantity_available || 0)} ${escapeHtml(fabric?.unit || "")}</td><td>${escapeHtml(transaction.transaction_type)}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(transaction.quantity)} ${escapeHtml(fabric?.unit || "")}</td><td>${formatDateTime(transaction.created_at)}</td></tr>`; })) : '<div class="empty-state">لا يوجد قماش مرتبط بهذا العميل.</div>')}</section>
-    <section class="client-detail-section">${panel("السجل المالي الكامل للدفعات والتسليمات", financialEntries.length ? table(["النوع","الموديل / المرجع","التفاصيل","الأثر المالي","التاريخ والوقت"], financialEntries.map((entry) => `<tr><td>${escapeHtml(entry.type)}</td><td>${escapeHtml(entry.reference)}</td><td>${escapeHtml(entry.detail)}</td><td class="${entry.amount < 0 ? "financial-credit" : "financial-debit"}">${money(entry.amount)}</td><td>${formatDateTime(entry.date)}</td></tr>`)) : '<div class="empty-state">لا توجد حركات مالية مسجلة لهذا العميل حتى الآن.</div>')}</section>
+    <section class="client-detail-section">${panel("الداخل والخارج للعميل", `<form class="form-grid client-cash-form" data-client-cash-form="${escapeHtml(client.id)}"><div class="field"><label for="client-cash-category-${escapeHtml(client.id)}">بند المصروف / العهدة</label><input id="client-cash-category-${escapeHtml(client.id)}" name="category" maxlength="120" placeholder="مثل: سلفة، خيط، نقل" required></div><div class="field"><label for="client-cash-amount-${escapeHtml(client.id)}">المبلغ على حساب العميل (ج.م)</label><input id="client-cash-amount-${escapeHtml(client.id)}" name="amount" type="number" min="0.01" step="0.01" required></div><div class="field"><label for="client-cash-method-${escapeHtml(client.id)}">طريقة الصرف</label><input id="client-cash-method-${escapeHtml(client.id)}" name="method" value="نقدي" maxlength="80"></div><div class="field"><label for="client-cash-date-${escapeHtml(client.id)}">تاريخ الحركة</label><input id="client-cash-date-${escapeHtml(client.id)}" name="occurredAt" type="datetime-local" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}" required></div><div class="field wide"><label for="client-cash-description-${escapeHtml(client.id)}">البيان / التفاصيل</label><input id="client-cash-description-${escapeHtml(client.id)}" name="description" maxlength="500" required></div><div class="form-actions"><button class="button button-primary" type="submit">تسجيل المصروف على الحساب</button></div></form>${financialEntries.length ? table(["النوع","الموديل / المرجع","التفاصيل","الأثر المالي","التاريخ والوقت"], financialEntries.map((entry) => `<tr><td>${escapeHtml(entry.type)}</td><td>${escapeHtml(entry.reference)}</td><td>${escapeHtml(entry.detail)}</td><td class="${entry.amount < 0 ? "financial-credit" : "financial-debit"}">${money(entry.amount)}</td><td>${formatDateTime(entry.date)}</td></tr>`)) : '<div class="empty-state">لا توجد حركات مالية مسجلة لهذا العميل حتى الآن.</div>'}`)}</section>
     <section class="client-detail-section">${panel("ملاحظات وتنبيهات خاصة بالعميل", `${clientNotes.length ? `<div class="client-note-list">${clientNotes.map((note) => `<article><p>${escapeHtml(note.note || "")}</p><time>${formatDateTime(note._createdAt || note.created_at)}</time></article>`).join("")}</div>` : '<div class="empty-state">لا توجد ملاحظات مسجلة.</div>'}<form class="client-note-form" data-client-note="${escapeHtml(client.id)}"><label for="client-note-${escapeHtml(client.id)}">إضافة ملاحظة أو تنبيه</label><textarea id="client-note-${escapeHtml(client.id)}" name="note" rows="3" required></textarea><button class="button button-secondary" type="submit">حفظ الملاحظة</button></form>`)}</section>
     <section class="client-detail-section"><header class="section-heading"><div><h2>الفترات المالية السابقة</h2><p>الأوامر والتسليمات محفوظة في الأرشيف ولا تُحذف عند التصفية.</p></div><button class="button button-primary" type="button" data-settle-client="${escapeHtml(client.id)}">تصفية الحساب وترحيل الرصيد</button></header>
-      ${summary.settlements.length ? `<div class="settlement-history">${summary.settlements.map((entry) => `<article class="settlement-card"><div><strong>رصيد سابق مرحّل</strong><small>${formatDateTime(entry.date || entry._createdAt)}</small></div><div><span>رصيد افتتاحي</span><strong>${money(entry.openingBalance)}</strong></div><div><span>قيمة التسليمات</span><strong>${money(entry.deliveredTotal)}</strong></div><div><span>المدفوع</span><strong>${money(Number(entry.orderPaidTotal || 0) + Number(entry.paymentsTotal || 0))}</strong></div><div><span>رصيد الفترة الختامي</span><strong>${money(entry.balance)}</strong></div></article>`).join("")}</div>` : '<div class="empty-state">لم تتم تصفية حساب العميل سابقًا.</div>'}
+      ${summary.settlements.length ? `<div class="settlement-history">${summary.settlements.map((entry) => `<article class="settlement-card"><div><strong>رصيد سابق مرحّل</strong><small>${formatDateTime(entry.date || entry._createdAt)}</small></div><div><span>رصيد افتتاحي</span><strong>${money(entry.openingBalance)}</strong></div><div><span>قيمة التسليمات</span><strong>${money(entry.deliveredTotal)}</strong></div><div><span>مصروفات وعهد</span><strong>${money(entry.clientExpensesTotal || 0)}</strong></div><div><span>المدفوع</span><strong>${money(Number(entry.orderPaidTotal || 0) + Number(entry.paymentsTotal || 0))}</strong></div><div><span>رصيد الفترة الختامي</span><strong>${money(entry.balance)}</strong></div></article>`).join("")}</div>` : '<div class="empty-state">لم تتم تصفية حساب العميل سابقًا.</div>'}
       ${archivedOrders.length ? `<h3 class="history-subheading">الموديلات والطلبات المؤرشفة</h3><div class="order-cards">${archivedOrders.map((order) => orderCard(order, true)).join("")}</div>` : ""}
     </section>`;
 }
 
 function pendingAccountRows(accounts) {
   const pending = accounts.filter((account) => account.status === "pending");
-  return pending.map((account) => `<tr><td>${escapeHtml(account.name)}</td><td>${escapeHtml(account.username)}</td><td>${escapeHtml(account.phone || "—")}</td><td>${formatDateTime(account.created_at)}</td><td><select aria-label="الدور الجديد" data-pending-role="${escapeHtml(account.id)}"><option value="">اختر الدور</option><option value="client">عميل</option><option value="worker">عامل</option><option value="cutting">مشرف قص</option><option value="sewing">مشرف خياطة</option></select></td><td><button class="row-action" type="button" data-action="activate-account" data-account-id="${escapeHtml(account.id)}">تفعيل الحساب</button></td></tr>`);
+  return pending.map((account) => `<tr><td>${escapeHtml(account.name)}</td><td>${escapeHtml(account.username)}</td><td>${formatDateTime(account.created_at)}</td><td><select aria-label="الدور الجديد" data-pending-role="${escapeHtml(account.id)}"><option value="">اختر الدور</option><option value="client">عميل</option><option value="worker">عامل</option><option value="cutting">مشرف قص</option><option value="sewing">مشرف خياطة</option></select></td><td><button class="row-action" type="button" data-action="activate-account" data-account-id="${escapeHtml(account.id)}">تفعيل الحساب</button></td></tr>`);
 }
 
-function modelDetailsModalView(order) {
+function modelDetailsModalView(order, showPricingBreakdown = false) {
+  const pricingDetails = showPricingBreakdown && order.pricingMode === "stages"
+    ? Object.entries(order.stagePrices || {}).map(([stage, price]) => {
+      const label = WORK_STAGES.find(([key]) => key === stage)?.[1] || stage;
+      return `<div><span>سعر قسم ${escapeHtml(label)}</span><strong>${money(price)}</strong></div>`;
+    }).join("")
+    : "";
   return `<header class="modal-view-heading">${modelImageMarkup(order.modelImageUrl)}<div><small>تفاصيل الطلبية / الفرشة</small><h2 id="model-details-title">${escapeHtml(order.name || "موديل بدون اسم")}</h2><p>رقم الموديل: ${escapeHtml(order.modelNumber || "—")} · العميل: ${escapeHtml(order.client || "—")}</p></div>${statusTag(order.displayStatus || order.status)}</header>
     <div class="compact-detail-grid">
       <div><span>العدد</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity)} قطعة</strong></div>
       <div><span>سعر القطعة</span><strong>${money(order.pricePerPiece)}</strong></div>
+      <div><span>مصاريف تشغيل إضافية</span><strong>${money(order.operationalExpenses)}</strong></div>
       <div><span>المتوقع / غير المسلم</span><strong>${money(order.expectedAmount)} <small>لم يتم التسليم بعد</small></strong></div>
       <div><span>المبلغ المستحق فعلياً</span><strong>${money(order.totalAmount)}</strong></div>
       <div><span>المدفوع</span><strong>${money(order.paidAmount)}</strong></div>
@@ -1367,6 +1470,9 @@ function modelDetailsModalView(order) {
       <div><span>المقاسات</span><strong>${escapeHtml(sizeSummary(order.sizes))}</strong></div>
       <div><span>القماش / الفرشة</span><strong>${escapeHtml(order.fabric || "—")} · ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.boltCount)} توب · ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.layerCount)} رئات</strong></div>
       <div><span>طبيعة شغل الموديل</span><strong>${escapeHtml(productionTypeLabel(order.productionType))}</strong></div>
+      <div><span>أقسام الشغل</span><strong>${escapeHtml(workStageLabels(order.workStages).join(" · ") || "—")}</strong></div>
+      <div><span>طريقة التسعير</span><strong>${order.pricingMode === "stages" ? "سعر مستقل لكل قسم" : "سعر إجمالي للقطعة"}</strong></div>
+      ${pricingDetails}
       <div><span>ملاحظات القص</span><strong>${escapeHtml(order.cuttingNotes || "—")}</strong></div>
       <div><span>تم الإرسال بواسطة</span><strong>${escapeHtml(order.senderName || "—")}</strong></div>
       <div><span>التسليم المتوقع</span><strong>${formatDateOnly(order.expectedDeliveryDate)}</strong></div>
@@ -1382,11 +1488,75 @@ function clientQuickDetailsModalView(client, data) {
       <div><span>المتوقع / لم يتم التسليم بعد</span><strong>${money(summary.expectedTotal)}</strong></div>
       <div><span>المستحق فعلياً بعد التسليم</span><strong>${money(summary.requiredAfterDelivery)}</strong></div>
       <div><span>المدفوع</span><strong>${money(summary.paid)}</strong></div>
-      <div><span>الهاتف / واتساب</span><strong>${escapeHtml(client.phone || client.whatsapp || "—")}</strong></div>
     </div>
     <h3 class="modal-subheading">شغال حالياً</h3>
     ${orders.length ? `<div class="compact-model-list">${orders.map((order) => `<button type="button" class="compact-model-item" data-open-model-id="${escapeHtml(order.id)}"><strong>${escapeHtml(order.name || order.modelNumber || "موديل بدون اسم")}</strong><span>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity)} قطعة · ${money(order.pricePerPiece)}</span>${statusTag(order.displayStatus || order.status)}</button>`).join("")}</div>` : '<p class="empty-state">لا توجد موديلات حالية.</p>'}
     <div class="form-actions"><button class="button button-primary" type="button" data-quick-client-payment="${escapeHtml(client.id)}">إضافة دفعة</button><button class="button button-secondary" type="button" data-edit-customer="${escapeHtml(client.id)}">تعديل ملف العميل</button></div>`;
+}
+
+function printDocument(title, bodyMarkup) {
+  let printRoot = document.querySelector("#factory-print-document");
+  if (!printRoot) {
+    printRoot = document.createElement("main");
+    printRoot.id = "factory-print-document";
+    printRoot.hidden = true;
+    document.body.append(printRoot);
+  }
+  printRoot.innerHTML = `<header class="print-heading"><strong>AL-MOTAMAYEZ</strong><h1>${escapeHtml(title)}</h1><p>تاريخ الطباعة: ${formatDateTime(new Date())}</p></header>${bodyMarkup}`;
+  printRoot.hidden = false;
+  document.body.classList.add("printing-document");
+  window.addEventListener("afterprint", () => {
+    printRoot.hidden = true;
+    document.body.classList.remove("printing-document");
+  }, { once: true });
+  window.print();
+}
+
+function modelPrintMarkup(order, clientName) {
+  const orderTotal = addMoney(order.totalAmount, order.expectedAmount);
+  return `<section class="print-section"><h2>بيانات الموديل</h2><table><thead><tr><th>اسم الموديل</th><th>رقم الموديل</th><th>العميل</th><th>العدد</th><th>سعر القطعة</th><th>مصاريف التشغيل</th><th>الإجمالي</th></tr></thead><tbody><tr><td>${escapeHtml(order.name || "—")}</td><td>${escapeHtml(order.modelNumber || "—")}</td><td>${escapeHtml(clientName || order.client || "—")}</td><td>${new Intl.NumberFormat("en-US").format(order.quantity || 0)}</td><td>${money(order.pricePerPiece)}</td><td>${money(order.operationalExpenses)}</td><td>${money(orderTotal)}</td></tr></tbody></table></section>`;
+}
+
+function printClientAccount(client, data) {
+  const summary = clientAccountSummary(client, data);
+  const orders = data.models.filter((order) => order.customerId === client.id);
+  const movements = [
+    ...data.deliveries.filter((entry) => entry.customer_id === client.id).map((entry) => ({
+      type: "تسليم بضاعة",
+      description: `${entry.quantity} قطعة · ${entry.recipient_name || ""}`,
+      amount: Number(entry.amount),
+      date: entry.delivered_at
+    })),
+    ...data.payments.filter((entry) => entry.customerId === client.id).map((entry) => ({
+      type: "دفعة عميل",
+      description: `${entry.method || ""} · ${entry.reference || entry.notes || ""}`,
+      amount: -Number(entry.amount),
+      date: entry._createdAt || entry.created_at || entry.date
+    })),
+    ...data.cashTransactions.filter((entry) => entry.customer_id === client.id).map((entry) => ({
+      type: entry.direction === "expense" ? "مصروف / عهدة على حساب العميل" : "إيراد",
+      description: `${entry.category} · ${entry.description || ""}`,
+      amount: entry.direction === "expense" ? Number(entry.amount) : -Number(entry.amount),
+      date: entry.occurred_at
+    })),
+    ...summary.settlements.map((entry) => ({
+      type: "تصفية وترحيل رصيد",
+      description: `الرصيد الختامي للفترة: ${money(entry.balance)}`,
+      amount: Number(entry.balance),
+      date: entry.date || entry._createdAt
+    }))
+  ].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+  const modelRows = orders.map((order) => {
+    const total = addMoney(order.totalAmount, order.expectedAmount);
+    return `<tr><td>${escapeHtml(order.name || "—")}</td><td>${escapeHtml(order.modelNumber || "—")}</td><td>${new Intl.NumberFormat("en-US").format(order.quantity || 0)}</td><td>${money(order.pricePerPiece)}</td><td>${money(order.operationalExpenses)}</td><td>${money(total)}</td><td>${escapeHtml(order.status || "—")}</td></tr>`;
+  }).join("");
+  const movementRows = movements.map((entry) =>
+    `<tr><td>${escapeHtml(entry.type)}</td><td>${escapeHtml(entry.description || "—")}</td><td>${money(entry.amount)}</td><td>${formatDateTime(entry.date)}</td></tr>`
+  ).join("");
+  const body = `<section class="print-section"><h2>كشف الحساب · ${escapeHtml(client.name)}</h2><p>البراند: ${escapeHtml(client.brand_name || "—")} · رقم العميل: ${escapeHtml(client.client_number || "—")}</p><div class="print-summary"><div><span>الرصيد السابق المرحّل</span><strong>${money(summary.openingBalance)}</strong></div><div><span>المستحق بعد التسليم</span><strong>${money(summary.deliveredTotal)}</strong></div><div><span>المتوقع غير المسلّم</span><strong>${money(summary.expectedTotal)}</strong></div><div><span>المصروفات والعهد الحالية</span><strong>${money(summary.clientExpensesTotal)}</strong></div><div><span>إجمالي المدفوع</span><strong>${money(summary.paid)}</strong></div><div><span>الرصيد الحالي</span><strong>${money(summary.balance)}</strong></div></div></section>
+    <section class="print-section"><h2>الموديلات والطلبيات</h2><table><thead><tr><th>الموديل</th><th>الرقم</th><th>العدد</th><th>سعر القطعة</th><th>مصاريف التشغيل</th><th>الإجمالي</th><th>الحالة</th></tr></thead><tbody>${modelRows || '<tr><td colspan="7">لا توجد موديلات مسجلة.</td></tr>'}</tbody></table></section>
+    <section class="print-section"><h2>حركة الحساب</h2><table><thead><tr><th>نوع الحركة</th><th>البيان</th><th>الأثر المالي</th><th>التاريخ</th></tr></thead><tbody>${movementRows || '<tr><td colspan="4">لا توجد حركات مسجلة.</td></tr>'}</tbody></table></section>`;
+  printDocument("كشف حساب العميل", body);
 }
 
 function fabricSelectOptions(fabrics, selectedId = "", clients = [], allowExternal = false) {
@@ -1416,10 +1586,12 @@ function syncIncomingFabricQuantity(row) {
   quantity.placeholder = wholeTobs ? "عدد التوب" : "الكمية بالمتر";
 }
 
-function incomingFabricGroupMarkup() {
+function incomingFabricGroupMarkup(fabrics = [], addNew = false) {
+  const types = [...new Set(fabrics.map((fabric) => fabric.name).filter(Boolean))];
   return `<fieldset class="incoming-fabric-group" data-incoming-fabric-group>
     <legend>نوع القماش</legend>
-    <label class="field"><span>اسم / نوع القماش</span><input name="name" maxlength="120" required></label>
+    <label class="field"><span>اسم القماش</span><select name="fabricType" data-incoming-fabric-type required><option value="">اختر نوع القماش</option>${types.map((name) => `<option value="${escapeHtml(name)}"${addNew ? "" : ""}>${escapeHtml(name)}</option>`).join("")}<option value="__new__"${addNew ? " selected" : ""}>＋ إضافة نوع جديد</option></select></label>
+    <label class="field incoming-new-type-field"${addNew ? "" : " hidden"}><span>اسم النوع الجديد</span><input name="name" maxlength="120"${addNew ? " required" : " disabled"}></label>
     <div class="incoming-fabric-color-list" data-incoming-fabric-color-list>${incomingFabricColorRowMarkup()}</div>
     <button type="button" class="row-action" data-add-incoming-color>＋ إضافة لون آخر</button>
     <button type="button" class="row-action order-delete-action" data-remove-incoming-type hidden>حذف نوع القماش</button>
@@ -1465,19 +1637,25 @@ function fabricStockView(data, isAdmin) {
     };
     const isOutflow = ["withdrawal", "adjustment_out"].includes(transaction.transaction_type);
     const amount = `${isOutflow ? "−" : "+"}${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(transaction.quantity)} ${escapeHtml(fabric?.unit || "")}`;
-    const movementAction = transaction.order_id
-      ? '<span class="order-delete-protected">مرتبطة بأمر قص</span>'
+    const movementAction = transaction.order_id || !isAdmin
+      ? `<span class="order-delete-protected">${transaction.order_id ? "مرتبطة بأمر قص" : "حركة مسجلة"}</span>`
       : `<button class="row-action order-delete-action" type="button" data-delete-fabric-transaction="${escapeHtml(transaction.id)}">حذف الحركة</button>`;
     return `<tr><td>${escapeHtml(fabric?.name || "خامة محذوفة")}</td><td>${escapeHtml(labels[transaction.transaction_type] || transaction.transaction_type)}</td><td>${amount}</td><td>${escapeHtml(order?.name || (transaction.order_id ? transaction.order_id.slice(0, 8) : "—"))}</td><td>${escapeHtml(transaction.notes || "—")}</td><td>${formatDateTime(transaction.created_at)}</td><td>${movementAction}</td></tr>`;
   });
-  const incomingForm = `<form class="form-grid fabric-form incoming-fabric-form" id="incoming-fabric-form"><div class="field"><label for="incoming-fabric-client">اسم العميل</label><select id="incoming-fabric-client" name="customerId"><option value="">عميل غير معروف / غير محدد حالياً</option>${data.clients.map((client) => `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)}</option>`).join("")}</select></div><div class="field"><label for="incoming-fabric-date">تاريخ ووقت الاستلام</label><input id="incoming-fabric-date" name="receivedAt" type="datetime-local" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}" required></div><div class="field wide"><label for="incoming-fabric-notes">ملاحظات الحركة</label><input id="incoming-fabric-notes" name="notes" maxlength="500"></div><div class="wide incoming-fabric-groups" data-incoming-fabric-groups>${incomingFabricGroupMarkup()}</div><div class="form-actions"><button class="button button-secondary" type="button" data-add-incoming-type>＋ إضافة نوع قماش جديد</button><button class="button button-primary" type="submit">＋ تسجيل القماش الداخل</button></div></form>`;
+  const incomingForm = `<form class="form-grid fabric-form incoming-fabric-form" id="incoming-fabric-form"><div class="field"><label for="incoming-fabric-client">اسم العميل</label><select id="incoming-fabric-client" name="customerId"><option value="">عميل غير معروف / غير محدد حالياً</option>${data.clients.map((client) => `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)}</option>`).join("")}</select></div><div class="field"><label for="incoming-fabric-date">تاريخ ووقت الاستلام</label><input id="incoming-fabric-date" name="receivedAt" type="datetime-local" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}" required></div><div class="field wide"><label for="incoming-fabric-notes">ملاحظات الحركة</label><input id="incoming-fabric-notes" name="notes" maxlength="500"></div><div class="wide incoming-fabric-groups" data-incoming-fabric-groups>${incomingFabricGroupMarkup(data.fabrics)}</div><div class="form-actions"><button class="button button-secondary" type="button" data-add-incoming-type>＋ إضافة نوع قماش جديد</button><button class="button button-primary" type="submit">＋ تسجيل القماش الداخل</button></div></form>`;
+  const outgoingOptions = data.fabrics.filter((fabric) => Number(fabric.quantity_available) > 0)
+    .map((fabric) => `<option value="${escapeHtml(fabric.id)}" data-unit="${escapeHtml(fabric.unit)}" data-available="${escapeHtml(fabric.quantity_available)}">${escapeHtml(fabric.name)} · ${escapeHtml(fabric.color_name || "دون اسم")} · متاح ${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(fabric.quantity_available)} ${escapeHtml(fabric.unit)}</option>`).join("");
+  const outgoingForm = `<form class="form-grid fabric-form" id="fabric-withdrawal-form"><div class="field"><label for="fabric-withdrawal-item">صنف القماش</label><select id="fabric-withdrawal-item" name="fabricId" data-outgoing-fabric-select required><option value="">اختر من المخزون</option>${outgoingOptions}</select></div><div class="field"><label for="fabric-withdrawal-quantity">الكمية المنصرفة <span data-outgoing-unit></span></label><input id="fabric-withdrawal-quantity" name="quantity" type="number" min="0.001" step="0.001" required></div><div class="field"><label for="fabric-withdrawal-date">التاريخ والوقت</label><input id="fabric-withdrawal-date" name="occurredAt" type="datetime-local" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}" required></div><div class="field wide"><label for="fabric-withdrawal-notes">بيان الصرف / الاستخدام</label><input id="fabric-withdrawal-notes" name="notes" maxlength="500" required></div><div class="form-actions"><button class="button button-primary" type="submit">تسجيل القماش الخارج</button></div></form>`;
   const incomingSection = `<section id="incoming-fabric" class="dashboard-section">
     <div class="stats-grid">${stat("سجلات القماش الداخل", incomingFabrics.length, "مرتبطة بعميل أو بانتظار التحديد")}${stat("المتاح حالياً للقص", new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(incomingFabrics.reduce((sum, fabric) => sum + Number(fabric.quantity_available), 0)), "بعد خصم القماش المستخدم")}${isAdmin ? stat("حركات القماش", totalTransactions, "استلام وسحب") : ""}</div>
     ${panel("القماش الداخل", incomingForm, "اكتب نوع القماش مرة واحدة، ثم أضف لوناً وكمية ووحدة لكل لون. يمكن تسجيل عدة أنواع في الشحنة نفسها.")}
-    ${panel("القماش الداخل", table(["اسم القماش","اللون","العميل","الكمية المتاحة","تاريخ الاستلام","إجراء"], incomingRows))}
-    ${isAdmin ? panel("سجل حركات القماش الداخل", table(["القماش","نوع الحركة","الكمية","رقم الطلب","ملاحظات","التاريخ والوقت","إجراء"], transactionRows.filter((transaction) => incomingFabrics.some((fabric) => fabric.id === transaction.fabric_id)))) : ""}
+    ${panel("مخزون القماش الحالي للقص", table(["اسم القماش","اللون","العميل","المتاح","تاريخ الاستلام","إجراء"], incomingRows))}
   </section>`;
-  if (!isAdmin) return incomingSection;
+  const outgoingSection = `<section id="outgoing-fabric" class="dashboard-section">
+    ${panel("القماش الخارج", outgoingForm, "يسجل الصرف اليدوي؛ سحب القماش المرتبط بالقص يُسجل تلقائياً ضمن حركات المخزون.")}
+    ${panel("سجل القماش الخارج", table(["القماش","الحركة","الكمية","رقم الطلب","بيان الصرف","التاريخ والوقت","إجراء"], transactionRows.filter((transaction) => ["withdrawal", "adjustment_out"].includes(transaction.transaction_type))))}
+  </section>`;
+  if (!isAdmin) return `${incomingSection}${outgoingSection}`;
   const ownerSection = `<section id="owner-fabric" class="dashboard-section">
     <div class="stats-grid">${stat("أصناف قماش الإدارة", ownerFabrics.length, "إدارة خاصة بالأدمن")}${stat("حركات المخزون", totalTransactions, "وارد وسحب")}</div>
     <div class="fabric-admin-tools">
@@ -1485,10 +1663,10 @@ function fabricStockView(data, isAdmin) {
       ${panel("القماش الداخل", `<form class="form-grid fabric-form" id="fabric-receipt-form"><div class="field"><label for="fabric-receipt-date">تاريخ الإدخال</label><input id="fabric-receipt-date" name="receivedAt" type="datetime-local" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}" required></div><div class="field"><label for="fabric-receipt-notes">ملاحظات / مرجع</label><input id="fabric-receipt-notes" name="notes" maxlength="500"></div><div class="wide fabric-entry-list" data-fabric-entry-list>${ownerFabricReceiptLineMarkup(ownerFabrics)}</div><div class="form-actions"><button class="button button-secondary" type="button" data-add-fabric-row>＋ إضافة صنف</button><button class="button button-primary" type="submit">＋ تسجيل الكميات الداخلة</button></div></form>`, "هذا رصيد الإدارة فقط، ولا يظهر في سجل القماش الداخل الخاص بمشرف القص")}
       ${panel("تعديل المخزون", `<form class="form-grid fabric-form" id="fabric-adjustment-form"><div class="field"><label for="fabric-adjustment-item">صنف قماش الإدارة</label><select id="fabric-adjustment-item" name="fabricId" required>${fabricSelectOptions(ownerFabrics)}</select></div><div class="field"><label for="fabric-adjustment-quantity">فرق الكمية (+ زيادة / − نقص)</label><input id="fabric-adjustment-quantity" name="adjustment" type="number" step="0.001" required></div><div class="field"><label for="fabric-adjustment-date">تاريخ التعديل</label><input id="fabric-adjustment-date" name="adjustedAt" type="datetime-local" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}" required></div><div class="field"><label for="fabric-adjustment-notes">سبب التعديل</label><input id="fabric-adjustment-notes" name="notes" maxlength="500" required></div><div class="form-actions"><button class="button button-secondary" type="submit">حفظ التعديل</button></div></form>`, "يُسجل الفرق كحركة تدقيقية ولا يمكن أن يخفض الرصيد إلى أقل من صفر")}
     </div>
-    ${panel("مخزون قماش الإدارة", table(["اسم القماش","النوع","اللون ورقمه","المتاح","آخر تحديث","إجراء"], fabricRows(ownerFabrics, true)))}
-    ${panel("حركات مخزون الإدارة", table(["القماش","نوع الحركة","الكمية","رقم الطلب","ملاحظات","التاريخ والوقت"], transactionRows.filter((transaction) => ownerFabrics.some((fabric) => fabric.id === transaction.fabric_id))))}
+    ${panel("مخزون القماش الحالي للإدارة", table(["اسم القماش","اللون","المتاح","آخر تحديث","إجراء"], fabricRows(ownerFabrics, true)))}
+    ${panel("سجل حركات مخزون الإدارة", table(["القماش","نوع الحركة","الكمية","رقم الطلب","ملاحظات","التاريخ والوقت"], transactionRows.filter((transaction) => ownerFabrics.some((fabric) => fabric.id === transaction.fabric_id))))}
   </section>`;
-  return `${ownerSection}${incomingSection}`;
+  return `${ownerSection}${incomingSection}${outgoingSection}`;
 }
 
 function adminView(data, accounts) {
@@ -1498,8 +1676,11 @@ function adminView(data, accounts) {
   const clientOptions = data.clients.map((client) =>
     `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)}${client.brand_name ? ` · ${escapeHtml(client.brand_name)}` : ""}</option>`
   ).join("");
+  const brandOptions = data.clients.filter((client) => client.brand_name)
+    .map((client) => `<option value="${escapeHtml(client.id)}">${escapeHtml(client.brand_name)} · ${escapeHtml(client.name)}</option>`)
+    .join("");
   const paymentClientOptions = data.clients
-    .map((client) => `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)}${client.phone ? ` (${escapeHtml(client.phone)})` : ""}</option>`)
+    .map((client) => `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)}</option>`)
     .join("");
   const paymentFilterOptions = data.clients
     .map((client) => `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)}</option>`)
@@ -1512,13 +1693,16 @@ function adminView(data, accounts) {
       ${panel("إدارة الموديلات والطلبيات", orderCards(activeOrders, true))}
       <div class="modal-backdrop" id="order-modal" hidden><section class="modal-card order-modal-card" role="dialog" aria-modal="true" aria-labelledby="order-modal-title"><button class="modal-close" type="button" data-close-order aria-label="إغلاق">×</button><h2 id="order-modal-title">إضافة موديل / طلبية</h2><p>يمكن ترك العدد فارغًا حتى انتهاء الفرش والقص، ثم إدخال العدد الفعلي عند تعديل الطلب.</p>      <form id="model-form" class="order-form modal-form"><input type="hidden" name="editIndex" value=""><input type="hidden" name="savedOrderId" value=""><input type="hidden" name="deliveredPieces" value="0">
         <section class="form-section"><h3>المعلومات الأساسية <span>إجباري</span></h3><div class="form-section-grid">
-          <div class="field model-customer-field"><label for="model-client">اسم العميل / البراند</label><select id="model-client" name="customerId" required><option value="">اختر العميل أو البراند</option>${clientOptions}</select></div>
+          <input type="hidden" name="customerId">
+          <div class="field model-customer-field"><label for="model-client">اختيار اسم العميل</label><select id="model-client" name="customerSelection"><option value="">اختر اسم العميل</option>${clientOptions}</select><small>اختر العميل أو البراند؛ اختيار أحدهما يلغي الآخر.</small></div>
+          <div class="field model-brand-field"><label for="model-brand">اختيار اسم البراند</label><select id="model-brand" name="brandSelection"><option value="">اختر اسم البراند</option>${brandOptions}</select></div>
           <div class="field model-name-field"><label for="model-name">اسم الموديل</label><input id="model-name" name="name"></div>
           <div class="field model-number-field"><label for="model-number">رقم الموديل</label><input id="model-number" name="modelNumber"></div>
           <div class="field model-quantity-field"><label for="model-quantity">العدد الكلي</label><input id="model-quantity" name="quantity" type="number" min="0" step="1" placeholder="أدخل العدد أو اتركه حتى انتهاء القص"><small>يمكن إدخال العدد الآن أو تأجيله؛ عند اختيار الألوان والمقاسات يوزع النظام العدد تلقائياً.</small></div>
         </div></section>
         <section class="form-section"><h3>التفاصيل التشغيلية <span>اختياري</span></h3><div class="form-section-grid">
           <div class="field"><label for="model-production-type">طبيعة شغل الموديل</label><select id="model-production-type" name="productionType" required><option value="full_cutting">شغل كامل بدءاً من القص</option><option value="ready_sewing">شغل مقصوص جاهز - خياطة مباشرة / أمبلاج</option></select></div>
+          <fieldset class="field work-stage-picker"><legend>الأقسام المطلوبة</legend><div class="work-stage-options">${WORK_STAGES.map(([key, label]) => `<label><input type="checkbox" name="workStage" value="${key}" ${["cutting", "sewing", "finishing"].includes(key) ? "checked" : ""}><span>${label}</span></label>`).join("")}</div></fieldset>
           ${colorPickerMarkup("", "model-colors")}
           ${sizePickerMarkup("", "model-sizes")}
           <div class="model-allocation field"><label>توزيع العدد على الألوان والمقاسات</label><div data-model-allocation-grid><p class="muted">أدخل العدد الكلي واختر الألوان والمقاسات لعرض التوزيع.</p></div><input type="hidden" name="colorSizeDistribution" value='{"colors":[]}'></div>
@@ -1528,9 +1712,13 @@ function adminView(data, accounts) {
           <div class="field"><label for="model-priority">أولوية التنفيذ</label><select id="model-priority" name="priority"><option>عادي</option><option>مرتفع</option><option>عاجل</option></select></div>
         </div></section>
         <section class="form-section"><h3>التفاصيل المالية <span>اختياري</span></h3><div class="form-section-grid">
-          <div class="field"><label for="model-price">سعر القطعة (ج.م)</label><input id="model-price" name="pricePerPiece" type="number" min="0" step="0.01" value="0"><small id="model-price-history-note" hidden>تعديل السعر يعيد احتساب قيمة التسليمات المسجلة لهذا الموديل ورصيد العميل.</small></div>
+          <div class="field"><label for="model-pricing-mode">طريقة التسعير</label><select id="model-pricing-mode" name="pricingMode"><option value="total">سعر إجمالي للقطعة</option><option value="stages">تسعير كل قسم للقطعة</option></select></div>
+          <div class="field stage-prices-field" data-stage-prices-field hidden><label>سعر القطعة لكل قسم (ج.م)</label><div class="stage-prices-list" data-stage-prices-list></div><small>سعر القطعة الإجمالي يساوي مجموع أسعار الأقسام المختارة.</small></div>
+          <input type="hidden" name="stagePrices" value="{}">
+          <div class="field"><label for="model-price">سعر القطعة الإجمالي (ج.م)</label><input id="model-price" name="pricePerPiece" type="number" min="0" max="9999999999.99" step="0.01" value="0"><small id="model-price-history-note" hidden>تعديل السعر يعيد احتساب قيمة التسليمات المسجلة لهذا الموديل ورصيد العميل.</small></div>
           <div class="field"><label for="model-paid">العربون (اختياري)</label><input id="model-paid" name="paidAmount" type="number" min="0" step="0.01" value="0"></div>
-          <div class="field"><label for="model-expected-total">الإجمالي المتوقع (العدد × السعر)</label><output id="model-expected-total" class="calculated-value">0 ج.م</output></div>
+          <div class="field"><label for="model-operational-expenses">مصاريف تشغيل إضافية على العميل (ج.م)</label><input id="model-operational-expenses" name="operationalExpenses" type="number" min="0" max="999999999999.99" step="0.01" value="0"></div>
+          <div class="field"><label for="model-expected-total">الإجمالي المتوقع (العدد × السعر + المصروفات)</label><output id="model-expected-total" class="calculated-value">0 ج.م</output></div>
           <div class="field"><label for="model-remaining">المتبقي المتوقع بعد العربون</label><output id="model-remaining" class="calculated-value">0 ج.م</output></div>
           <div class="field"><label for="client-balance-preview">الرصيد المتوقع للعميل بعد الحفظ</label><output id="client-balance-preview" class="calculated-value">اختر العميل</output></div>
         </div></section>
@@ -1562,8 +1750,8 @@ function adminView(data, accounts) {
     </section>
     <section id="client-details" class="dashboard-section">${data.clients.some((client) => client.id === selectedClientId) ? clientDetailsView(data.clients.find((client) => client.id === selectedClientId), data) : '<div class="empty-state">اختر عميلاً لعرض تفاصيل حسابه.</div>'}</section>
     <section id="accounts" class="dashboard-section">
-        ${panel("طلبات الحسابات الجديدة", table(["الاسم الكامل","اسم المستخدم","رقم التليفون","تاريخ الطلب","تحديد الدور","إجراء"], pendingAccountRows(accounts)))}
-      ${panel("حسابات المستخدمين", table(["الاسم","اسم المستخدم","رقم التليفون","الدور الوظيفي","الحالة","إجراء"], userRows(data.users)))}
+        ${panel("طلبات الحسابات الجديدة", table(["الاسم الكامل","اسم المستخدم","تاريخ الطلب","تحديد الدور","إجراء"], pendingAccountRows(accounts)))}
+        ${panel("حسابات المستخدمين", table(["الاسم","اسم المستخدم","الدور الوظيفي","الحالة","إجراء"], userRows(data.users)))}
         ${panel("سجل تسجيل الدخول وطلبات التسجيل", table(["الحساب","نوع الحدث","وقت الحدث"], data.authEvents.map((entry) => {
           const account = data.users.find((user) => user.id === entry.user_id)
             || accounts.find((user) => user.id === entry.user_id);
@@ -1571,7 +1759,7 @@ function adminView(data, accounts) {
         })))}
     </section>
     <div class="modal-backdrop" id="client-account-modal" hidden><section class="modal-card compact-view-modal" role="dialog" aria-modal="true" aria-labelledby="client-account-modal-title"><button class="modal-close" type="button" data-close-client-view aria-label="إغلاق">×</button><div id="client-account-modal-content"></div></section></div>
-    <div class="modal-backdrop" id="model-details-modal" hidden><section class="modal-card compact-view-modal" role="dialog" aria-modal="true" aria-labelledby="model-details-title"><button class="modal-close" type="button" data-close-model-view aria-label="إغلاق">×</button><div id="model-details-modal-content"></div><div class="form-actions"><button class="button button-secondary" type="button" data-edit-model-from-details>تعديل الطلبية</button><button class="row-action order-delete-action" type="button" data-action="delete-order">حذف الطلبية</button><button class="row-action" type="button" data-close-model-view>إغلاق</button></div></section></div>`;
+    <div class="modal-backdrop" id="model-details-modal" hidden><section class="modal-card compact-view-modal" role="dialog" aria-modal="true" aria-labelledby="model-details-title"><button class="modal-close" type="button" data-close-model-view aria-label="إغلاق">×</button><div id="model-details-modal-content"></div><div class="form-actions"><button class="button button-secondary" type="button" data-print-model-details>طباعة الموديل</button><button class="button button-secondary" type="button" data-edit-model-from-details>تعديل الطلبية</button><button class="row-action order-delete-action" type="button" data-action="delete-order">حذف الطلبية</button><button class="row-action" type="button" data-close-model-view>إغلاق</button></div></section></div>`;
 }
 
 function cuttingView(data) {
@@ -1685,19 +1873,35 @@ function clientView(data, session) {
     ((item.clientId || item._ownerId) === session.accountId || item.client === session.username)
     && (!latestSettlement || new Date(item._createdAt || item.created_at).getTime() >= new Date(latestSettlement.date || latestSettlement._createdAt).getTime())
   );
-  const totalAmount = sumMoney(currentOrders.map((item) => Number(item.deliveredPieces) * Number(item.pricePerPiece)));
+  const totalAmount = sumMoney(currentOrders.map((item) => Number(item.totalAmount)));
   const expectedTotal = sumMoney(currentOrders.map((item) => item.expectedAmount));
+  const clientExpensesTotal = sumMoney(data.cashTransactions
+    .filter((entry) =>
+      entry.direction === "expense"
+      && (!latestSettlement || new Date(entry.occurred_at).getTime() >= new Date(latestSettlement.date || latestSettlement._createdAt).getTime())
+    )
+    .map((entry) => entry.amount));
   const paymentsTotal = sumMoney(payments.map((item) => item.amount));
   const orderPaid = sumMoney(currentOrders.map((item) => item.paidAmount));
   const totalPaid = addMoney(paymentsTotal, orderPaid);
-  const grossDue = addMoney(openingBalance, totalAmount);
+  const grossDue = addMoney(addMoney(openingBalance, totalAmount), clientExpensesTotal);
   const remaining = subtractMoney(grossDue, totalPaid);
   const due = remaining;
   const remainingOpeningBalance = openingBalance > 0
     ? Math.max(0, subtractMoney(openingBalance, totalPaid))
     : openingBalance;
   const deliveredUnits = currentOrders.reduce((sum, item) => sum + Number(item.quantity), 0);
-  return `<section id="dashboard" class="dashboard-section"><div class="stats-grid">${stat("موديلاتي الحالية", currentOrders.length, "ضمن الفترة الحالية")}${stat("العدد الفعلي", new Intl.NumberFormat("ar-EG-u-nu-latn").format(deliveredUnits), "قطعة بعد القص")}${latestSettlement ? stat("الرصيد السابق المرحّل المتبقي", money(remainingOpeningBalance), "بعد احتساب المدفوعات الحالية") : ""}${stat("الإجمالي المتوقع للطلبات", money(expectedTotal), "العدد × سعر القطعة")}${stat("المطلوب بعد التسليم", money(totalAmount), "قيمة البضاعة المستلمة")}${stat("إجمالي المطلوب بعد خصم المدفوع", money(due), "الرصيد المرحّل + المطلوب الحالي − المدفوع")}${stat("إجمالي المدفوع", money(totalPaid))}${stat("الرصيد المتبقي", money(remaining), remaining === 0 ? "تم السداد بالكامل" : remaining < 0 ? "رصيد دائن للعميل" : "مستحق على العميل")}</div></section><section id="orders" class="dashboard-section">${panel("موديلاتي والطلبيات الحالية", clientOrderCards(currentOrders))}${archivedOrders.length ? panel("الطلبات المؤرشفة", clientOrderCards(archivedOrders)) : ""}</section><section id="finance" class="dashboard-section">${panel("دفعاتي المالية", table(["المبلغ","تاريخ ووقت التسجيل","طريقة الدفع"], payments.map((item) => `<tr><td>${money(item.amount)}</td><td>${formatDateTime(item._createdAt || item.created_at || item.date)}</td><td>${escapeHtml(item.method)}</td></tr>`)))}</section>`;
+  const paymentPanel = panel("دفعاتي المالية", table(
+    ["المبلغ", "تاريخ ووقت التسجيل", "طريقة الدفع"],
+    payments.map((item) => `<tr><td>${money(item.amount)}</td><td>${formatDateTime(item._createdAt || item.created_at || item.date)}</td><td>${escapeHtml(item.method)}</td></tr>`)
+  ));
+  const expensePanel = data.cashTransactions.length
+    ? panel("مصروفات وعهد مسجلة على الحساب", table(
+      ["البند", "البيان", "المبلغ", "التاريخ"],
+      data.cashTransactions.map((entry) => `<tr><td>${escapeHtml(entry.category)}</td><td>${escapeHtml(entry.description || "—")}</td><td>${money(entry.amount)}</td><td>${formatDateTime(entry.occurred_at)}</td></tr>`)
+    ))
+    : "";
+  return `<section id="dashboard" class="dashboard-section"><div class="stats-grid">${stat("موديلاتي الحالية", currentOrders.length, "ضمن الفترة الحالية")}${stat("العدد الفعلي", new Intl.NumberFormat("ar-EG-u-nu-latn").format(deliveredUnits), "قطعة بعد القص")}${latestSettlement ? stat("الرصيد السابق المرحّل المتبقي", money(remainingOpeningBalance), "بعد احتساب المدفوعات الحالية") : ""}${stat("الإجمالي المتوقع للطلبات", money(expectedTotal), "يشمل مصاريف التشغيل")}${stat("المطلوب بعد التسليم", money(totalAmount), "قيمة الشغل المسلّم ومصاريفه")}${stat("مصروفات وعهد على الحساب", money(clientExpensesTotal))}${stat("إجمالي المطلوب بعد خصم المدفوع", money(due), "الرصيد المرحّل + المستحق + المصروفات − المدفوع")}${stat("إجمالي المدفوع", money(totalPaid))}${stat("الرصيد المتبقي", money(remaining), remaining === 0 ? "تم السداد بالكامل" : remaining < 0 ? "رصيد دائن للعميل" : "مستحق على العميل")}</div></section><section id="orders" class="dashboard-section">${panel("موديلاتي والطلبيات الحالية", clientOrderCards(currentOrders))}${archivedOrders.length ? panel("الطلبات المؤرشفة", clientOrderCards(archivedOrders)) : ""}</section><section id="finance" class="dashboard-section">${paymentPanel}${expensePanel}</section>`;
 }
 
 let sidebarCollapsed = false;
@@ -1714,6 +1918,7 @@ function navigationItems(role, info) {
       { id: "finance", icon: "ج.م", label: "حسابات العملاء" },
       { id: "owner-fabric", icon: "▧", label: "قماش الإدارة" },
       { id: "incoming-fabric", icon: "↘", label: "القماش الداخل" },
+      { id: "outgoing-fabric", icon: "↗", label: "القماش الخارج" },
       { id: "accounts", icon: "♙", label: "طلبات ومستخدمي النظام", last: true }
     ];
   }
@@ -1730,6 +1935,7 @@ function navigationItems(role, info) {
       { id: "admin-requests", icon: "✂", label: "طلبات الإدارة" },
       { id: "new-cutting", icon: "＋", label: "قصة جديدة" },
       { id: "incoming-fabric", icon: "↘", label: "القماش الداخل" },
+      { id: "outgoing-fabric", icon: "↗", label: "القماش الخارج" },
       { id: "personal-account", icon: "◷", label: "متابعة الحساب والراتب", last: true }
     ];
   }
@@ -1936,7 +2142,11 @@ async function persistFactoryOrder(order, changes = {}) {
     requested_priority: updated.priority || "عادي",
     requested_color_names: parseColorNames(updated.colorNames),
     requested_production_type: updated.productionType || "full_cutting",
-    requested_color_size_distribution: updated.colorSizeDistribution || { colors: [] }
+    requested_color_size_distribution: updated.colorSizeDistribution || { colors: [] },
+    requested_work_stages: updated.workStages || ["cutting", "sewing", "finishing"],
+    requested_pricing_mode: updated.pricingMode || "total",
+    requested_stage_prices: updated.stagePrices || {},
+    requested_operational_expenses: Number(updated.operationalExpenses || 0)
   });
   if (error?.code === "PGRST202") {
     throw new Error("دالة حفظ الطلبات المحدّثة غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
@@ -2163,7 +2373,54 @@ function bindClientDetailActions(session) {
   document.querySelectorAll("#client-details [data-quick-client-payment]").forEach((button) => {
     button.addEventListener("click", () => openClientPayment(button.dataset.quickClientPayment));
   });
-  document.querySelectorAll("[data-print-account]").forEach((button) => button.addEventListener("click", () => window.print()));
+  document.querySelectorAll("[data-print-account]").forEach((button) => button.addEventListener("click", () => {
+    const client = dashboardData.clients.find((entry) => entry.id === selectedClientId);
+    if (!client) {
+      window.factoryUI.toast("تعذر العثور على ملف العميل للطباعة.", "error");
+      return;
+    }
+    printClientAccount(client, dashboardData);
+  }));
+  document.querySelectorAll("[data-print-selected-models]").forEach((button) => button.addEventListener("click", () => {
+    const selectedIds = new Set([...document.querySelectorAll("#client-details [data-print-model-select]:checked")].map((input) => input.dataset.printModelSelect));
+    const selectedOrders = dashboardData.models.filter((order) => selectedIds.has(order.id));
+    if (!selectedOrders.length) {
+      window.factoryUI.toast("حدد موديلًا واحدًا على الأقل للطباعة.", "error");
+      return;
+    }
+    const client = dashboardData.clients.find((entry) => entry.id === selectedClientId);
+    printDocument("فاتورة الموديلات", selectedOrders.map((order) => modelPrintMarkup(order, client?.name)).join(""));
+  }));
+  document.querySelectorAll("[data-client-cash-form]").forEach((form) => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const values = new FormData(form);
+    const occurredAt = new Date(String(values.get("occurredAt") || ""));
+    const amount = Number(values.get("amount"));
+    if (Number.isNaN(occurredAt.getTime()) || !Number.isFinite(amount) || amount <= 0) {
+      window.factoryUI.toast("أدخل مبلغًا موجبًا وتاريخًا صحيحًا للحركة.", "error");
+      return;
+    }
+    const button = form.querySelector('[type="submit"]');
+    button.disabled = true;
+    try {
+      const { error } = await supabaseClient.rpc("save_factory_cash_transaction", {
+        requested_direction: "expense",
+        requested_category: String(values.get("category")).trim(),
+        requested_description: String(values.get("description")).trim(),
+        requested_amount: amount,
+        requested_payment_method: String(values.get("method") || "نقدي").trim(),
+        requested_occurred_at: occurredAt.toISOString(),
+        requested_customer_id: form.dataset.clientCashForm
+      });
+      if (error?.code === "PGRST202") throw new Error("دالة تسجيل الحركة النقدية المرتبطة بالعميل غير محدثة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+      if (error) throw error;
+      await refreshDashboard(session);
+      window.factoryUI.toast("تم تسجيل المصروف وربطه بحساب العميل وسجل الخزينة.");
+    } catch (error) {
+      button.disabled = false;
+      window.factoryUI.toast(`تعذر تسجيل حركة العميل: ${error.message}`, "error");
+    }
+  }));
   document.querySelectorAll(".client-note-form").forEach((form) => form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const button = form.querySelector('[type="submit"]');
@@ -2251,6 +2508,7 @@ function openClientPayment(clientId) {
 
 function bindIncomingFabricActions(session) {
   const form = document.querySelector("#incoming-fabric-form");
+  const withdrawalForm = document.querySelector("#fabric-withdrawal-form");
   if (form) form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const button = form.querySelector('[type="submit"]');
@@ -2260,7 +2518,11 @@ function bindIncomingFabricActions(session) {
       const receivedAt = new Date(form.elements.receivedAt.value);
       if (Number.isNaN(receivedAt.getTime())) throw new Error("أدخل تاريخ ووقت استلام صالحين.");
       const items = [...form.querySelectorAll("[data-incoming-fabric-group]")].flatMap((group) => {
-        const name = String(group.querySelector('[name="name"]').value).trim();
+        const fabricType = group.querySelector('[name="fabricType"]').value;
+        const name = fabricType === "__new__"
+          ? String(group.querySelector('[name="name"]').value).trim()
+          : String(fabricType).trim();
+        if (!name) throw new Error("اختر اسم قماش مسجلاً أو أدخل اسم نوع جديد.");
         return [...group.querySelectorAll("[data-incoming-fabric-color-row]")].map((row) => ({
           name,
           colorName: String(row.querySelector('[name="colorName"]').value).trim(),
@@ -2279,7 +2541,7 @@ function bindIncomingFabricActions(session) {
       if (error) throw error;
       registered = true;
       form.reset();
-      form.querySelector("[data-incoming-fabric-groups]").innerHTML = incomingFabricGroupMarkup();
+      form.querySelector("[data-incoming-fabric-groups]").innerHTML = incomingFabricGroupMarkup(dashboardData.fabrics);
       form.querySelectorAll('[name="colorHex"]').forEach((input) => { input.value = "#ffffff"; });
       form.elements.receivedAt.value = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16);
       await refreshDashboard(session);
@@ -2292,6 +2554,50 @@ function bindIncomingFabricActions(session) {
       button.disabled = false;
     }
   });
+
+  if (withdrawalForm) {
+    const fabricSelect = withdrawalForm.elements.fabricId;
+    const quantityInput = withdrawalForm.elements.quantity;
+    const unitOutput = withdrawalForm.querySelector("[data-outgoing-unit]");
+    const updateWithdrawalUnit = () => {
+      const option = fabricSelect.selectedOptions[0];
+      const unit = option?.dataset.unit || "";
+      unitOutput.textContent = unit ? `(${unit})` : "";
+      quantityInput.step = unit === "توب" ? "1" : "0.001";
+      quantityInput.min = unit === "توب" ? "1" : "0.001";
+      quantityInput.placeholder = unit === "توب" ? "عدد التوب" : "الكمية";
+    };
+    fabricSelect.addEventListener("change", updateWithdrawalUnit);
+    updateWithdrawalUnit();
+    withdrawalForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const occurredAt = new Date(withdrawalForm.elements.occurredAt.value);
+      const selectedUnit = fabricSelect.selectedOptions[0]?.dataset.unit;
+      const quantity = Number(quantityInput.value);
+      if (Number.isNaN(occurredAt.getTime()) || !Number.isFinite(quantity) || quantity <= 0
+        || (selectedUnit === "توب" && !Number.isSafeInteger(quantity))) {
+        window.factoryUI.toast("أدخل كمية صالحة وتاريخًا صحيحًا لصرف القماش.", "error");
+        return;
+      }
+      const submitButton = withdrawalForm.querySelector('[type="submit"]');
+      submitButton.disabled = true;
+      try {
+        const { error } = await supabaseClient.rpc("record_factory_fabric_withdrawal", {
+          requested_fabric_id: fabricSelect.value,
+          requested_quantity: quantity,
+          requested_occurred_at: occurredAt.toISOString(),
+          requested_notes: String(withdrawalForm.elements.notes.value).trim()
+        });
+        if (error?.code === "PGRST202") throw new Error("دالة تسجيل القماش الخارج غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+        if (error) throw error;
+        await refreshDashboard(session);
+        window.factoryUI.toast("تم تسجيل القماش الخارج وتحديث الرصيد المتاح.");
+      } catch (error) {
+        submitButton.disabled = false;
+        window.factoryUI.toast(`تعذر تسجيل القماش الخارج: ${error.message}`, "error");
+      }
+    });
+  }
 
   if (session.role !== "admin") return;
   document.querySelectorAll("[data-assign-incoming-fabric]").forEach((button) => button.addEventListener("click", async () => {
@@ -2325,7 +2631,7 @@ function bindFabricEntryRows() {
         const addTypeButton = event.target.closest("[data-add-incoming-type]");
         if (addTypeButton) {
           const groups = form.querySelector("[data-incoming-fabric-groups]");
-          groups.insertAdjacentHTML("beforeend", incomingFabricGroupMarkup());
+          groups.insertAdjacentHTML("beforeend", incomingFabricGroupMarkup(dashboardData.fabrics, true));
           groups.lastElementChild.querySelector("[data-remove-incoming-type]").hidden = false;
           groups.lastElementChild.querySelector('[name="name"]').focus();
           return;
@@ -2370,6 +2676,16 @@ function bindFabricEntryRows() {
       form.addEventListener("change", (event) => {
         const unitSelect = event.target.closest('[data-incoming-fabric-color-row] [name="unit"]');
         if (unitSelect) syncIncomingFabricQuantity(unitSelect.closest("[data-incoming-fabric-color-row]"));
+        const typeSelect = event.target.closest("[data-incoming-fabric-type]");
+        if (typeSelect) {
+          const newTypeField = typeSelect.closest("[data-incoming-fabric-group]").querySelector(".incoming-new-type-field");
+          const newTypeInput = newTypeField.querySelector('[name="name"]');
+          const isNewType = typeSelect.value === "__new__";
+          newTypeField.hidden = !isNewType;
+          newTypeInput.disabled = !isNewType;
+          newTypeInput.required = isNewType;
+          if (isNewType) newTypeInput.focus();
+        }
       });
       form.querySelectorAll("[data-incoming-fabric-color-row]").forEach(syncIncomingFabricQuantity);
     }
@@ -2584,7 +2900,8 @@ function bindActions(session) {
         requested_description: String(cashTransactionForm.elements.description.value).trim(),
         requested_amount: Number(cashTransactionForm.elements.amount.value),
         requested_payment_method: String(cashTransactionForm.elements.method.value).trim(),
-        requested_occurred_at: occurredAt.toISOString()
+        requested_occurred_at: occurredAt.toISOString(),
+        requested_customer_id: null
       });
       if (error?.code === "PGRST202") throw new Error("دالة سجل النقدية غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
       if (error) throw error;
@@ -2671,7 +2988,7 @@ function bindActions(session) {
   const clientAccountModal = document.querySelector("#client-account-modal");
   document.body.append(orderModal);
   const editConfigs = {
-    models: { form: "model-form", collection: "models", fields: ["customerId", "name", "modelNumber", "colors", "sizes", "quantity", "productionType", "expectedDeliveryDate", "pricePerPiece", "paidAmount", "status", "priority"] },
+    models: { form: "model-form", collection: "models", fields: ["customerId", "name", "modelNumber", "colors", "sizes", "quantity", "productionType", "pricingMode", "expectedDeliveryDate", "pricePerPiece", "paidAmount", "operationalExpenses", "status", "priority"] },
     payments: { form: "payment-form", collection: "payments", fields: ["customerId", "amount", "date", "method", "reference", "notes"] }
   };
   document.querySelectorAll("[data-edit-kind]").forEach((button) => button.addEventListener("click", () => {
@@ -2691,8 +3008,13 @@ function bindActions(session) {
     form.querySelector('[type="submit"]').textContent = "حفظ التعديلات";
     form.querySelector("[data-cancel-edit]").hidden = false;
     if (button.dataset.editKind === "models") {
+      syncOrderCustomerSelection(form, item.customerId);
+      form.elements.stagePrices.value = JSON.stringify(item.stagePrices || {});
+      form.querySelectorAll('[name="workStage"]').forEach((input) => {
+        input.checked = (item.workStages || []).includes(input.value);
+      });
+      updateStagePricing(form);
       form.elements.deliveredPieces.value = item.deliveredPieces;
-      form.elements.pricePerPiece.readOnly = false;
       form.querySelector("#model-price-history-note").hidden = item.deliveredPieces <= 0;
       setSizePicker(form.querySelector("[data-size-picker]"), item.sizes);
       setColorPicker(form.querySelector("[data-color-picker]"), item.colors, item.colorNames);
@@ -2706,10 +3028,33 @@ function bindActions(session) {
       activateDashboardView("finance");
       form.scrollIntoView({ behavior: "smooth", block: "center" });
     }
-    form.elements[config.fields[0]].focus();
+    (button.dataset.editKind === "models" ? form.elements.customerSelection : form.elements[config.fields[0]]).focus();
   }));
   const orderForm = document.querySelector("#model-form");
   bindPickers(orderForm);
+  orderForm.elements.customerSelection.addEventListener("change", () => {
+    syncOrderCustomerSelection(orderForm, orderForm.elements.customerSelection.value, "customerSelection");
+    updateOrderTotals();
+  });
+  orderForm.elements.brandSelection.addEventListener("change", () => {
+    syncOrderCustomerSelection(orderForm, orderForm.elements.brandSelection.value, "brandSelection");
+    updateOrderTotals();
+  });
+  orderForm.addEventListener("change", (event) => {
+    if (event.target.matches('[name="workStage"]')) {
+      updateStagePricing(orderForm);
+      updateOrderTotals();
+    } else if (event.target.matches('[name="pricingMode"]')) {
+      updateStagePricing(orderForm);
+      updateOrderTotals();
+    }
+  });
+  orderForm.addEventListener("input", (event) => {
+    if (event.target.matches("[data-stage-price]")) {
+      syncStagePriceInputs(orderForm);
+      updateOrderTotals();
+    }
+  });
   let modelPreviewObjectUrl = "";
   orderForm.elements.modelImage.addEventListener("change", () => {
     const file = orderForm.elements.modelImage.files[0];
@@ -2723,7 +3068,7 @@ function bindActions(session) {
     orderModal.hidden = true;
     orderForm.reset();
     orderForm.elements.editIndex.value = "";
-    orderForm.elements.pricePerPiece.readOnly = false;
+    updateStagePricing(orderForm);
     orderForm.querySelector("#model-price-history-note").hidden = true;
     if (modelPreviewObjectUrl) URL.revokeObjectURL(modelPreviewObjectUrl);
     modelPreviewObjectUrl = "";
@@ -2742,16 +3087,21 @@ function bindActions(session) {
     orderForm.reset();
     orderForm.elements.savedOrderId.value = "";
     orderForm.elements.editIndex.value = String(orderIndex);
-    for (const field of ["customerId", "name", "modelNumber", "pricePerPiece", "paidAmount", "status", "priority", "productionType", "expectedDeliveryDate"]) {
+    for (const field of ["customerId", "name", "modelNumber", "pricePerPiece", "paidAmount", "operationalExpenses", "status", "priority", "productionType", "pricingMode", "expectedDeliveryDate"]) {
       orderForm.elements[field].value = order[field] ?? "";
     }
+    syncOrderCustomerSelection(orderForm, order.customerId);
+    orderForm.elements.stagePrices.value = JSON.stringify(order.stagePrices || {});
+    orderForm.querySelectorAll('[name="workStage"]').forEach((input) => {
+      input.checked = (order.workStages || []).includes(input.value);
+    });
+    updateStagePricing(orderForm);
     orderForm.elements.quantity.value = order.quantity || "";
     orderForm.elements.deliveredPieces.value = order.deliveredPieces;
     setSizePicker(orderForm.querySelector("[data-size-picker]"), order.sizes);
     setColorPicker(orderForm.querySelector("[data-color-picker]"), order.colors, order.colorNames);
     renderModelAllocation(orderForm, order.colorSizeDistribution);
     orderForm.querySelector("[data-model-image-preview]").innerHTML = modelImageMarkup(order.modelImageUrl);
-    orderForm.elements.pricePerPiece.readOnly = false;
     orderForm.querySelector("#model-price-history-note").hidden = order.deliveredPieces <= 0;
     orderForm.querySelector('[type="submit"]').textContent = "حفظ التعديلات";
     orderForm.querySelector("[data-cancel-edit]").hidden = false;
@@ -2769,6 +3119,15 @@ function bindActions(session) {
       clientAccountModal.hidden = true;
       return;
     }
+    if (event.target.closest("[data-print-model-details]")) {
+      const order = dashboardData.models.find((item) => item.id === modelDetailsModal.dataset.orderId);
+      if (!order) {
+        window.factoryUI.toast("تعذر العثور على الموديل للطباعة.", "error");
+        return;
+      }
+      printDocument("فاتورة موديل", modelPrintMarkup(order));
+      return;
+    }
     const modelEditButton = event.target.closest("[data-edit-model-from-details]");
     if (modelEditButton) {
       const order = dashboardData.models.find((item) => item.id === modelDetailsModal.dataset.orderId);
@@ -2784,7 +3143,7 @@ function bindActions(session) {
         return;
       }
       modelDetailsModal.dataset.orderId = order.id;
-      modelDetailsModal.querySelector("#model-details-modal-content").innerHTML = modelDetailsModalView(order);
+      modelDetailsModal.querySelector("#model-details-modal-content").innerHTML = modelDetailsModalView(order, session.role === "admin");
       modelDetailsModal.querySelector("[data-edit-model-from-details]").hidden = session.role !== "admin";
       const deleteButton = modelDetailsModal.querySelector("[data-action='delete-order']");
       deleteButton.dataset.orderId = order.id;
@@ -2823,7 +3182,7 @@ function bindActions(session) {
   document.querySelector("[data-open-order-modal]").addEventListener("click", () => {
     closeOrderModal();
     orderModal.hidden = false;
-    orderForm.elements.customerId.focus();
+    orderForm.elements.customerSelection.focus();
   });
   document.querySelectorAll("[data-close-order]").forEach((button) => button.addEventListener("click", closeOrderModal));
   orderModal.addEventListener("click", (event) => {
@@ -2987,7 +3346,8 @@ function bindActions(session) {
     const quantity = Number(orderForm.elements.quantity.value || sizePickerTotal(orderForm) || 0);
     const price = Number(orderForm.elements.pricePerPiece.value || 0);
     const paid = Number(orderForm.elements.paidAmount.value || 0);
-    const expectedTotal = roundMoney(quantity * price);
+    const operationalExpenses = Number(orderForm.elements.operationalExpenses.value || 0);
+    const expectedTotal = roundMoney(quantity * price + operationalExpenses);
     const formatAmount = (value) => `${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 2 }).format(value)} ج.م`;
     orderForm.elements.paidAmount.removeAttribute("max");
     orderForm.querySelector("#model-expected-total").textContent = formatAmount(expectedTotal);
@@ -3012,8 +3372,8 @@ function bindActions(session) {
     if (newOrderButton) {
       orderForm.reset();
       orderForm.elements.editIndex.value = "";
-      orderForm.elements.customerId.value = newOrderButton.dataset.openOrderForClient;
-      orderForm.elements.pricePerPiece.readOnly = false;
+      syncOrderCustomerSelection(orderForm, newOrderButton.dataset.openOrderForClient);
+      updateStagePricing(orderForm);
       orderForm.querySelector("#model-price-history-note").hidden = true;
       orderForm.querySelector("[data-model-image-preview]").innerHTML = "";
       orderForm.querySelector('[type="submit"]').textContent = "حفظ الطلبية";
@@ -3037,7 +3397,7 @@ function bindActions(session) {
     distributeModelQuantity(orderForm, true);
     updateOrderTotals();
   });
-  ["pricePerPiece", "paidAmount"].forEach((name) => orderForm.elements[name].addEventListener("input", updateOrderTotals));
+  ["pricePerPiece", "paidAmount", "operationalExpenses"].forEach((name) => orderForm.elements[name].addEventListener("input", updateOrderTotals));
   orderForm.addEventListener("input", (event) => {
     if (event.target.closest("[data-size-picker]")) {
       distributeModelQuantity(orderForm, !event.target.matches("[data-size-count]") && Number(orderForm.elements.quantity.value) > 0);
@@ -3059,7 +3419,6 @@ function bindActions(session) {
       updateOrderTotals();
     }
   });
-  orderForm.elements.customerId.addEventListener("change", updateOrderTotals);
   updateOrderTotals();
   document.querySelector("#model-form").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -3072,9 +3431,13 @@ function bindActions(session) {
     const deliveredPieces = Number(formData.get("deliveredPieces"));
     const pricePerPiece = Number(formData.get("pricePerPiece"));
     const paidAmount = Number(formData.get("paidAmount"));
+    const operationalExpenses = Number(formData.get("operationalExpenses") || 0);
     const modelName = String(formData.get("name")).trim();
     const modelNumber = String(formData.get("modelNumber")).trim();
     const customerId = String(formData.get("customerId"));
+    const workStages = [...form.querySelectorAll('[name="workStage"]:checked')].map((input) => input.value);
+    const pricingMode = String(formData.get("pricingMode"));
+    const stagePrices = JSON.parse(String(formData.get("stagePrices") || "{}"));
     const colors = String(formData.get("colors") || "").trim();
     const colorNames = parseColorNames(formData.get("colorNames"));
     const colorSizeDistribution = JSON.parse(String(formData.get("colorSizeDistribution") || '{"colors":[]}'));
@@ -3084,6 +3447,26 @@ function bindActions(session) {
     }
     if (!Number.isSafeInteger(quantity) || quantity < 0 || !Number.isSafeInteger(deliveredPieces) || deliveredPieces < 0) {
       window.factoryUI.toast("تحقق من إدخال أعداد صحيحة غير سالبة للكمية والتسليم.", "error");
+      return;
+    }
+    if (!Number.isFinite(operationalExpenses) || operationalExpenses < 0 || operationalExpenses > 999999999999.99) {
+      window.factoryUI.toast("أدخل مصاريف تشغيل إضافية صحيحة وغير سالبة.", "error");
+      return;
+    }
+    if (!workStages.length) {
+      window.factoryUI.toast("اختر قسماً واحداً على الأقل للموديل.", "error");
+      return;
+    }
+    if (!["total", "stages"].includes(pricingMode)) {
+      window.factoryUI.toast("اختر طريقة تسعير صالحة.", "error");
+      return;
+    }
+    if (pricingMode === "stages" && workStages.some((stage) =>
+      String(stagePrices[stage] ?? "").trim() === ""
+      || !Number.isFinite(Number(stagePrices[stage]))
+      || Number(stagePrices[stage]) < 0
+    )) {
+      window.factoryUI.toast("أدخل سعراً صالحاً لكل قسم مختار.", "error");
       return;
     }
     if (quantity === 0 && deliveredPieces > 0) {
@@ -3116,9 +3499,13 @@ function bindActions(session) {
         deliveredPieces,
         pricePerPiece,
         paidAmount,
+        operationalExpenses,
         status: String(formData.get("status")),
         priority: String(formData.get("priority")),
         productionType: String(formData.get("productionType")),
+        workStages,
+        pricingMode,
+        stagePrices: pricingMode === "stages" ? stagePrices : {},
         fabric: String(formData.get("fabric") || "").trim(),
         line: String(formData.get("line") || "").trim(),
         colors,
@@ -3248,7 +3635,7 @@ function bindActions(session) {
       }
       if (!await window.factoryUI.confirmAction({
         title: "حذف الموديل",
-        message: `هل تريد حذف الموديل ${order.name || order.modelNumber || "المحدد"}؟ لا يمكن التراجع عن هذا الإجراء. لا يمكن حذف موديل له تسليمات أو مبالغ مسجلة أو موديل مؤرشف.`,
+        message: `هل تريد حذف الموديل ${order.name || order.modelNumber || "المحدد"}؟ لا يمكن التراجع عن هذا الإجراء. لا يمكن حذف موديل له تسليمات أو مدفوعات أو مصاريف تشغيل أو موديل مؤرشف.`,
         confirmLabel: "حذف الموديل",
         danger: true
       })) return;

@@ -401,10 +401,14 @@ alter table public.orders
   add column if not exists delivered_pieces integer not null default 0,
   add column if not exists price_per_piece numeric(12, 2) not null default 0,
   add column if not exists paid_amount numeric(12, 2) not null default 0,
+  add column if not exists operational_expenses numeric(14, 2) not null default 0,
   add column if not exists expected_delivery_date date,
   add column if not exists model_image_url text,
   add column if not exists priority text not null default 'عادي',
   add column if not exists production_type text not null default 'full_cutting',
+  add column if not exists work_stages text[] not null default array['cutting', 'sewing', 'finishing']::text[],
+  add column if not exists pricing_mode text not null default 'total',
+  add column if not exists stage_prices jsonb not null default '{}'::jsonb,
   add column if not exists color_size_distribution jsonb not null default '{"colors":[]}'::jsonb,
   add column if not exists archived_at timestamptz;
 
@@ -416,20 +420,45 @@ alter table public.orders
 alter table public.orders
   drop constraint if exists orders_production_type_check,
   add constraint orders_production_type_check
-    check (production_type in ('full_cutting', 'ready_sewing'));
+    check (production_type in ('full_cutting', 'ready_sewing')),
+  drop constraint if exists orders_work_stages_check,
+  add constraint orders_work_stages_check
+    check (
+      cardinality(work_stages) > 0
+      and work_stages <@ array['cutting', 'sewing', 'finishing', 'ironing', 'packaging']::text[]
+    ),
+  drop constraint if exists orders_pricing_mode_check,
+  add constraint orders_pricing_mode_check
+    check (pricing_mode in ('total', 'stages')),
+  drop constraint if exists orders_stage_prices_check,
+  add constraint orders_stage_prices_check
+    check (jsonb_typeof(stage_prices) = 'object'),
+  drop constraint if exists orders_operational_expenses_check,
+  add constraint orders_operational_expenses_check
+    check (operational_expenses >= 0);
 
 alter table public.orders
   add column total_amount numeric(14, 2)
-    generated always as (delivered_pieces * price_per_piece) stored,
+    generated always as (
+      delivered_pieces * price_per_piece
+      + case when delivered_pieces > 0 then operational_expenses else 0 end
+    ) stored,
   add column expected_total_amount numeric(14, 2)
-    generated always as (greatest(total_pieces - delivered_pieces, 0) * price_per_piece) stored,
+    generated always as (
+      greatest(total_pieces - delivered_pieces, 0) * price_per_piece
+      + case when delivered_pieces = 0 then operational_expenses else 0 end
+    ) stored,
   add column remaining_amount numeric(14, 2)
-    generated always as (delivered_pieces * price_per_piece - paid_amount) stored;
+    generated always as (
+      delivered_pieces * price_per_piece
+      + case when delivered_pieces > 0 then operational_expenses else 0 end
+      - paid_amount
+    ) stored;
 
 create table if not exists public.production_stages (
   id uuid primary key default gen_random_uuid(),
   order_id uuid not null references public.orders (id) on delete cascade,
-  stage_name text not null check (stage_name in ('cutting', 'sewing', 'finishing', 'delivery')),
+  stage_name text not null check (stage_name in ('cutting', 'sewing', 'finishing', 'ironing', 'packaging', 'delivery')),
   worker_id uuid references auth.users (id) on delete set null,
   worker_name text,
   fabric text,
@@ -506,6 +535,11 @@ set stage_name = case lower(trim(stage_name))
   else stage_name
 end
 where lower(trim(stage_name)) in ('تقطيع', 'قص', 'خياطة', 'تشطيب', 'تسليم');
+
+alter table public.production_stages
+  drop constraint if exists production_stages_stage_name_check,
+  add constraint production_stages_stage_name_check
+    check (stage_name in ('cutting', 'sewing', 'finishing', 'ironing', 'packaging', 'delivery'));
 
 update public.production_stages as stage
 set target_quantity = greatest(factory_order.total_pieces, stage.completed_quantity)
@@ -618,11 +652,8 @@ set search_path = public
 as $$
 begin
   insert into public.production_stages (order_id, stage_name, target_quantity)
-  values
-    (new.id, 'cutting', new.total_pieces),
-    (new.id, 'sewing', new.total_pieces),
-    (new.id, 'finishing', new.total_pieces),
-    (new.id, 'delivery', new.total_pieces);
+  select new.id, selected_stage.stage_name, new.total_pieces
+  from unnest(new.work_stages || array['delivery']::text[]) as selected_stage(stage_name);
   return new;
 end;
 $$;
@@ -635,7 +666,7 @@ create trigger create_factory_order_stages
 insert into public.production_stages (order_id, stage_name, target_quantity)
 select factory_order.id, stage.stage_name, factory_order.total_pieces
 from public.orders as factory_order
-cross join (values ('cutting'), ('sewing'), ('finishing'), ('delivery')) as stage(stage_name)
+cross join lateral unnest(factory_order.work_stages || array['delivery']::text[]) as stage(stage_name)
 where not exists (
   select 1
   from public.production_stages as existing_stage
@@ -675,6 +706,7 @@ returns table (
   model_name text,
   model_number text,
   production_type text,
+  work_stages text[],
   sender_name text,
   colors text,
   color_size_distribution jsonb,
@@ -686,6 +718,7 @@ returns table (
   expected_delivery_date date,
   model_image_url text,
   price_per_piece numeric,
+  operational_expenses numeric,
   total_amount numeric,
   expected_total_amount numeric,
   paid_amount numeric,
@@ -710,6 +743,7 @@ begin
            factory_order.model_name,
            factory_order.model_number,
            factory_order.production_type,
+           factory_order.work_stages,
            factory_order.sender_name,
            factory_order.colors,
            factory_order.color_size_distribution,
@@ -721,6 +755,7 @@ begin
            factory_order.expected_delivery_date,
            factory_order.model_image_url,
            factory_order.price_per_piece,
+           factory_order.operational_expenses,
            factory_order.total_amount,
            factory_order.expected_total_amount,
            factory_order.paid_amount,
@@ -739,6 +774,8 @@ drop function if exists public.save_factory_order(uuid, uuid, text, text, intege
 drop function if exists public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text);
 drop function if exists public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb);
 drop function if exists public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb, text, jsonb);
+drop function if exists public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb, text, jsonb, text[], text, jsonb);
+drop function if exists public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb, text, jsonb, text[], text, jsonb, numeric);
 create function public.save_factory_order(
   requested_order_id uuid,
   requested_customer_id uuid,
@@ -758,7 +795,11 @@ create function public.save_factory_order(
   requested_priority text,
   requested_color_names jsonb,
   requested_production_type text,
-  requested_color_size_distribution jsonb
+  requested_color_size_distribution jsonb,
+  requested_work_stages text[],
+  requested_pricing_mode text,
+  requested_stage_prices jsonb,
+  requested_operational_expenses numeric
 )
 returns uuid
 language plpgsql
@@ -790,10 +831,60 @@ begin
     or (requested_order_id is null and requested_delivered_pieces <> 0)
     or requested_price_per_piece is null
     or requested_price_per_piece < 0
+    or requested_price_per_piece > 9999999999.99
     or requested_paid_amount is null
     or requested_paid_amount < 0
+    or requested_operational_expenses is null
+    or requested_operational_expenses < 0
+    or requested_operational_expenses > 999999999999.99
     or requested_production_type is null
     or requested_production_type not in ('full_cutting', 'ready_sewing')
+    or coalesce(cardinality(requested_work_stages), 0) = 0
+    or not (requested_work_stages <@ array['cutting', 'sewing', 'finishing', 'ironing', 'packaging']::text[])
+    or cardinality(requested_work_stages) <> (
+      select count(distinct selected.selected_stage)
+      from unnest(requested_work_stages) as selected(selected_stage)
+    )
+    or requested_pricing_mode is null
+    or requested_pricing_mode not in ('total', 'stages')
+    or coalesce(jsonb_typeof(requested_stage_prices), '') <> 'object'
+    or (requested_pricing_mode = 'total' and requested_stage_prices <> '{}'::jsonb)
+    or (
+      requested_pricing_mode = 'stages'
+      and (
+        exists (
+          select 1
+          from jsonb_each_text(
+            case when jsonb_typeof(requested_stage_prices) = 'object'
+              then requested_stage_prices else '{}'::jsonb end
+          ) as stage_price(stage_name, price)
+          where stage_name not in ('cutting', 'sewing', 'finishing', 'ironing', 'packaging')
+             or price !~ '^[0-9]+([.][0-9]{1,2})?$'
+        )
+        or jsonb_object_length(
+          case when jsonb_typeof(requested_stage_prices) = 'object'
+            then requested_stage_prices else '{}'::jsonb end
+        ) <> cardinality(requested_work_stages)
+        or exists (
+          select 1
+          from unnest(requested_work_stages) as selected(selected_stage)
+          where not (requested_stage_prices ? selected.selected_stage)
+        )
+        or (
+          select coalesce(sum(
+            case
+              when stage_price.price ~ '^[0-9]+([.][0-9]{1,2})?$'
+                then stage_price.price::numeric
+              else 0
+            end
+          ), 0)
+          from jsonb_each_text(
+            case when jsonb_typeof(requested_stage_prices) = 'object'
+              then requested_stage_prices else '{}'::jsonb end
+          ) as stage_price(stage_name, price)
+        ) <> requested_price_per_piece
+      )
+    )
     or coalesce(jsonb_typeof(requested_color_names), '') <> 'object'
     or coalesce(jsonb_typeof(requested_color_size_distribution), '') <> 'object'
     or coalesce(jsonb_typeof(requested_color_size_distribution -> 'colors'), '') <> 'array'
@@ -918,7 +1009,7 @@ begin
     insert into public.orders (
       client_id, customer_id, model_name, model_number, colors, color_names, sizes,
       total_pieces, delivered_pieces, price_per_piece, paid_amount, expected_delivery_date, model_image_url, priority,
-      production_type, color_size_distribution, status
+      production_type, work_stages, pricing_mode, stage_prices, color_size_distribution, operational_expenses, status
     )
     values (
       matched_client_id, matched_customer_id, resolved_model_name,
@@ -926,7 +1017,8 @@ begin
       coalesce(trim(requested_colors), ''), normalized_color_names, coalesce(trim(requested_sizes), ''),
       requested_quantity, requested_delivered_pieces,
       requested_price_per_piece, requested_paid_amount, requested_expected_delivery_date, requested_model_image_url,
-      trim(requested_priority), requested_production_type, requested_color_size_distribution, trim(requested_status)
+      trim(requested_priority), requested_production_type, requested_work_stages, requested_pricing_mode,
+      requested_stage_prices, requested_color_size_distribution, requested_operational_expenses, trim(requested_status)
     )
     returning id into saved_order_id;
     update public.production_stages
@@ -959,6 +1051,26 @@ begin
     ) then
       raise exception 'Record deliveries through the delivery workflow; delivered totals cannot be edited.';
     end if;
+    if exists (
+      select 1
+      from public.production_stages as stage
+      where stage.order_id = requested_order_id
+        and stage.stage_name in ('cutting', 'sewing', 'finishing', 'ironing', 'packaging')
+        and not (stage.stage_name = any(requested_work_stages))
+        and (
+          stage.completed_quantity > 0
+          or stage.status not in ('معلق', 'قيد الانتظار')
+          or stage.worker_id is not null
+          or nullif(trim(coalesce(stage.fabric, '')), '') is not null
+          or stage.fabric_id is not null
+          or stage.layer_count > 0
+          or stage.bolt_count > 0
+          or stage.fabric_quantity > 0
+          or stage.technical_notes <> ''
+        )
+    ) then
+      raise exception 'A work section with recorded production activity cannot be removed from the order.';
+    end if;
     update public.production_stages
     set target_quantity = case
       when stage_name = 'delivery' then greatest(requested_quantity, requested_delivered_pieces)
@@ -987,9 +1099,21 @@ begin
         model_image_url = requested_model_image_url,
         priority = trim(requested_priority),
         production_type = requested_production_type,
+        work_stages = requested_work_stages,
+        pricing_mode = requested_pricing_mode,
+        stage_prices = requested_stage_prices,
         color_size_distribution = requested_color_size_distribution,
+        operational_expenses = requested_operational_expenses,
         status = trim(requested_status)
     where id = requested_order_id;
+    insert into public.production_stages (order_id, stage_name, target_quantity)
+    select requested_order_id, selected_stage.stage_name, requested_quantity
+    from unnest(requested_work_stages || array['delivery']::text[]) as selected_stage(stage_name)
+    on conflict (order_id, stage_name) do nothing;
+    delete from public.production_stages as stage
+    where stage.order_id = requested_order_id
+      and stage.stage_name in ('cutting', 'sewing', 'finishing', 'ironing', 'packaging')
+      and not (stage.stage_name = any(requested_work_stages));
     if current_price_per_piece is distinct from requested_price_per_piece then
       update public.factory_deliveries
       set price_per_piece = requested_price_per_piece
@@ -1003,6 +1127,29 @@ begin
         and stage_name = 'sewing';
     end if;
     saved_order_id := requested_order_id;
+  end if;
+
+  if requested_operational_expenses > 0 then
+    insert into public.factory_cash_transactions (
+      order_id, direction, category, description, amount, payment_method, occurred_at, created_by
+    )
+    values (
+      saved_order_id,
+      'expense',
+      'مصاريف تشغيل الموديل',
+      concat_ws(' · ', resolved_model_name, nullif(trim(coalesce(requested_model_number, '')), '')),
+      requested_operational_expenses,
+      'نقدي',
+      now(),
+      auth.uid()
+    )
+    on conflict (order_id) where order_id is not null
+    do update set
+      description = excluded.description,
+      amount = excluded.amount;
+  else
+    delete from public.factory_cash_transactions
+    where order_id = saved_order_id;
   end if;
 
   return saved_order_id;
@@ -1057,6 +1204,8 @@ create table if not exists public.factory_records (
 
 create table if not exists public.factory_cash_transactions (
   id uuid primary key default gen_random_uuid(),
+  customer_id uuid references public.factory_clients (id) on delete set null,
+  order_id uuid references public.orders (id) on delete set null,
   direction text not null check (direction in ('income', 'expense')),
   category text not null check (length(trim(category)) between 1 and 120),
   description text not null default '',
@@ -1067,16 +1216,29 @@ create table if not exists public.factory_cash_transactions (
   created_at timestamptz not null default now()
 );
 
+alter table public.factory_cash_transactions
+  add column if not exists customer_id uuid references public.factory_clients (id) on delete set null,
+  add column if not exists order_id uuid references public.orders (id) on delete set null;
+
 create index if not exists factory_cash_transactions_date_idx
   on public.factory_cash_transactions (occurred_at desc);
+create index if not exists factory_cash_transactions_customer_date_idx
+  on public.factory_cash_transactions (customer_id, occurred_at desc)
+  where customer_id is not null;
+create unique index if not exists factory_cash_transactions_order_idx
+  on public.factory_cash_transactions (order_id)
+  where order_id is not null;
 
+drop function if exists public.save_factory_cash_transaction(text, text, text, numeric, text, timestamptz);
+drop function if exists public.save_factory_cash_transaction(text, text, text, numeric, text, timestamptz, uuid);
 create or replace function public.save_factory_cash_transaction(
   requested_direction text,
   requested_category text,
   requested_description text,
   requested_amount numeric,
   requested_payment_method text,
-  requested_occurred_at timestamptz
+  requested_occurred_at timestamptz,
+  requested_customer_id uuid
 )
 returns uuid
 language plpgsql
@@ -1094,14 +1256,25 @@ begin
      or requested_amount is null
      or requested_amount <= 0
      or requested_amount > 999999999999.99
-     or requested_occurred_at is null then
+     or requested_occurred_at is null
+     or (requested_customer_id is not null and requested_direction <> 'expense')
+     or (requested_customer_id is not null and not exists (
+       select 1 from public.factory_clients where id = requested_customer_id
+     ))
+     or (requested_customer_id is not null and exists (
+       select 1 from public.factory_clients
+       where id = requested_customer_id
+         and account_period_started_at is not null
+         and requested_occurred_at < account_period_started_at
+     )) then
     raise exception 'Enter a valid cash direction, category, positive amount, and date.';
   end if;
 
   insert into public.factory_cash_transactions (
-    direction, category, description, amount, payment_method, occurred_at, created_by
+    customer_id, direction, category, description, amount, payment_method, occurred_at, created_by
   )
   values (
+    requested_customer_id,
     requested_direction,
     trim(requested_category),
     coalesce(trim(requested_description), ''),
@@ -1113,6 +1286,46 @@ begin
   returning id into saved_transaction_id;
 
   return saved_transaction_id;
+end;
+$$;
+
+create or replace function public.read_factory_client_cash_transactions()
+returns table (
+  id uuid,
+  customer_id uuid,
+  direction text,
+  category text,
+  description text,
+  amount numeric,
+  payment_method text,
+  occurred_at timestamptz
+)
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+begin
+  if not public.has_active_factory_role(array['client']) then
+    raise exception 'Only active clients can read their account cash entries.';
+  end if;
+
+  return query
+    select transaction.id,
+           transaction.customer_id,
+           transaction.direction,
+           transaction.category,
+           transaction.description,
+           transaction.amount,
+           transaction.payment_method,
+           transaction.occurred_at
+    from public.factory_cash_transactions as transaction
+    where transaction.customer_id in (
+      select customer.id
+      from public.factory_clients as customer
+      where customer.user_id = auth.uid()
+    )
+    order by transaction.occurred_at desc;
 end;
 $$;
 
@@ -1437,6 +1650,56 @@ $$;
 
 revoke all on function public.emit_factory_client_live_signal() from public, anon, authenticated;
 
+create or replace function public.emit_factory_cash_client_signal()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  changed_customer_id uuid;
+  changed_transaction_id uuid;
+  target_client_id uuid;
+begin
+  if tg_op = 'DELETE' then
+    changed_customer_id := old.customer_id;
+    changed_transaction_id := old.id;
+  else
+    changed_customer_id := new.customer_id;
+    changed_transaction_id := new.id;
+  end if;
+  if changed_customer_id is not null then
+    select user_id
+      into target_client_id
+    from public.factory_clients
+    where id = changed_customer_id;
+    if target_client_id is not null then
+      insert into public.factory_live_signals (
+        id, client_id, client_record_id, signal_type, changed_at
+      )
+      values (
+        'client-cash:' || changed_transaction_id::text,
+        target_client_id,
+        changed_transaction_id,
+        'client',
+        now()
+      )
+      on conflict (id) do update
+      set client_id = excluded.client_id,
+          client_record_id = excluded.client_record_id,
+          signal_type = excluded.signal_type,
+          changed_at = excluded.changed_at;
+    end if;
+  end if;
+  if tg_op = 'DELETE' then
+    return old;
+  end if;
+  return new;
+end;
+$$;
+
+revoke all on function public.emit_factory_cash_client_signal() from public, anon, authenticated;
+
 drop trigger if exists emit_factory_order_live_signal on public.orders;
 create trigger emit_factory_order_live_signal
   after insert or update or delete on public.orders
@@ -1451,6 +1714,11 @@ drop trigger if exists emit_factory_client_live_signal on public.factory_clients
 create trigger emit_factory_client_live_signal
   after insert or update or delete on public.factory_clients
   for each row execute procedure public.emit_factory_client_live_signal();
+
+drop trigger if exists emit_factory_cash_client_signal on public.factory_cash_transactions;
+create trigger emit_factory_cash_client_signal
+  after insert or update or delete on public.factory_cash_transactions
+  for each row execute procedure public.emit_factory_cash_client_signal();
 
 alter table public.production_stages
   drop constraint if exists production_stages_fabric_id_fkey,
@@ -1862,6 +2130,70 @@ end;
 $$;
 
 revoke all on function public.adjust_factory_fabric_stock(uuid, numeric, timestamptz, text) from public, anon, authenticated;
+
+create or replace function public.record_factory_fabric_withdrawal(
+  requested_fabric_id uuid,
+  requested_quantity numeric,
+  requested_occurred_at timestamptz,
+  requested_notes text
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  stock_item public.factory_fabrics%rowtype;
+  saved_transaction_id uuid;
+begin
+  if not public.has_active_factory_role(array['admin', 'cutting']) then
+    raise exception 'Only active admins and cutting supervisors can withdraw fabric.';
+  end if;
+  if requested_fabric_id is null
+     or requested_quantity is null
+     or requested_quantity <= 0
+     or requested_quantity > 99999999999.999
+     or length(trim(coalesce(requested_notes, ''))) not between 1 and 500
+     or requested_occurred_at is null then
+    raise exception 'Select fabric and enter a positive quantity, description, and date.';
+  end if;
+
+  select *
+    into stock_item
+  from public.factory_fabrics
+  where id = requested_fabric_id
+  for update;
+  if not found then
+    raise exception 'The selected fabric stock item was not found.';
+  end if;
+  if stock_item.stock_scope = 'owner' and not public.is_active_factory_admin() then
+    raise exception 'Cutting supervisors cannot withdraw owner fabric.';
+  end if;
+  if stock_item.unit = 'توب' and requested_quantity <> trunc(requested_quantity) then
+    raise exception 'Fabric measured in توب must be withdrawn as a whole number.';
+  end if;
+  if stock_item.quantity_available < requested_quantity then
+    raise exception 'The requested withdrawal exceeds available fabric stock.';
+  end if;
+
+  update public.factory_fabrics
+  set quantity_available = quantity_available - requested_quantity,
+      updated_at = now()
+  where id = requested_fabric_id;
+
+  insert into public.factory_fabric_transactions (
+    fabric_id, transaction_type, quantity, notes, actor_id, created_at
+  )
+  values (
+    requested_fabric_id, 'withdrawal', requested_quantity,
+    trim(requested_notes), auth.uid(), requested_occurred_at
+  )
+  returning id into saved_transaction_id;
+  return saved_transaction_id;
+end;
+$$;
+
+revoke all on function public.record_factory_fabric_withdrawal(uuid, numeric, timestamptz, text) from public, anon, authenticated;
 
 create or replace function public.delete_factory_fabric(requested_fabric_id uuid)
 returns void
@@ -2652,12 +2984,13 @@ begin
   end if;
   if current_order.delivered_pieces > 0
      or current_order.paid_amount > 0
+     or current_order.operational_expenses > 0
      or exists (
        select 1
        from public.factory_deliveries
        where order_id = requested_order_id
      ) then
-    raise exception 'Orders with payment or delivery history cannot be deleted.';
+    raise exception 'Orders with operating expenses, payment, or delivery history cannot be deleted.';
   end if;
 
   delete from public.orders
@@ -2761,6 +3094,7 @@ declare
   matched_client public.factory_clients%rowtype;
   opening_balance numeric(14, 2) := 0;
   delivered_total numeric(14, 2) := 0;
+  client_expenses_total numeric(14, 2) := 0;
   order_paid_total numeric(14, 2) := 0;
   payments_total numeric(14, 2) := 0;
   closing_balance numeric(14, 2);
@@ -2799,6 +3133,16 @@ begin
   where customer_id = matched_client.id
     and archived_at is null;
 
+  select round(coalesce(sum(amount), 0), 2)
+    into client_expenses_total
+  from public.factory_cash_transactions
+  where customer_id = matched_client.id
+    and direction = 'expense'
+    and (
+      matched_client.account_period_started_at is null
+      or occurred_at >= matched_client.account_period_started_at
+    );
+
   select coalesce(sum(round((payload ->> 'amount')::numeric, 2)), 0)
     into payments_total
   from public.factory_records
@@ -2810,7 +3154,7 @@ begin
     );
 
   closing_balance := round(
-    opening_balance + delivered_total - order_paid_total - payments_total,
+    opening_balance + delivered_total + client_expenses_total - order_paid_total - payments_total,
     2
   );
 
@@ -2828,6 +3172,7 @@ begin
       'clientName', matched_client.name,
       'openingBalance', opening_balance,
       'deliveredTotal', delivered_total,
+      'clientExpensesTotal', client_expenses_total,
       'orderPaidTotal', order_paid_total,
       'paymentsTotal', payments_total,
       'balance', closing_balance,
@@ -2967,6 +3312,18 @@ create policy "Admins read fabric transactions"
   on public.factory_fabric_transactions for select to authenticated
   using (public.is_active_factory_admin());
 
+drop policy if exists "Cutting supervisors read incoming fabric transactions" on public.factory_fabric_transactions;
+create policy "Cutting supervisors read incoming fabric transactions"
+  on public.factory_fabric_transactions for select to authenticated
+  using (
+    public.has_active_factory_role(array['cutting'])
+    and exists (
+      select 1 from public.factory_fabrics
+      where factory_fabrics.id = factory_fabric_transactions.fabric_id
+        and factory_fabrics.stock_scope = 'incoming'
+    )
+  );
+
 drop policy if exists "Admins read authentication events" on public.factory_auth_events;
 create policy "Admins read authentication events"
   on public.factory_auth_events for select to authenticated
@@ -3007,7 +3364,7 @@ create policy "Admins read factory cash transactions"
   on public.factory_cash_transactions for select to authenticated
   using (public.is_active_factory_admin());
 grant select on public.factory_cash_transactions to authenticated;
-grant select (id, client_id, customer_id, model_name, model_number, production_type, colors, color_size_distribution, sizes, total_pieces, delivered_pieces, archived_at, status, priority, created_at)
+grant select (id, client_id, customer_id, model_name, model_number, production_type, work_stages, colors, color_size_distribution, sizes, total_pieces, delivered_pieces, archived_at, status, priority, created_at)
   on public.orders to authenticated;
 grant select (sender_name) on public.orders to authenticated;
 grant select (model_image_url) on public.orders to authenticated;
@@ -3049,6 +3406,11 @@ language plpgsql
 security definer
 set search_path = public
 as $$
+declare
+  transaction_customer_id uuid;
+  transaction_order_id uuid;
+  transaction_time timestamptz;
+  period_start timestamptz;
 begin
   if not public.is_active_factory_admin() then
     raise exception 'Only active admins can delete cash transactions.';
@@ -3057,11 +3419,27 @@ begin
     raise exception 'A valid cash transaction is required.';
   end if;
 
-  delete from public.factory_cash_transactions
-  where id = requested_transaction_id;
+  select customer_id, order_id, occurred_at
+    into transaction_customer_id, transaction_order_id, transaction_time
+  from public.factory_cash_transactions
+  where id = requested_transaction_id
+  for update;
   if not found then
     raise exception 'Cash transaction not found.';
   end if;
+  if transaction_order_id is not null then
+    raise exception 'Order operating expenses must be changed from the order editor.';
+  end if;
+  if transaction_customer_id is not null then
+    select account_period_started_at
+      into period_start
+    from public.factory_clients
+    where id = transaction_customer_id;
+    if period_start is not null and transaction_time < period_start then
+      raise exception 'Cash transactions in a settled client period are immutable.';
+    end if;
+  end if;
+  delete from public.factory_cash_transactions where id = requested_transaction_id;
 end;
 $$;
 
@@ -3133,10 +3511,12 @@ revoke all on function public.read_factory_orders_admin() from public, anon, aut
 grant execute on function public.read_factory_orders_admin() to authenticated;
 revoke all on function public.read_factory_orders_client() from public, anon, authenticated;
 grant execute on function public.read_factory_orders_client() to authenticated;
+revoke all on function public.read_factory_client_cash_transactions() from public, anon, authenticated;
+grant execute on function public.read_factory_client_cash_transactions() to authenticated;
 revoke all on function public.read_factory_cutting_clients() from public, anon, authenticated;
 grant execute on function public.read_factory_cutting_clients() to authenticated;
-revoke all on function public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb, text, jsonb) from public, anon, authenticated;
-grant execute on function public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb, text, jsonb) to authenticated;
+revoke all on function public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb, text, jsonb, text[], text, jsonb, numeric) from public, anon, authenticated;
+grant execute on function public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb, text, jsonb, text[], text, jsonb, numeric) to authenticated;
 revoke all on function public.record_factory_delivery(uuid, integer, text) from public, anon, authenticated;
 grant execute on function public.record_factory_delivery(uuid, integer, text) to authenticated;
 revoke all on function public.calculate_factory_cutting_breakdown(jsonb, jsonb) from public, anon, authenticated;
@@ -3158,6 +3538,8 @@ revoke all on function public.assign_factory_incoming_fabric(uuid, uuid) from pu
 grant execute on function public.assign_factory_incoming_fabric(uuid, uuid) to authenticated;
 revoke all on function public.adjust_factory_fabric_stock(uuid, numeric, timestamptz, text) from public, anon, authenticated;
 grant execute on function public.adjust_factory_fabric_stock(uuid, numeric, timestamptz, text) to authenticated;
+revoke all on function public.record_factory_fabric_withdrawal(uuid, numeric, timestamptz, text) from public, anon, authenticated;
+grant execute on function public.record_factory_fabric_withdrawal(uuid, numeric, timestamptz, text) to authenticated;
 revoke all on function public.delete_factory_fabric(uuid) from public, anon, authenticated;
 grant execute on function public.delete_factory_fabric(uuid) to authenticated;
 revoke all on function public.reconcile_factory_fabric_usage(uuid, uuid, numeric, text) from public, anon, authenticated;
@@ -3176,8 +3558,8 @@ revoke all on function public.save_factory_payment(uuid, uuid, numeric, date, te
 grant execute on function public.save_factory_payment(uuid, uuid, numeric, date, text, text, text) to authenticated;
 revoke all on function public.settle_factory_client_account(uuid) from public, anon, authenticated;
 grant execute on function public.settle_factory_client_account(uuid) to authenticated;
-revoke all on function public.save_factory_cash_transaction(text, text, text, numeric, text, timestamptz) from public, anon, authenticated;
-grant execute on function public.save_factory_cash_transaction(text, text, text, numeric, text, timestamptz) to authenticated;
+revoke all on function public.save_factory_cash_transaction(text, text, text, numeric, text, timestamptz, uuid) from public, anon, authenticated;
+grant execute on function public.save_factory_cash_transaction(text, text, text, numeric, text, timestamptz, uuid) to authenticated;
 
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 values ('factory-model-images', 'factory-model-images', true, 5242880, array['image/jpeg', 'image/png', 'image/webp'])
