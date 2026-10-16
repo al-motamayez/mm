@@ -4,6 +4,7 @@ const ADMIN_AUTH_EMAIL = "mohamed01007033454@gmail.com";
 let dashboardData;
 let usersTableHasStatus = false;
 let selectedClientId = "";
+let clientManagementTab = "summary";
 let realtimeChannel = null;
 let realtimeRefreshTimer = null;
 let realtimeChangeCount = 0;
@@ -85,6 +86,7 @@ function emptyDashboardData() {
     fabrics: [],
     fabricTransactions: [],
     authEvents: [],
+    cashTransactions: [],
     payments: [],
     settlements: [],
     deliveries: [],
@@ -160,12 +162,18 @@ async function readDashboardData(session) {
       .select("id, order_id, customer_id, quantity, price_per_piece, amount, recipient_name, expected_delivery_date, delivered_at, legacy_import")
       .order("delivered_at", { ascending: false })
     : Promise.resolve({ data: [], error: null });
-  const [payments, leaves, tasks, settlements, deliveriesResult, personalAttendance, personalAdvances, personalPayroll, fabricsResult, fabricTransactionsResult, authEventsResult] = await Promise.all([
+  const cashTransactionsPromise = session.role === "admin"
+    ? supabaseClient.from("factory_cash_transactions")
+      .select("id, direction, category, description, amount, payment_method, occurred_at, created_by, created_at")
+      .order("occurred_at", { ascending: false })
+    : Promise.resolve({ data: [], error: null });
+  const [payments, leaves, tasks, settlements, deliveriesResult, cashTransactionsResult, personalAttendance, personalAdvances, personalPayroll, fabricsResult, fabricTransactionsResult, authEventsResult] = await Promise.all([
     readFlexibleRecords("payments"),
     readFlexibleRecords("leaves"),
     readFlexibleRecords("tasks"),
     readFlexibleRecords("settlements"),
     deliveriesPromise,
+    cashTransactionsPromise,
     session.role === "cutting" ? readFlexibleRecords("attendance") : Promise.resolve([]),
     session.role === "cutting" ? readFlexibleRecords("advances") : Promise.resolve([]),
     session.role === "cutting" ? readFlexibleRecords("payroll") : Promise.resolve([]),
@@ -176,6 +184,7 @@ async function readDashboardData(session) {
     throw new Error("سجل التسليمات غير موجود في قاعدة البيانات. شغّل supabase/schema.sql كاملًا في SQL Editor.");
   }
   if (deliveriesResult.error) throw deliveriesResult.error;
+  if (cashTransactionsResult.error) throw cashTransactionsResult.error;
   if (["42P01", "PGRST205"].includes(fabricsResult.error?.code)
       || ["42P01", "PGRST205"].includes(fabricTransactionsResult.error?.code)) {
     throw new Error("جداول مخزون القماش غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
@@ -186,6 +195,7 @@ async function readDashboardData(session) {
   data.payments = payments;
   data.settlements = settlements;
   data.deliveries = deliveriesResult.data || [];
+  data.cashTransactions = cashTransactionsResult.data || [];
   data.fabrics = fabricsResult.data || [];
   data.fabricTransactions = fabricTransactionsResult.data || [];
   data.authEvents = authEventsResult.data || [];
@@ -235,7 +245,7 @@ async function readDashboardData(session) {
   if (session.role === "admin") {
     const { data: clients, error: clientsError } = await supabaseClient
       .from("factory_clients")
-      .select("id, user_id, name, phone, notes, account_period_started_at, created_at")
+      .select("id, user_id, name, brand_name, client_number, phone, cash_phone, instagram, whatsapp, notes, account_period_started_at, created_at")
       .order("created_at", { ascending: false });
     if (clientsError) throw clientsError;
     data.clients = clients.map((client) => ({
@@ -251,7 +261,7 @@ async function readDashboardData(session) {
   if (session.role === "admin" || orders.length) {
     let stagesQuery = supabaseClient
       .from("production_stages")
-      .select("id, order_id, stage_name, worker_name, fabric, fabric_id, fabric_quantity, bolt_count, layer_count, color_ply_data, technical_notes, line_name, target_quantity, completed_quantity, status, updated_at");
+      .select("id, order_id, stage_name, worker_name, fabric, fabric_id, external_fabric_source, external_fabric_unit, fabric_quantity, bolt_count, layer_count, color_ply_data, technical_notes, line_name, target_quantity, completed_quantity, status, updated_at");
     if (session.role !== "admin") {
       stagesQuery = stagesQuery.in("order_id", orders.map((order) => order.id));
     }
@@ -310,7 +320,7 @@ async function readDashboardData(session) {
       remainingPieces: Number(order.total_pieces) - Number(order.delivered_pieces || 0),
       pricePerPiece: Number(order.price_per_piece || 0),
       totalAmount: Number(order.total_amount || 0),
-      expectedAmount: Number(order.expected_total_amount ?? (Number(order.total_pieces || 0) * Number(order.price_per_piece || 0))),
+      expectedAmount: Number(order.expected_total_amount ?? (Math.max(Number(order.total_pieces || 0) - Number(order.delivered_pieces || 0), 0) * Number(order.price_per_piece || 0))),
       paidAmount: Number(order.paid_amount || 0),
       remainingAmount: Number(order.remaining_amount || 0),
       expectedDeliveryDate: order.expected_delivery_date || "",
@@ -320,7 +330,9 @@ async function readDashboardData(session) {
         : order.status,
       cuttingPlys: Number(cuttingStage?.layer_count || 0),
       fabric: cuttingStage?.fabric || "",
-      fabricId: cuttingStage?.fabric_id || "",
+      fabricId: cuttingStage?.fabric_id || (cuttingStage?.external_fabric_source ? "external" : ""),
+      externalFabricSource: cuttingStage?.external_fabric_source || "",
+      externalFabricUnit: cuttingStage?.external_fabric_unit || "متر",
       fabricQuantity: Number(cuttingStage?.fabric_quantity || 0),
       boltCount: Number(cuttingStage?.bolt_count || 0),
       layerCount: Number(cuttingStage?.layer_count || 0),
@@ -345,7 +357,9 @@ async function readDashboardData(session) {
       colors: ordersById.get(stage.order_id)?.colors || "",
       modelImageUrl: ordersById.get(stage.order_id)?.model_image_url || "",
       fabric: stage.fabric || "—",
-      fabricId: stage.fabric_id || "",
+      fabricId: stage.fabric_id || (stage.external_fabric_source ? "external" : ""),
+      externalFabricSource: stage.external_fabric_source || "",
+      externalFabricUnit: stage.external_fabric_unit || "متر",
       fabricQuantity: Number(stage.fabric_quantity || 0),
       boltCount: Number(stage.bolt_count || 0),
       layerCount: Number(stage.layer_count || 0),
@@ -925,7 +939,7 @@ function orderCards(models, withActions = false) {
       ${item.fabric ? `<div><dt>القماش / الفرشة</dt><dd>${escapeHtml(item.fabric)} · ${new Intl.NumberFormat("ar-EG").format(item.boltCount)} أتواب · ${new Intl.NumberFormat("ar-EG").format(item.layerCount)} طوابق</dd></div>` : ""}
       ${item.cuttingNotes ? `<div><dt>ملاحظات فنية للقص</dt><dd>${escapeHtml(item.cuttingNotes)}</dd></div>` : ""}
       <div><dt>الكمية المسلّمة فعليًا</dt><dd>${new Intl.NumberFormat("ar-EG").format(item.deliveredPieces)} قطعة</dd></div><div><dt>الكمية المتبقية للتسليم</dt><dd>${item.quantity ? `${new Intl.NumberFormat("ar-EG").format(item.remainingPieces)} قطعة` : "بانتظار الحصر بعد القص"}</dd></div>
-      <div><dt>سعر القطعة</dt><dd>${money(item.pricePerPiece)}</dd></div><div><dt>الإجمالي المتوقع (العدد × السعر)</dt><dd>${money(item.expectedAmount)}</dd></div><div><dt>قيمة الكمية المسلّمة</dt><dd>${money(item.totalAmount)}</dd></div>
+      <div><dt>سعر القطعة</dt><dd>${money(item.pricePerPiece)}</dd></div><div><dt>المتوقع للكمية غير المسلّمة</dt><dd>${money(item.expectedAmount)}</dd></div><div><dt>قيمة الكمية المسلّمة</dt><dd>${money(item.totalAmount)}</dd></div>
       <div><dt>التسليم المتوقع</dt><dd>${formatDateOnly(item.expectedDeliveryDate)}</dd></div><div><dt>تاريخ الإنشاء</dt><dd>${formatDateTime(item.created_at)}</dd></div>
       ${item.senderName ? `<div><dt>تم الإرسال بواسطة</dt><dd>${escapeHtml(item.senderName)}</dd></div>` : ""}
       <div><dt>المدفوع</dt><dd>${money(item.paidAmount)}</dd></div><div><dt>المتبقي من قيمة المسلّم</dt><dd>${money(item.remainingAmount)}</dd></div>
@@ -956,7 +970,7 @@ function clientOrderCards(orders) {
       <div><dt>العدد الفعلي بعد القص</dt><dd>${item.quantity ? new Intl.NumberFormat("ar-EG").format(item.quantity) : "بانتظار الحصر"}</dd></div><div><dt>الكمية المنجزة</dt><dd>${new Intl.NumberFormat("ar-EG").format(item.completedPieces)}</dd></div>
       <div><dt>الكمية المسلّمة</dt><dd>${new Intl.NumberFormat("ar-EG").format(item.deliveredPieces)}</dd></div><div><dt>المتبقي</dt><dd>${item.quantity ? new Intl.NumberFormat("ar-EG").format(item.remainingPieces) : "بانتظار الحصر بعد القص"}</dd></div>
       ${item.senderName ? `<div><dt>تم الإرسال بواسطة</dt><dd>${escapeHtml(item.senderName)}</dd></div>` : ""}
-      <div><dt>سعر القطعة</dt><dd>${money(item.pricePerPiece)}</dd></div><div><dt>الإجمالي المتوقع (العدد × السعر)</dt><dd>${money(item.expectedAmount)}</dd></div><div><dt>إجمالي قيمة المسلّم</dt><dd>${money(item.totalAmount)}</dd></div>
+      <div><dt>سعر القطعة</dt><dd>${money(item.pricePerPiece)}</dd></div><div><dt>المتوقع للكمية غير المسلّمة</dt><dd>${money(item.expectedAmount)}</dd></div><div><dt>إجمالي قيمة المسلّم</dt><dd>${money(item.totalAmount)}</dd></div>
       <div><dt>التسليم المتوقع</dt><dd>${formatDateOnly(item.expectedDeliveryDate)}</dd></div>
       <div><dt>المدفوع على الطلب</dt><dd>${money(item.paidAmount)}</dd></div><div><dt>المتبقي</dt><dd>${money(item.remainingAmount)}</dd></div>
     </dl>
@@ -994,7 +1008,7 @@ function clientAccountSummary(client, data) {
   const openingBalance = roundMoney(latestSettlement?.balance || 0);
   const orders = data.models.filter((order) => order.customerId === client.id && !order.archivedAt);
   const deliveredTotal = sumMoney(orders.map((order) => Number(order.deliveredPieces) * Number(order.pricePerPiece)));
-  const expectedTotal = sumMoney(orders.map((order) => Number(order.quantity) * Number(order.pricePerPiece)));
+  const expectedTotal = sumMoney(orders.map((order) => order.expectedAmount));
   const orderPaid = sumMoney(orders.map((order) => order.paidAmount));
   const periodStart = client.account_period_started_at || latestSettlement?.date || null;
   const payments = data.payments.filter((payment) =>
@@ -1096,12 +1110,94 @@ function clientAccountsOverview(data) {
     ${clientAccountCards(data)}`;
 }
 
+function cashLedgerView(data) {
+  const customerIncome = data.payments.reduce((sum, payment) => addMoney(sum, payment.amount), 0);
+  const otherIncome = data.cashTransactions
+    .filter((entry) => entry.direction === "income")
+    .reduce((sum, entry) => addMoney(sum, entry.amount), 0);
+  const orderPayments = data.models
+    .reduce((sum, order) => addMoney(sum, order.paidAmount || 0), 0);
+  const expenses = data.cashTransactions
+    .filter((entry) => entry.direction === "expense")
+    .reduce((sum, entry) => addMoney(sum, entry.amount), 0);
+  const entries = [
+    ...data.payments.map((payment) => ({
+      direction: "income",
+      category: "دفعة عميل",
+      description: `${payment.clientName || payment.client || ""}${payment.reference ? ` · ${payment.reference}` : ""}`,
+      amount: Number(payment.amount),
+      method: payment.method || "غير محدد",
+      date: payment._createdAt || payment.created_at || payment.date
+    })),
+    ...data.models.filter((order) => Number(order.paidAmount) > 0).map((order) => ({
+      direction: "income",
+      category: "دفعة مثبتة على الموديل",
+      description: `${order.client || ""} · ${order.name || order.modelNumber || ""}`,
+      amount: Number(order.paidAmount),
+      method: "مسجل على الطلب",
+      date: order.created_at
+    })),
+    ...data.cashTransactions.map((entry) => ({
+      direction: entry.direction,
+      category: entry.category,
+      description: entry.description,
+      amount: Number(entry.amount),
+      method: entry.payment_method,
+      date: entry.occurred_at
+    }))
+  ].sort((left, right) => new Date(right.date).getTime() - new Date(left.date).getTime());
+  const localDateTime = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+  const totalIncome = sumMoney([customerIncome, orderPayments, otherIncome]);
+  return `<div class="stats-grid">${stat("المقبوضات", money(totalIncome), "دفعات العملاء والمدفوعات المسجلة على الطلبات وإيرادات أخرى")}${stat("المصروفات", money(expenses), "المسجل في سجل النقدية")}${stat("صافي الحركة النقدية", money(subtractMoney(totalIncome, expenses)), "المقبوضات − المصروفات")}</div>
+    ${panel("تسجيل حركة نقدية", `<form id="cash-transaction-form" class="form-grid payment-form"><div class="field"><label for="cash-direction">نوع الحركة</label><select id="cash-direction" name="direction" required><option value="expense">مصروف / خروج نقدي</option><option value="income">إيراد آخر / دخول نقدي</option></select><small>دفعات العملاء تُسجل من نموذج الدفعات وتظهر تلقائياً ضمن المقبوضات.</small></div><div class="field"><label for="cash-category">البند</label><input id="cash-category" name="category" maxlength="120" placeholder="مثل: أجور، كهرباء، نقل، مبيعات أخرى" required></div><div class="field"><label for="cash-amount">المبلغ</label><input id="cash-amount" name="amount" type="number" min="0.01" step="0.01" required></div><div class="field"><label for="cash-method">طريقة الدفع</label><input id="cash-method" name="method" value="نقدي" maxlength="80"></div><div class="field wide"><label for="cash-description">التفاصيل / المرجع</label><input id="cash-description" name="description" maxlength="500"></div><div class="field"><label for="cash-date">تاريخ ووقت الحركة</label><input id="cash-date" name="occurredAt" type="datetime-local" value="${localDateTime}" required></div><div class="form-actions"><button class="button button-primary" type="submit">حفظ الحركة النقدية</button></div></form>`, "لا تسجل دفعة العميل مرة أخرى كإيراد يدوي حتى لا يتكرر احتسابها")}
+    ${panel("سجل المقبوضات والمصروفات", entries.length
+      ? table(["النوع","البند","التفاصيل","المبلغ","طريقة الدفع","التاريخ والوقت"], entries.map((entry) => `<tr><td>${entry.direction === "income" ? "مقبوض" : "مصروف"}</td><td>${escapeHtml(entry.category)}</td><td>${escapeHtml(entry.description || "—")}</td><td class="${entry.direction === "income" ? "financial-credit" : "financial-debit"}">${entry.direction === "income" ? "+" : "−"}${money(entry.amount)}</td><td>${escapeHtml(entry.method)}</td><td>${formatDateTime(entry.date)}</td></tr>`))
+      : '<div class="empty-state">لا توجد حركات نقدية مسجلة.</div>')}`;
+}
+
+const FACTORY_ORDER_STATUSES = [
+  "قيد الانتظار", "معلق", "تحت الإنشاء", "قيد الفرش",
+  "تم الفرش / جاهز للقص", "تم القص", "معلق - في انتظار الخياطة",
+  "في الخياطة", "جاهز للتسليم", "مكتمل"
+];
+
+function adminDashboardView(data) {
+  const activeOrders = data.models.filter((order) => !order.archivedAt);
+  const groups = [
+    ["الموديلات الحالية", activeOrders.length],
+    ["قيد الانتظار", activeOrders.filter((order) => order.status === "قيد الانتظار").length],
+    ["في الفرش", activeOrders.filter((order) => order.status === "قيد الفرش").length],
+    ["في الخياطة", activeOrders.filter((order) => order.status === "في الخياطة").length]
+  ];
+  return `<div class="stats-grid">${groups.map(([label, value]) => stat(label, value, "حالة مسجلة للموديل")).join("")}</div>
+    ${panel("آخر الموديلات وحالتها", activeOrders.length
+      ? table(["الموديل","العميل","العدد","سعر القطعة","الحالة"], activeOrders.slice(0, 12).map((order) => `<tr><td>${escapeHtml(order.name)}${order.modelNumber ? ` · ${escapeHtml(order.modelNumber)}` : ""}</td><td>${escapeHtml(order.client || "—")}</td><td>${new Intl.NumberFormat("ar-EG").format(order.quantity)}</td><td>${money(order.pricePerPiece)}</td><td>${statusTag(order.displayStatus || order.status)}</td></tr>`))
+      : '<div class="empty-state">لا توجد موديلات حالية.</div>')}`;
+}
+
+function modelStatusReviewView(data) {
+  const orders = data.models.filter((order) => !order.archivedAt);
+  const statusOptions = (selected) => FACTORY_ORDER_STATUSES
+    .map((status) => `<option value="${escapeHtml(status)}"${selected === status ? " selected" : ""}>${escapeHtml(status)}</option>`)
+    .join("");
+  return `<div class="clients-toolbar"><div><h2>مراجعة وفرز الموديلات</h2><p>حالة الموديل لا تتغير تلقائياً؛ اختر الحالة المطلوبة واحفظها يدوياً.</p></div><label class="field model-status-filter"><span>تصفية حسب الحالة</span><select data-filter-model-status><option value="">كل الحالات</option>${statusOptions("")}</select></label></div>
+    ${orders.length ? `<div class="model-status-list">${orders.map((order) => `<article class="model-status-row" data-model-status-row data-current-status="${escapeHtml(order.status)}">
+      <div class="model-status-info"><strong>${escapeHtml(order.name)}</strong><span>العميل: ${escapeHtml(order.client || "—")}</span><span>العدد: ${new Intl.NumberFormat("ar-EG").format(order.quantity)} قطعة</span><span>السعر: ${money(order.pricePerPiece)}</span></div>
+      ${statusTag(order.displayStatus || order.status)}
+      <label class="model-status-control"><span>الحالة اليدوية</span><select data-model-status="${escapeHtml(order.id)}">${statusOptions(order.status)}</select></label>
+      <button class="button button-secondary" type="button" data-save-model-status="${escapeHtml(order.id)}">حفظ الحالة</button>
+    </article>`).join("")}</div>` : '<div class="empty-state">لا توجد موديلات لمراجعتها.</div>'}`;
+}
+
 function clientDetailsView(client, data) {
   const summary = clientAccountSummary(client, data);
   const pricedOrders = summary.orders.filter((order) => order.pricePerPiece > 0);
   const unpricedOrders = summary.orders.filter((order) => order.pricePerPiece <= 0);
   const archivedOrders = summary.archivedOrders;
   const deliveries = data.deliveries.filter((delivery) => delivery.customer_id === client.id);
+  const clientFabrics = data.fabrics.filter((fabric) => fabric.customer_id === client.id);
+  const clientFabricIds = new Set(clientFabrics.map((fabric) => fabric.id));
+  const clientFabricTransactions = data.fabricTransactions.filter((transaction) => clientFabricIds.has(transaction.fabric_id));
   const payments = data.payments.filter((payment) => payment.customerId === client.id);
   const financialEntries = [
     ...deliveries.map((delivery) => {
@@ -1121,6 +1217,13 @@ function clientDetailsView(client, data) {
       amount: -Number(payment.amount || 0),
       date: payment._createdAt || payment.created_at || payment.date
     })),
+    ...summary.orders.filter((order) => Number(order.paidAmount) > 0).map((order) => ({
+      type: "دفعة مثبتة على الموديل",
+      reference: order.name || order.modelNumber || "—",
+      detail: `الموديل ${order.modelNumber || ""}`,
+      amount: -Number(order.paidAmount),
+      date: order.created_at
+    })),
     ...summary.settlements.map((entry) => ({
       type: "تصفية وترحيل رصيد",
       reference: "رصيد سابق مرحّل",
@@ -1137,7 +1240,7 @@ function clientDetailsView(client, data) {
       <div><dt>المتبقي</dt><dd>${order.quantity ? `${new Intl.NumberFormat("ar-EG").format(order.remainingPieces)} قطعة` : "بانتظار الحصر"}</dd></div>
       <div><dt>الألوان</dt><dd>${colorSummaryMarkup(order.colors, order.colorNames, order.colorPlyData)}</dd></div>
       <div><dt>المقاسات / العدد لكل مقاس</dt><dd>${escapeHtml(sizeSummary(order.sizes))}</dd></div>
-      ${order.pricePerPiece > 0 ? `<div><dt>سعر القطعة</dt><dd>${money(order.pricePerPiece)}</dd></div><div><dt>الإجمالي المتوقع (العدد × السعر)</dt><dd>${money(order.expectedAmount)}</dd></div><div><dt>إجمالي قيمة المسلّم</dt><dd>${money(order.totalAmount)}</dd></div>` : '<div><dt>التسعير</dt><dd>لم يُسعّر بعد</dd></div>'}
+      ${order.pricePerPiece > 0 ? `<div><dt>سعر القطعة</dt><dd>${money(order.pricePerPiece)}</dd></div><div><dt>المتوقع للكمية غير المسلّمة</dt><dd>${money(order.expectedAmount)}</dd></div><div><dt>إجمالي قيمة المسلّم</dt><dd>${money(order.totalAmount)}</dd></div>` : '<div><dt>التسعير</dt><dd>لم يُسعّر بعد</dd></div>'}
       <div><dt>التسليم المتوقع</dt><dd>${formatDateOnly(order.expectedDeliveryDate)}</dd></div>
       <div><dt>تاريخ الإنشاء</dt><dd>${formatDateTime(order.created_at)}</dd></div>
       ${order.senderName ? `<div><dt>تم الإرسال بواسطة</dt><dd>${escapeHtml(order.senderName)}</dd></div>` : ""}
@@ -1146,11 +1249,13 @@ function clientDetailsView(client, data) {
     ${!archived ? `<footer class="order-card-actions"><button class="row-action" type="button" data-edit-client-order="${escapeHtml(order.id)}">تعديل السعر أو بيانات الموديل</button>${orderCanBeDeleted(order) ? `<button class="row-action order-delete-action" type="button" data-action="delete-order" data-order-id="${escapeHtml(order.id)}">حذف الموديل</button>` : '<span class="order-delete-protected" title="لا يمكن حذف طلب له تسليمات أو مبالغ مسجلة">محمي بسجل مالي / تسليم</span>'}</footer>` : ""}
   </article>`;
   const clientNotes = data.clientNotes.filter((note) => note.customerId === client.id);
-  return `<div class="clients-toolbar client-detail-toolbar"><div><h2>${escapeHtml(client.name)} · تفاصيل الحساب</h2><p>${escapeHtml(client.phone || "لا يوجد رقم هاتف")}${client.notes ? ` · ${escapeHtml(client.notes)}` : ""}</p><p>تاريخ إنشاء ملف العميل: ${formatDateTime(client.created_at)}</p></div><div class="client-detail-actions"><button class="button button-primary" type="button" data-quick-client-payment="${escapeHtml(client.id)}">＋ إضافة دفعة مالية</button><button class="button button-secondary" type="button" data-print-account>طباعة كشف الحساب / PDF</button><button class="row-action" type="button" data-return-clients>العودة إلى العملاء</button></div></div>
-    <div class="stats-grid client-finance-summary">${summary.latestSettlement ? stat("الرصيد السابق المرحّل المتبقي", money(summary.remainingOpeningBalance), "بعد احتساب المدفوعات الحالية") : ""}${stat("الإجمالي المتوقع للطلبات", money(summary.expectedTotal), "العدد × سعر القطعة")}${stat("المطلوب بعد التسليم", money(summary.requiredAfterDelivery), "قيمة الكميات المسلّمة")}${stat("إجمالي المطلوب بعد خصم المدفوع", money(summary.due), "الرصيد المرحّل + المطلوب الحالي − المدفوع")}${stat("المدفوع", money(summary.paid))}${stat("الرصيد المتبقي", money(summary.balance), summary.balance === 0 ? "تم السداد بالكامل" : summary.balance < 0 ? "رصيد دائن للعميل" : "مستحق على العميل")}</div>
+  return `<div class="clients-toolbar client-detail-toolbar"><div><h2>${escapeHtml(client.name)} · تفاصيل الحساب والعمولة</h2><p>${escapeHtml(client.brand_name || "لا يوجد اسم محل/براند")} · رقم العميل: ${escapeHtml(client.client_number || "—")} · واتساب: ${escapeHtml(client.whatsapp || "—")}</p></div><div class="client-detail-actions"><button class="button button-primary" type="button" data-quick-client-payment="${escapeHtml(client.id)}">＋ إضافة دفعة</button><button class="button button-secondary" type="button" data-print-account>طباعة / PDF</button><button class="row-action" type="button" data-return-clients>العودة للعملاء</button></div></div>
+    <div class="client-profile-compact"><span>الهاتف: ${escapeHtml(client.phone || "—")}</span><span>كاش: ${escapeHtml(client.cash_phone || "—")}</span><span>إنستا: ${escapeHtml(client.instagram || "—")}</span><span>تاريخ الملف: ${formatDateTime(client.created_at)}</span></div>
+    <div class="stats-grid client-finance-summary">${summary.latestSettlement ? stat("الرصيد السابق المرحّل", money(summary.remainingOpeningBalance)) : ""}${stat("المطلوب المتوقع غير المسلّم", money(summary.expectedTotal), "باقي الكمية × سعر القطعة")}${stat("المبلغ المستحق فعلياً", money(summary.requiredAfterDelivery), "الكمية المسلّمة × سعر القطعة")}${stat("إجمالي المطلوب بعد المدفوع", money(summary.due), "الرصيد المرحّل + المستحق فعلياً − المدفوع")}${stat("إجمالي المدفوع", money(summary.paid))}${stat("الرصيد الحالي", money(summary.balance), summary.balance === 0 ? "تم السداد بالكامل" : summary.balance < 0 ? "رصيد دائن للعميل" : "مستحق على العميل")}</div>
     <section class="client-detail-section"><header class="section-heading"><div><h2>الموديلات التي تم تسعيرها</h2><p>يُحتسب المطلوب المالي على الكمية التي تم تسليمها.</p></div><button class="button button-secondary" type="button" data-open-order-for-client="${escapeHtml(client.id)}">＋ إضافة موديل للعميل</button></header>${pricedOrders.length ? `<div class="order-cards">${pricedOrders.map((order) => orderCard(order)).join("")}</div>` : '<div class="empty-state">لا توجد موديلات مسعّرة في الفترة الحالية.</div>'}</section>
     <section class="client-detail-section"><header class="section-heading"><div><h2>موديلات لم تُسعّر بعد</h2><p>طلبات في القص أو الانتظار أو مراحل التشغيل الأخرى.</p></div></header>${unpricedOrders.length ? `<div class="order-cards">${unpricedOrders.map((order) => orderCard(order)).join("")}</div>` : '<div class="empty-state">لا توجد موديلات بانتظار التسعير.</div>'}</section>
-    <section class="client-detail-section">${panel("سجل تسليمات البضاعة", deliveries.length ? table(["الموديل","الكمية","المستلم","تاريخ ووقت الاستلام","التسليم المتوقع","القيمة"], deliveries.map((delivery) => { const order = data.models.find((item) => item.id === delivery.order_id); return `<tr><td>${escapeHtml(order?.name || "طلب مؤرشف")}</td><td>${new Intl.NumberFormat("ar-EG").format(delivery.quantity)} قطعة</td><td>${escapeHtml(delivery.recipient_name || "—")}</td><td>${formatDateTime(delivery.delivered_at)}</td><td>${formatDateOnly(delivery.expected_delivery_date || order?.expectedDeliveryDate)}</td><td>${money(delivery.amount)}</td></tr>`; })) : '<div class="empty-state">لا توجد تسليمات مسجلة لهذا العميل.</div>')}</section>
+    <section class="client-detail-section">${panel("الموديلات المسلّمة", deliveries.length ? table(["الموديل","الكمية","سعر القطعة","القيمة المستحقة","المستلم","التاريخ"], deliveries.map((delivery) => { const order = data.models.find((item) => item.id === delivery.order_id); return `<tr><td>${escapeHtml(order?.name || "طلب مؤرشف")}</td><td>${new Intl.NumberFormat("ar-EG").format(delivery.quantity)} قطعة</td><td>${money(delivery.price_per_piece)}</td><td>${money(delivery.amount)}</td><td>${escapeHtml(delivery.recipient_name || "—")}</td><td>${formatDateTime(delivery.delivered_at)}</td></tr>`; })) : '<div class="empty-state">لا توجد تسليمات مسجلة لهذا العميل.</div>')}</section>
+    <section class="client-detail-section">${panel("القماش الوارد للعميل وحركته", clientFabrics.length ? table(["القماش / اللون","النوع","المتاح","الحركة","الكمية","التاريخ"], clientFabricTransactions.map((transaction) => { const fabric = clientFabrics.find((item) => item.id === transaction.fabric_id); return `<tr><td>${escapeHtml(fabric?.name || "—")} · ${escapeHtml(fabric?.color_name || fabric?.color_number || "لون غير مسمى")}</td><td>${escapeHtml(fabric?.fabric_type || "—")}</td><td>${new Intl.NumberFormat("ar-EG", { maximumFractionDigits: 3 }).format(fabric?.quantity_available || 0)} ${escapeHtml(fabric?.unit || "")}</td><td>${escapeHtml(transaction.transaction_type)}</td><td>${new Intl.NumberFormat("ar-EG", { maximumFractionDigits: 3 }).format(transaction.quantity)} ${escapeHtml(fabric?.unit || "")}</td><td>${formatDateTime(transaction.created_at)}</td></tr>`; })) : '<div class="empty-state">لا يوجد قماش مرتبط بهذا العميل.</div>')}</section>
     <section class="client-detail-section">${panel("السجل المالي الكامل للدفعات والتسليمات", financialEntries.length ? table(["النوع","الموديل / المرجع","التفاصيل","الأثر المالي","التاريخ والوقت"], financialEntries.map((entry) => `<tr><td>${escapeHtml(entry.type)}</td><td>${escapeHtml(entry.reference)}</td><td>${escapeHtml(entry.detail)}</td><td class="${entry.amount < 0 ? "financial-credit" : "financial-debit"}">${money(entry.amount)}</td><td>${formatDateTime(entry.date)}</td></tr>`)) : '<div class="empty-state">لا توجد حركات مالية مسجلة لهذا العميل حتى الآن.</div>')}</section>
     <section class="client-detail-section">${panel("ملاحظات وتنبيهات خاصة بالعميل", `${clientNotes.length ? `<div class="client-note-list">${clientNotes.map((note) => `<article><p>${escapeHtml(note.note || "")}</p><time>${formatDateTime(note._createdAt || note.created_at)}</time></article>`).join("")}</div>` : '<div class="empty-state">لا توجد ملاحظات مسجلة.</div>'}<form class="client-note-form" data-client-note="${escapeHtml(client.id)}"><label for="client-note-${escapeHtml(client.id)}">إضافة ملاحظة أو تنبيه</label><textarea id="client-note-${escapeHtml(client.id)}" name="note" rows="3" required></textarea><button class="button button-secondary" type="submit">حفظ الملاحظة</button></form>`)}</section>
     <section class="client-detail-section"><header class="section-heading"><div><h2>الفترات المالية السابقة</h2><p>الأوامر والتسليمات محفوظة في الأرشيف ولا تُحذف عند التصفية.</p></div><button class="button button-primary" type="button" data-settle-client="${escapeHtml(client.id)}">تصفية الحساب وترحيل الرصيد</button></header>
@@ -1164,10 +1269,31 @@ function pendingAccountRows(accounts) {
   return pending.map((account) => `<tr><td>${escapeHtml(account.name)}</td><td>${escapeHtml(account.username)}</td><td>${escapeHtml(account.phone || "—")}</td><td>${formatDateTime(account.created_at)}</td><td><select aria-label="الدور الجديد" data-pending-role="${escapeHtml(account.id)}"><option value="">اختر الدور</option><option value="client">عميل</option><option value="worker">عامل</option><option value="cutting">مشرف قص</option><option value="sewing">مشرف خياطة</option></select></td><td><button class="row-action" type="button" data-action="activate-account" data-account-id="${escapeHtml(account.id)}">تفعيل الحساب</button></td></tr>`);
 }
 
-function fabricSelectOptions(fabrics, selectedId = "", clients = []) {
-  return `<option value="">اختر خامة من المخزون</option>${fabrics.map((fabric) =>
+function fabricSelectOptions(fabrics, selectedId = "", clients = [], allowExternal = false) {
+  return `<option value="">اختر خامة من المخزون</option>${allowExternal ? `<option value="external" ${selectedId === "external" ? "selected" : ""}>خامة أخرى / خارجية غير مسجلة بالمخزن</option>` : ""}${fabrics.map((fabric) =>
     `<option value="${escapeHtml(fabric.id)}" data-name="${escapeHtml(fabric.name)}" data-unit="${escapeHtml(fabric.unit)}" data-available="${escapeHtml(fabric.quantity_available)}" ${fabric.stock_scope === "incoming" && !fabric.customer_id ? "disabled" : ""} ${fabric.id === selectedId ? "selected" : ""}>${escapeHtml(fabric.name)}${fabric.customer_id ? ` · ${escapeHtml(clients.find((client) => client.id === fabric.customer_id)?.name || "عميل مرتبط")}` : fabric.stock_scope === "incoming" ? " · بانتظار تعيين العميل" : ""} · ${escapeHtml(fabric.color_name || fabric.color_hex)} · متاح ${new Intl.NumberFormat("ar-EG", { maximumFractionDigits: 3 }).format(fabric.quantity_available)} ${escapeHtml(fabric.unit)}</option>`
   ).join("")}`;
+}
+
+function incomingFabricLineMarkup(index) {
+  return `<div class="fabric-entry-row" data-fabric-entry-row>
+    <label class="field"><span>اسم القماش / الرقم</span><input name="name" maxlength="120" required></label>
+    <label class="field"><span>نوع القماش</span><input name="type" maxlength="120"></label>
+    <label class="field"><span>اسم اللون</span><input name="colorName" maxlength="64"></label>
+    <label class="field"><span>رقم اللون</span><input name="colorNumber" maxlength="64"></label>
+    <label class="field"><span>درجة اللون</span><input name="colorHex" type="color" value="#ffffff" required></label>
+    <label class="field"><span>الكمية</span><input name="quantity" type="number" min="0.001" step="0.001" required></label>
+    <label class="field"><span>الوحدة</span><select name="unit" required><option value="متر">متر</option><option value="طوب">طوب</option><option value="ريب">ريب</option><option value="وحدة">وحدة</option></select></label>
+    ${index ? '<button type="button" class="row-action" data-remove-fabric-row>حذف الصنف</button>' : ""}
+  </div>`;
+}
+
+function ownerFabricReceiptLineMarkup(fabrics) {
+  return `<div class="fabric-entry-row owner-fabric-entry-row" data-fabric-entry-row>
+    <label class="field"><span>صنف قماش الإدارة</span><select name="fabricId" required>${fabricSelectOptions(fabrics)}</select></label>
+    <label class="field"><span>الكمية الواردة</span><input name="quantity" type="number" min="0.001" step="0.001" required></label>
+    <button type="button" class="row-action" data-remove-fabric-row>حذف الصنف</button>
+  </div>`;
 }
 
 function fabricStockView(data, isAdmin) {
@@ -1203,7 +1329,7 @@ function fabricStockView(data, isAdmin) {
     const amount = `${isOutflow ? "−" : "+"}${new Intl.NumberFormat("ar-EG", { maximumFractionDigits: 3 }).format(transaction.quantity)} ${escapeHtml(fabric?.unit || "")}`;
     return `<tr><td>${escapeHtml(fabric?.name || "خامة محذوفة")}</td><td>${escapeHtml(labels[transaction.transaction_type] || transaction.transaction_type)}</td><td>${amount}</td><td>${escapeHtml(order?.name || (transaction.order_id ? transaction.order_id.slice(0, 8) : "—"))}</td><td>${escapeHtml(transaction.notes || "—")}</td><td>${formatDateTime(transaction.created_at)}</td></tr>`;
   });
-  const incomingForm = `<form class="form-grid fabric-form" id="incoming-fabric-form"><div class="field"><label for="incoming-fabric-client">اسم العميل</label><select id="incoming-fabric-client" name="customerId"><option value="">عميل غير معروف / غير محدد حالياً</option>${data.clients.map((client) => `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)}</option>`).join("")}</select></div><div class="field"><label for="incoming-fabric-name">اسم القماش / الرقم</label><input id="incoming-fabric-name" name="name" maxlength="120" required></div><div class="field"><label for="incoming-fabric-type">نوع القماش</label><input id="incoming-fabric-type" name="type" maxlength="120"></div><div class="field"><label for="incoming-fabric-color-name">اسم اللون</label><input id="incoming-fabric-color-name" name="colorName" maxlength="64"></div><div class="field"><label for="incoming-fabric-color-number">رقم اللون</label><input id="incoming-fabric-color-number" name="colorNumber" maxlength="64"></div><div class="field"><label for="incoming-fabric-color-hex">درجة اللون</label><input id="incoming-fabric-color-hex" name="colorHex" type="color" value="#ffffff" required></div><div class="field"><label for="incoming-fabric-quantity">الكمية الواردة</label><input id="incoming-fabric-quantity" name="quantity" type="number" min="0.001" step="0.001" required></div><div class="field"><label for="incoming-fabric-unit">الوحدة</label><select id="incoming-fabric-unit" name="unit" required><option value="متر">متر</option><option value="ثوب">ثوب</option><option value="لفة">لفة</option></select></div><div class="field"><label for="incoming-fabric-date">تاريخ ووقت الاستلام</label><input id="incoming-fabric-date" name="receivedAt" type="datetime-local" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}" required></div><div class="field"><label for="incoming-fabric-notes">ملاحظات</label><input id="incoming-fabric-notes" name="notes" maxlength="500"></div><div class="form-actions"><button class="button button-primary" type="submit">＋ تسجيل القماش الوارد</button></div></form>`;
+  const incomingForm = `<form class="form-grid fabric-form" id="incoming-fabric-form"><div class="field"><label for="incoming-fabric-client">اسم العميل</label><select id="incoming-fabric-client" name="customerId"><option value="">عميل غير معروف / غير محدد حالياً</option>${data.clients.map((client) => `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)}</option>`).join("")}</select></div><div class="field"><label for="incoming-fabric-date">تاريخ ووقت الاستلام</label><input id="incoming-fabric-date" name="receivedAt" type="datetime-local" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}" required></div><div class="field wide"><label for="incoming-fabric-notes">ملاحظات الحركة</label><input id="incoming-fabric-notes" name="notes" maxlength="500"></div><div class="wide fabric-entry-list" data-fabric-entry-list>${incomingFabricLineMarkup(0)}</div><div class="form-actions"><button class="button button-secondary" type="button" data-add-fabric-row>＋ إضافة نوع قماش</button><button class="button button-primary" type="submit">＋ تسجيل الأقمشة الواردة</button></div></form>`;
   const incomingSection = `<section id="incoming-fabric" class="dashboard-section">
     <div class="stats-grid">${stat("سجلات القماش الوارد", incomingFabrics.length, "مرتبطة بعميل أو بانتظار التحديد")}${stat("المتاح حالياً للقص", new Intl.NumberFormat("ar-EG", { maximumFractionDigits: 3 }).format(incomingFabrics.reduce((sum, fabric) => sum + Number(fabric.quantity_available), 0)), "بعد خصم القماش المستخدم")}${isAdmin ? stat("حركات القماش", totalTransactions, "سجل توريد وسحب") : ""}</div>
     ${panel("تسجيل القماش الوارد للقص", incomingForm, "يمكن اختيار العميل الآن أو تركه غير محدد ليعينه الأدمن لاحقاً.")}
@@ -1214,8 +1340,8 @@ function fabricStockView(data, isAdmin) {
   const ownerSection = `<section id="owner-fabric" class="dashboard-section">
     <div class="stats-grid">${stat("أصناف قماش الإدارة", ownerFabrics.length, "إدارة خاصة بالأدمن")}${stat("حركات المخزون", totalTransactions, "وارد وسحب")}</div>
     <div class="fabric-admin-tools">
-      ${panel("إضافة / تعديل صنف قماش", `<form class="form-grid fabric-form" id="fabric-form"><input type="hidden" name="fabricId"><div class="field"><label for="fabric-name">اسم القماش</label><input id="fabric-name" name="name" maxlength="120" required></div><div class="field"><label for="fabric-type">نوع القماش</label><input id="fabric-type" name="type" maxlength="120"></div><div class="field"><label for="fabric-color-name">اسم اللون</label><input id="fabric-color-name" name="colorName" maxlength="64"></div><div class="field"><label for="fabric-color-hex">درجة اللون</label><input id="fabric-color-hex" name="colorHex" type="color" value="#ffffff" required></div><div class="field"><label for="fabric-unit">وحدة المخزون</label><select id="fabric-unit" name="unit" required><option value="متر">متر</option><option value="ثوب">ثوب</option><option value="لفة">لفة</option></select></div><div class="form-actions"><button class="button button-primary" type="submit">حفظ بيانات القماش</button><button class="row-action" type="button" data-cancel-fabric-edit hidden>إلغاء التعديل</button></div></form>`, "تغيير الوحدة غير متاح بعد تسجيل حركات على الصنف")}
-      ${panel("تسجيل أقمشة واردة للإدارة", `<form class="form-grid fabric-form" id="fabric-receipt-form"><div class="field"><label for="fabric-receipt-item">صنف قماش الإدارة</label><select id="fabric-receipt-item" name="fabricId" required>${fabricSelectOptions(ownerFabrics)}</select></div><div class="field"><label for="fabric-receipt-quantity">الكمية الواردة</label><input id="fabric-receipt-quantity" name="quantity" type="number" min="0.001" step="0.001" required></div><div class="field"><label for="fabric-receipt-date">تاريخ الورود</label><input id="fabric-receipt-date" name="receivedAt" type="datetime-local" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}" required></div><div class="field"><label for="fabric-receipt-notes">ملاحظات / مرجع</label><input id="fabric-receipt-notes" name="notes" maxlength="500"></div><div class="form-actions"><button class="button button-primary" type="submit">＋ تسجيل كمية واردة</button></div></form>`, "هذا رصيد الإدارة فقط، ولا يظهر في سجل الوارد الخاص بمشرف القص")}
+      ${panel("إضافة / تعديل صنف قماش", `<form class="form-grid fabric-form" id="fabric-form"><input type="hidden" name="fabricId"><div class="field"><label for="fabric-name">اسم القماش</label><input id="fabric-name" name="name" maxlength="120" required></div><div class="field"><label for="fabric-type">نوع القماش</label><input id="fabric-type" name="type" maxlength="120"></div><div class="field"><label for="fabric-color-name">اسم اللون</label><input id="fabric-color-name" name="colorName" maxlength="64"></div><div class="field"><label for="fabric-color-hex">درجة اللون</label><input id="fabric-color-hex" name="colorHex" type="color" value="#ffffff" required></div><div class="field"><label for="fabric-unit">وحدة المخزون</label><select id="fabric-unit" name="unit" required><option value="متر">متر</option><option value="طوب">طوب</option><option value="ريب">ريب</option><option value="وحدة">وحدة</option></select></div><div class="form-actions"><button class="button button-primary" type="submit">حفظ بيانات القماش</button><button class="row-action" type="button" data-cancel-fabric-edit hidden>إلغاء التعديل</button></div></form>`, "تغيير الوحدة غير متاح بعد تسجيل حركات على الصنف")}
+      ${panel("تسجيل أقمشة واردة للإدارة", `<form class="form-grid fabric-form" id="fabric-receipt-form"><div class="field"><label for="fabric-receipt-date">تاريخ الورود</label><input id="fabric-receipt-date" name="receivedAt" type="datetime-local" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}" required></div><div class="field"><label for="fabric-receipt-notes">ملاحظات / مرجع</label><input id="fabric-receipt-notes" name="notes" maxlength="500"></div><div class="wide fabric-entry-list" data-fabric-entry-list>${ownerFabricReceiptLineMarkup(ownerFabrics)}</div><div class="form-actions"><button class="button button-secondary" type="button" data-add-fabric-row>＋ إضافة صنف</button><button class="button button-primary" type="submit">＋ تسجيل الكميات الواردة</button></div></form>`, "هذا رصيد الإدارة فقط، ولا يظهر في سجل الوارد الخاص بمشرف القص")}
       ${panel("تسوية رصيد قماش الإدارة", `<form class="form-grid fabric-form" id="fabric-adjustment-form"><div class="field"><label for="fabric-adjustment-item">صنف قماش الإدارة</label><select id="fabric-adjustment-item" name="fabricId" required>${fabricSelectOptions(ownerFabrics)}</select></div><div class="field"><label for="fabric-adjustment-quantity">فرق الكمية (+ زيادة / − نقص)</label><input id="fabric-adjustment-quantity" name="adjustment" type="number" step="0.001" required></div><div class="field"><label for="fabric-adjustment-date">تاريخ التسوية</label><input id="fabric-adjustment-date" name="adjustedAt" type="datetime-local" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}" required></div><div class="field"><label for="fabric-adjustment-notes">سبب التسوية</label><input id="fabric-adjustment-notes" name="notes" maxlength="500" required></div><div class="form-actions"><button class="button button-secondary" type="submit">حفظ تسوية المخزون</button></div></form>`, "يُسجل الفرق كحركة تدقيقية ولا يمكن أن يخفض الرصيد إلى أقل من صفر")}
     </div>
     ${panel("مخزون قماش الإدارة", table(["اسم القماش","النوع","اللون ورقمه","المتاح","آخر تحديث","إجراء"], fabricRows(ownerFabrics, true)))}
@@ -1238,7 +1364,8 @@ function adminView(data, accounts) {
     .map((client) => `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)}</option>`)
     .join("");
   return `
-    <section id="dashboard" class="dashboard-section"><div class="stats-grid">${stat("الموديلات الحالية", activeOrders.length, "ضمن أوامر التشغيل")}${stat("إجمالي القطع", new Intl.NumberFormat("ar-EG").format(totalUnits), "قطعة")}${stat("المدفوعات المسجلة", money(paid), "إجمالي الدفعات")}${stat("طلبات الانصراف", data.leaves.filter((item) => item.status === "قيد المراجعة").length, "بانتظار المراجعة")}</div></section>
+    <section id="dashboard" class="dashboard-section">${adminDashboardView(data)}<div class="stats-grid">${stat("إجمالي القطع", new Intl.NumberFormat("ar-EG").format(totalUnits), "قطعة")}${stat("المدفوعات المسجلة", money(paid), "إجمالي الدفعات")}${stat("طلبات الانصراف", data.leaves.filter((item) => item.status === "قيد المراجعة").length, "بانتظار المراجعة")}</div></section>
+    <section id="model-review" class="dashboard-section">${modelStatusReviewView(data)}</section>
     <section id="orders" class="dashboard-section">
       <div class="clients-toolbar"><div><h2>الموديلات والطلبيات</h2><p>سجّل الموديل أولاً، ثم حدّث العدد الفعلي بعد الفرش والقص.</p></div><button class="button button-primary" type="button" data-open-order-modal>＋ إضافة موديل / طلبية</button></div>
       ${panel("إدارة الموديلات والطلبيات", orderCards(activeOrders, true))}
@@ -1273,17 +1400,24 @@ function adminView(data, accounts) {
     <section id="finance" class="dashboard-section">
       ${panel("تسجيل دفعة مالية", `<div class="panel-body"><form id="payment-form" class="form-grid payment-form"><input type="hidden" name="editIndex" value=""><div class="field"><label for="payment-client">العميل</label><select id="payment-client" name="customerId" required><option value="">اختر العميل</option>${paymentClientOptions}</select></div><div class="field"><label for="payment-amount">المبلغ المدفوع (ج.م)</label><input id="payment-amount" name="amount" type="number" min="0.01" step="0.01" required></div><div class="field"><label for="payment-date">تاريخ الدفعة</label><input id="payment-date" name="date" type="date" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10)}" required></div><div class="field"><label for="payment-method">طريقة الدفع</label><select id="payment-method" name="method"><option>تحويل بنكي</option><option>نقدي</option><option>محفظة إلكترونية</option></select></div><div class="field"><label for="payment-reference">رقم الطلبية / مرجع</label><input id="payment-reference" name="reference" autocomplete="off"></div><div class="field"><label for="payment-notes">ملاحظات</label><input id="payment-notes" name="notes"></div><div class="form-actions"><button class="button button-primary" type="submit">تسجيل الدفعة</button><button class="row-action" type="button" data-cancel-edit hidden>إلغاء التعديل</button></div></form></div>`, "تُربط الدفعة بملف العميل المحدد")}
       ${panel("سجل الدفعات المالية", `<div class="panel-body"><div class="payment-filter field"><label for="payment-filter-client">تصفية حسب العميل</label><select id="payment-filter-client"><option value="">كل العملاء</option>${paymentFilterOptions}</select></div>${table(["العميل","المبلغ","التاريخ والوقت","طريقة الدفع","رقم الطلبية / المرجع","ملاحظات","إجراء"], paymentRows(data.payments, true, data.clients))}</div>`)}
+      ${cashLedgerView(data)}
     </section>
     <section id="workers-production" class="dashboard-section">${panel("طلبات وأذونات الانصراف", table(["الموظف","التاريخ","السبب","الحالة","إجراء"], data.leaves.map((item, index) => `<tr><td>${escapeHtml(item.name)}</td><td>${formatRecordDate(item.date)}</td><td>${escapeHtml(item.reason)}</td><td>${statusTag(item.status)}</td><td>${item.status === "قيد المراجعة" ? `<button class="row-action" data-action="approve-leave" data-index="${index}" type="button">اعتماد</button> <button class="row-action" data-action="deny-leave" data-index="${index}" type="button">رفض</button>` : "—"}</td></tr>`)))}</section>
     ${fabricStockView(data, true)}
-    <section id="client-accounts" class="dashboard-section">${clientAccountsOverview(data)}</section>
     <section id="clients" class="dashboard-section">
-      <div class="clients-toolbar"><div><h2>العملاء</h2><p>إدارة ملفات العملاء ومتابعة الأرصدة.</p></div><button class="button button-primary" type="button" data-open-client-modal>＋ إضافة عميل جديد</button></div>
-      ${panel("ملفات العملاء", table(["العميل","رقم الهاتف","حساب الدخول","تاريخ إنشاء الملف","إجراء"], data.clients.map((client) => {
+      <div class="client-management-tabs" role="tablist" aria-label="إدارة العملاء">
+        <button type="button" role="tab" aria-selected="${clientManagementTab === "summary"}" class="client-management-tab${clientManagementTab === "summary" ? " active" : ""}" data-client-tab="summary">ملخص العملاء والحسابات</button>
+        <button type="button" role="tab" aria-selected="${clientManagementTab === "profiles"}" class="client-management-tab${clientManagementTab === "profiles" ? " active" : ""}" data-client-tab="profiles">ملفات العملاء</button>
+      </div>
+      <div data-client-panel="summary"${clientManagementTab === "summary" ? "" : " hidden"}>${clientAccountsOverview(data)}</div>
+      <div data-client-panel="profiles"${clientManagementTab === "profiles" ? "" : " hidden"}>
+      <div class="clients-toolbar"><div><h2>ملفات العملاء</h2><p>بيانات العميل والمحل ووسائل التواصل والحساب.</p></div><button class="button button-primary" type="button" data-open-client-modal>＋ إضافة عميل جديد</button></div>
+      ${panel("سجل ملفات العملاء", table(["العميل / المحل","رقم العميل","الهاتف / واتساب","حساب الدخول","إجراء"], data.clients.map((client) => {
         const linkedUser = data.users.find((user) => user.id === client.user_id);
-        return `<tr><td>${escapeHtml(client.name)}</td><td>${escapeHtml(client.phone || "—")}</td><td>${linkedUser ? `${escapeHtml(linkedUser.username)} · ${escapeHtml(linkedUser.status === "suspended" ? "متوقف" : "نشط")}` : "لا يوجد حساب دخول"}</td><td>${formatDateTime(client.created_at)}</td><td><button class="row-action" type="button" data-open-client-details="${escapeHtml(client.id)}">تفاصيل الحساب</button> <button class="row-action" type="button" data-edit-customer="${escapeHtml(client.id)}">تعديل البيانات</button></td></tr>`;
+        return `<tr><td>${escapeHtml(client.name)}${client.brand_name ? `<br><small>${escapeHtml(client.brand_name)}</small>` : ""}</td><td>${escapeHtml(client.client_number || "—")}</td><td>${escapeHtml(client.whatsapp || client.phone || "—")}</td><td>${linkedUser ? `${escapeHtml(linkedUser.username)} · ${escapeHtml(linkedUser.status === "suspended" ? "متوقف" : "نشط")}` : "لا يوجد حساب دخول"}</td><td><button class="row-action" type="button" data-open-client-details="${escapeHtml(client.id)}">تفاصيل الحساب والعمولة</button> <button class="row-action" type="button" data-edit-customer="${escapeHtml(client.id)}">تعديل البيانات</button></td></tr>`;
       })))}
-      <div class="modal-backdrop" id="client-modal" hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="client-modal-title"><button class="modal-close" type="button" data-close-client aria-label="إغلاق">×</button><h2 id="client-modal-title">إضافة عميل جديد</h2><p>إنشاء ملف عميل للتعاملات والطلبيات، دون إنشاء بيانات دخول.</p><form id="client-form" class="modal-form"><input type="hidden" name="clientId"><label for="client-name">اسم العميل</label><input id="client-name" name="name" required><label for="client-phone">رقم الهاتف</label><input id="client-phone" name="phone" type="tel"><label for="client-notes">ملاحظات</label><textarea id="client-notes" name="notes" rows="3"></textarea><div class="form-actions"><button class="button button-primary" type="submit">حفظ العميل</button><button class="row-action" type="button" data-close-client>إلغاء</button></div></form></section></div>
+      <div class="modal-backdrop" id="client-modal" hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="client-modal-title"><button class="modal-close" type="button" data-close-client aria-label="إغلاق">×</button><h2 id="client-modal-title">إضافة عميل جديد</h2><p>بيانات ملف العميل ووسائل التواصل.</p><form id="client-form" class="modal-form client-profile-form"><input type="hidden" name="clientId"><label for="client-name">اسم العميل الشخصي</label><input id="client-name" name="name" required><label for="client-brand">اسم المحل أو البراند</label><input id="client-brand" name="brandName"><label for="client-number">رقم العميل</label><input id="client-number" name="clientNumber"><label for="client-phone">رقم الهاتف</label><input id="client-phone" name="phone" type="tel"><label for="client-cash-phone">رقم كاش</label><input id="client-cash-phone" name="cashPhone" type="tel"><label for="client-instagram">حساب إنستا</label><input id="client-instagram" name="instagram"><label for="client-whatsapp">رقم واتساب</label><input id="client-whatsapp" name="whatsapp" type="tel"><label for="client-notes">ملاحظات</label><textarea id="client-notes" name="notes" rows="3"></textarea><div class="form-actions"><button class="button button-primary" type="submit">حفظ العميل</button><button class="row-action" type="button" data-close-client>إلغاء</button></div></form></section></div>
+      </div>
     </section>
     <section id="client-details" class="dashboard-section">${data.clients.some((client) => client.id === selectedClientId) ? clientDetailsView(data.clients.find((client) => client.id === selectedClientId), data) : '<div class="empty-state">اختر عميلاً لعرض تفاصيل حسابه.</div>'}</section>
     <section id="accounts" class="dashboard-section">
@@ -1313,9 +1447,11 @@ function cuttingView(data) {
     <p class="cutting-target">${item.total > 0 ? `العدد الحالي: ${new Intl.NumberFormat("ar-EG").format(item.total)} قطعة` : "العدد النهائي: بانتظار اعتماد القص"}</p>
     <form class="cutting-finish-form" data-finish-cutting="${escapeHtml(item.order)}">
       <div class="form-section-grid cutting-bed-inputs">
-        <label class="field"><span>قماش الفرشة من الوارد المخصص للقص</span><select name="fabricId" data-fabric-select required>${fabricSelectOptions(data.fabrics, item.fabricId, data.clients)}</select><small data-fabric-stock-hint></small></label>
-        <label class="field"><span>كمية القماش المستخدمة (<span data-fabric-unit>${escapeHtml(data.fabrics.find((fabric) => fabric.id === item.fabricId)?.unit || "وحدة")}</span>)</span><input name="fabricQuantity" type="number" min="0.001" step="0.001" value="${item.fabricQuantity || ""}" required></label>
-        <label class="field"><span>عدد الأتواب</span><input name="boltCount" type="number" min="1" step="1" value="${item.boltCount || ""}" required></label>
+        <label class="field"><span>قماش الفرشة من الوارد المخصص للقص</span><select name="fabricId" data-fabric-select required>${fabricSelectOptions(data.fabrics, item.fabricId, data.clients, true)}</select><small data-fabric-stock-hint></small></label>
+        <label class="field" data-fabric-quantity-field><span>كمية القماش المستخدمة (<span data-fabric-unit>${escapeHtml(data.fabrics.find((fabric) => fabric.id === item.fabricId)?.unit || "وحدة")}</span>)</span><input name="fabricQuantity" type="number" min="0.001" step="0.001" value="${item.fabricQuantity || ""}" required></label>
+        <label class="field" data-bolt-count-field><span data-bolt-count-label>عدد الأتواب</span><input name="boltCount" type="number" min="1" step="1" value="${item.boltCount || ""}" required></label>
+        <label class="field" data-external-fabric-source-field hidden><span>مصدر الخامة الخارجية / وصفها</span><input name="externalFabricSource" maxlength="160" value="${escapeHtml(item.externalFabricSource || "")}" placeholder="مثال: بواقي قماش قديم من المخزن"></label>
+        <label class="field" data-external-fabric-source-field hidden><span>وحدة الخامة الخارجية</span><select name="externalFabricUnit"><option value="متر" ${item.externalFabricUnit === "متر" ? "selected" : ""}>متر</option><option value="طوب" ${item.externalFabricUnit === "طوب" ? "selected" : ""}>طوب</option><option value="ريب" ${item.externalFabricUnit === "ريب" ? "selected" : ""}>ريب</option><option value="وحدة" ${item.externalFabricUnit === "وحدة" ? "selected" : ""}>وحدة</option></select></label>
       </div>
       ${sizePickerMarkup(item.sizes, `cutting-${item.order}`, false)}
       ${cuttingColorPlyMarkup(item.colorPlyData, item.colors, item.layerCount, `cutting-${item.order}`)}
@@ -1347,9 +1483,11 @@ function cuttingRequestsView(data) {
         <label class="field"><span>العميل</span><select name="customerId" required><option value="">اختر العميل</option>${clientOptions}</select></label>
         <label class="field"><span>اسم الموديل</span><input name="modelName" autocomplete="off"></label>
         <label class="field"><span>رقم الموديل</span><input name="modelNumber" autocomplete="off"></label>
-        <label class="field"><span>قماش الفرشة من الوارد المخصص للقص</span><select name="fabricId" data-fabric-select required>${fabricSelectOptions(data.fabrics, "", data.clients)}</select><small data-fabric-stock-hint></small></label>
-        <label class="field"><span>كمية القماش المستخدمة (<span data-fabric-unit>وحدة</span>)</span><input name="fabricQuantity" type="number" min="0.001" step="0.001" required></label>
-        <label class="field"><span>عدد الأتواب</span><input name="boltCount" type="number" min="1" step="1" required></label>
+        <label class="field"><span>قماش الفرشة من الوارد المخصص للقص</span><select name="fabricId" data-fabric-select required>${fabricSelectOptions(data.fabrics, "", data.clients, true)}</select><small data-fabric-stock-hint></small></label>
+        <label class="field" data-fabric-quantity-field><span>كمية القماش المستخدمة (<span data-fabric-unit>وحدة</span>)</span><input name="fabricQuantity" type="number" min="0.001" step="0.001" required></label>
+        <label class="field" data-bolt-count-field><span data-bolt-count-label>عدد الأتواب</span><input name="boltCount" type="number" min="1" step="1" required></label>
+        <label class="field" data-external-fabric-source-field hidden><span>مصدر الخامة الخارجية / وصفها</span><input name="externalFabricSource" maxlength="160" placeholder="مثال: بواقي قماش قديم من المخزن"></label>
+        <label class="field" data-external-fabric-source-field hidden><span>وحدة الخامة الخارجية</span><select name="externalFabricUnit"><option value="متر">متر</option><option value="طوب">طوب</option><option value="ريب">ريب</option><option value="وحدة">وحدة</option></select></label>
       </div></section>
       ${sizePickerMarkup("", "new-cutting", false)}
       ${cuttingColorPlyMarkup(null, "", 0, "new-cutting")}
@@ -1405,7 +1543,7 @@ function clientView(data, session) {
     && (!latestSettlement || new Date(item._createdAt || item.created_at).getTime() >= new Date(latestSettlement.date || latestSettlement._createdAt).getTime())
   );
   const totalAmount = sumMoney(currentOrders.map((item) => Number(item.deliveredPieces) * Number(item.pricePerPiece)));
-  const expectedTotal = sumMoney(currentOrders.map((item) => Number(item.quantity) * Number(item.pricePerPiece)));
+  const expectedTotal = sumMoney(currentOrders.map((item) => item.expectedAmount));
   const paymentsTotal = sumMoney(payments.map((item) => item.amount));
   const orderPaid = sumMoney(currentOrders.map((item) => item.paidAmount));
   const totalPaid = addMoney(paymentsTotal, orderPaid);
@@ -1426,7 +1564,7 @@ function navigationItems(role, info) {
   if (role === "admin") {
     return [
       { id: "dashboard", icon: "▦", label: "لوحة التحكم" },
-      { id: "client-accounts", icon: "ج.م", label: "ملخص العملاء والحسابات" },
+      { id: "model-review", icon: "⇅", label: "مراجعة وفرز الموديلات" },
       { id: "clients", icon: "◇", label: "إدارة العملاء" },
       { id: "orders", icon: "▤", label: "الموديلات والطلبيات" },
       { id: "workers-production", icon: "⌁", label: "العمال والإنتاج" },
@@ -1572,6 +1710,7 @@ function subscribeToFactoryUpdates(session) {
   if (session.role === "admin") {
     channel = channel
       .on("postgres_changes", { event: "*", schema: "public", table: "factory_fabric_transactions" }, () => scheduleRealtimeRefresh(session, "حركات القماش"))
+      .on("postgres_changes", { event: "*", schema: "public", table: "factory_cash_transactions" }, () => scheduleRealtimeRefresh(session, "الحركة النقدية"))
       .on("postgres_changes", { event: "*", schema: "public", table: "factory_auth_events" }, () => scheduleRealtimeRefresh(session, "تسجيلات الدخول والحسابات"))
       .on("postgres_changes", { event: "*", schema: "public", table: "factory_clients" }, () => scheduleRealtimeRefresh(session, "ملفات العملاء"));
   }
@@ -1667,29 +1806,68 @@ function bindCuttingActions(session) {
       const form = select.closest("form");
       const unit = form.querySelector("[data-fabric-unit]");
       const hint = form.querySelector("[data-fabric-stock-hint]");
+      const quantityField = form.querySelector("[data-fabric-quantity-field]");
+      const quantityInput = form.elements.fabricQuantity;
+      const boltLabel = form.querySelector("[data-bolt-count-label]");
+      const externalFields = form.querySelectorAll("[data-external-fabric-source-field]");
+      const externalInput = form.elements.externalFabricSource;
+      const externalUnit = form.elements.externalFabricUnit;
       const available = selected?.dataset.available;
-      if (unit) unit.textContent = selected?.dataset.unit || "وحدة";
-      if (hint) hint.textContent = selected?.value
-        ? `المتاح حاليًا: ${new Intl.NumberFormat("ar-EG", { maximumFractionDigits: 3 }).format(Number(available || 0))} ${selected.dataset.unit || ""}`
-        : "اختر صنفًا من مخزون القماش.";
+      const external = select.value === "external";
+      const selectedUnit = external ? externalUnit.value : selected?.dataset.unit || "وحدة";
+      const boltUnit = selectedUnit === "طوب";
+      if (unit) unit.textContent = selectedUnit;
+      if (select.value === "external") {
+        externalFields.forEach((field) => { field.hidden = false; });
+        if (externalInput) externalInput.required = true;
+        if (externalUnit) externalUnit.required = true;
+        if (select.required) select.required = false;
+        if (hint) hint.textContent = "الخامة الخارجية لا تخصم من مخزون القماش.";
+      } else {
+        externalFields.forEach((field) => { field.hidden = true; });
+        if (externalInput) externalInput.required = false;
+        if (externalUnit) externalUnit.required = false;
+        if (!select.required) select.required = true;
+        if (hint) hint.textContent = select.value
+          ? `المتاح حاليًا: ${new Intl.NumberFormat("ar-EG", { maximumFractionDigits: 3 }).format(Number(available || 0))} ${selected.dataset.unit || ""}`
+          : "اختر صنفًا من مخزون القماش، أو سجّل مصدر خامة خارجية.";
+      }
+      if (quantityField) quantityField.hidden = boltUnit;
+      if (quantityInput) {
+        quantityInput.required = !boltUnit;
+        if (boltUnit) quantityInput.value = form.elements.boltCount.value;
+      }
+      if (boltLabel) boltLabel.textContent = boltUnit ? "عدد الطوب" : "عدد الأتواب";
+      if (boltUnit && form.elements.boltCount.value && quantityInput) quantityInput.value = form.elements.boltCount.value;
     };
     select.addEventListener("change", refreshFabricHint);
+    select.closest("form").elements.externalFabricUnit.addEventListener("change", refreshFabricHint);
+    select.closest("form").elements.boltCount.addEventListener("input", () => {
+      if ((select.value === "external" ? select.closest("form").elements.externalFabricUnit.value : select.selectedOptions[0]?.dataset.unit) === "طوب") {
+        select.closest("form").elements.fabricQuantity.value = select.closest("form").elements.boltCount.value;
+      }
+    });
     refreshFabricHint();
   });
   const readCuttingInputs = (form) => {
     const cuttingData = updateCuttingCalculation(form);
     const boltCount = Number(form.elements.boltCount.value);
-    const fabricId = form.elements.fabricId.value;
+    const selectedFabricId = form.elements.fabricId.value;
+    const isExternal = selectedFabricId === "external";
+    const fabricUnit = isExternal ? form.elements.externalFabricUnit.value : form.elements.fabricId.selectedOptions[0]?.dataset.unit || "";
+    const fabricId = isExternal ? null : selectedFabricId;
     const fabricQuantity = Number(form.elements.fabricQuantity.value);
-    const fabric = form.elements.fabricId.selectedOptions[0]?.dataset.name || "";
+    const externalFabricSource = isExternal ? String(form.elements.externalFabricSource.value).trim() : "";
+    const fabric = isExternal ? externalFabricSource : form.elements.fabricId.selectedOptions[0]?.dataset.name || "";
     const { sizeData, total } = cuttingData;
-    if (!fabricId || !fabric || !Number.isFinite(fabricQuantity) || fabricQuantity <= 0
+    if ((!isExternal && !fabricId) || !fabric || !Number.isFinite(fabricQuantity) || fabricQuantity <= 0
+      || (isExternal && !["متر", "طوب", "ريب", "وحدة"].includes(fabricUnit))
       || !Number.isSafeInteger(boltCount) || boltCount < 1
       || !sizeData.type || !Object.keys(sizeData.counts).length || !Number.isSafeInteger(total) || total <= 0
       || cuttingData.colorPlyData.colors.length === 0
       || cuttingData.colorPlyData.colors.some((entry) => !entry.name || !Number.isSafeInteger(entry.plys) || entry.plys < 1)
       || new Set(cuttingData.colorPlyData.colors.map((entry) => entry.color)).size !== cuttingData.colorPlyData.colors.length) {
-      window.factoryUI.toast("اختر خامة من القماش الوارد للقص، وحدد كمية السحب والأتواب، ثم راجع المقاسات والألوان والرئات.", "error");
+      window.factoryUI.toast("اختر خامة من المخزون أو اكتب مصدر الخامة الخارجية، وحدد الكمية وعدد الطوب/الأتواب، ثم راجع المقاسات والألوان والرئات.", "error");
       return null;
     }
     return {
@@ -1697,7 +1875,10 @@ function bindCuttingActions(session) {
       fabric,
       fabricId,
       fabricQuantity,
+      fabricUnit,
+      externalFabricUnit: isExternal ? fabricUnit : "",
       boltCount,
+      externalFabricSource,
       technicalNotes: String(form.elements.technicalNotes.value).trim()
     };
   };
@@ -1710,7 +1891,8 @@ function bindCuttingActions(session) {
       requested_bolt_count: cuttingData.boltCount,
       requested_technical_notes: cuttingData.technicalNotes,
       requested_fabric_id: cuttingData.fabricId,
-      requested_fabric_quantity: cuttingData.fabricQuantity
+      requested_fabric_quantity: cuttingData.fabricQuantity,
+      requested_external_fabric_unit: cuttingData.externalFabricUnit
     });
     if (error?.code === "PGRST202") throw new Error("دالة تحديث الفرش غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
     if (error) throw error;
@@ -1764,7 +1946,8 @@ function bindCuttingActions(session) {
         requested_bolt_count: cuttingData.boltCount,
         requested_technical_notes: cuttingData.technicalNotes,
         requested_fabric_id: cuttingData.fabricId,
-        requested_fabric_quantity: cuttingData.fabricQuantity
+        requested_fabric_quantity: cuttingData.fabricQuantity,
+        requested_external_fabric_unit: cuttingData.externalFabricUnit
       });
       if (error?.code === "PGRST202") throw new Error("دالة إنهاء القص غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
       if (error) throw error;
@@ -1813,7 +1996,8 @@ function bindCuttingActions(session) {
         requested_bolt_count: validInputs.boltCount,
         requested_technical_notes: validInputs.technicalNotes,
         requested_fabric_id: validInputs.fabricId,
-        requested_fabric_quantity: validInputs.fabricQuantity
+        requested_fabric_quantity: validInputs.fabricQuantity,
+        requested_external_fabric_unit: validInputs.externalFabricUnit
       });
       if (error?.code === "PGRST202") throw new Error("دالة إرسال القصة غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
       if (error) throw error;
@@ -1926,26 +2110,29 @@ function bindIncomingFabricActions(session) {
     try {
       const receivedAt = new Date(form.elements.receivedAt.value);
       if (Number.isNaN(receivedAt.getTime())) throw new Error("أدخل تاريخ ووقت استلام صالحين.");
-      const { error } = await supabaseClient.rpc("register_factory_incoming_fabric", {
+      const items = [...form.querySelectorAll("[data-fabric-entry-row]")].map((row) => ({
+        name: String(row.querySelector('[name="name"]').value).trim(),
+        type: String(row.querySelector('[name="type"]').value).trim(),
+        colorName: String(row.querySelector('[name="colorName"]').value).trim(),
+        colorNumber: String(row.querySelector('[name="colorNumber"]').value).trim(),
+        colorHex: row.querySelector('[name="colorHex"]').value,
+        quantity: Number(row.querySelector('[name="quantity"]').value),
+        unit: row.querySelector('[name="unit"]').value
+      }));
+      const { error } = await supabaseClient.rpc("register_factory_incoming_fabrics", {
         requested_customer_id: form.elements.customerId.value || null,
-        requested_name: String(form.elements.name.value).trim(),
-        requested_type: String(form.elements.type.value).trim(),
-        requested_color_name: String(form.elements.colorName.value).trim(),
-        requested_color_number: String(form.elements.colorNumber.value).trim(),
-        requested_color_hex: form.elements.colorHex.value,
-        requested_quantity: Number(form.elements.quantity.value),
-        requested_unit: form.elements.unit.value,
+        requested_items: items,
         requested_received_at: receivedAt.toISOString(),
         requested_notes: String(form.elements.notes.value).trim()
       });
-      if (error?.code === "PGRST202") throw new Error("دالة تسجيل القماش الوارد غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+      if (error?.code === "PGRST202") throw new Error("دالة تسجيل أصناف القماش الوارد المتعددة غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
       if (error) throw error;
       registered = true;
       form.reset();
-      form.elements.colorHex.value = "#ffffff";
+      form.querySelectorAll('[name="colorHex"]').forEach((input) => { input.value = "#ffffff"; });
       form.elements.receivedAt.value = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16);
       await refreshDashboard(session);
-      window.factoryUI.toast("تم تسجيل القماش الوارد وتحديث سجل القص.");
+      window.factoryUI.toast("تم تسجيل أصناف القماش الواردة وتحديث سجل القص.");
     } catch (error) {
       window.factoryUI.toast(registered
         ? `تم تسجيل القماش، لكن تعذر تحديث الشاشة: ${error.message}`
@@ -1978,6 +2165,25 @@ function bindIncomingFabricActions(session) {
       window.factoryUI.toast(`تعذر تعيين العميل للقماش: ${error.message}`, "error");
     }
   }));
+}
+
+function bindFabricEntryRows() {
+  document.querySelectorAll("#incoming-fabric-form, #fabric-receipt-form").forEach((form) => {
+    form.addEventListener("click", (event) => {
+      const addButton = event.target.closest("[data-add-fabric-row]");
+      if (addButton) {
+        const list = form.querySelector("[data-fabric-entry-list]");
+        const markup = form.id === "fabric-receipt-form"
+          ? ownerFabricReceiptLineMarkup(dashboardData.fabrics.filter((fabric) => fabric.stock_scope === "owner"))
+          : incomingFabricLineMarkup(list.querySelectorAll("[data-fabric-entry-row]").length);
+        list.insertAdjacentHTML("beforeend", markup);
+        return;
+      }
+      const removeButton = event.target.closest("[data-remove-fabric-row]");
+      const row = removeButton?.closest("[data-fabric-entry-row]");
+      if (row && row.parentElement.querySelectorAll("[data-fabric-entry-row]").length > 1) row.remove();
+    });
+  });
 }
 
 function bindFabricAdminActions(session) {
@@ -2029,19 +2235,22 @@ function bindFabricAdminActions(session) {
     try {
       const receivedAt = new Date(receiptForm.elements.receivedAt.value);
       if (Number.isNaN(receivedAt.getTime())) throw new Error("أدخل تاريخ ووقتًا صالحين للورود.");
-      const { error } = await supabaseClient.rpc("record_factory_fabric_receipt", {
-        requested_fabric_id: receiptForm.elements.fabricId.value,
-        requested_quantity: Number(receiptForm.elements.quantity.value),
+      const items = [...receiptForm.querySelectorAll("[data-fabric-entry-row]")].map((row) => ({
+        fabricId: row.querySelector('[name="fabricId"]').value,
+        quantity: Number(row.querySelector('[name="quantity"]').value)
+      }));
+      const { error } = await supabaseClient.rpc("record_factory_fabric_receipts", {
+        requested_items: items,
         requested_received_at: receivedAt.toISOString(),
         requested_notes: String(receiptForm.elements.notes.value).trim()
       });
-      if (error?.code === "PGRST202") throw new Error("دالة تسجيل وارد القماش غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+      if (error?.code === "PGRST202") throw new Error("دالة تسجيل واردات القماش المتعددة غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
       if (error) throw error;
       recorded = true;
-      receiptForm.elements.quantity.value = "";
+      [...receiptForm.querySelectorAll('[name="quantity"]')].forEach((input) => { input.value = ""; });
       receiptForm.elements.notes.value = "";
       await refreshDashboard(session);
-      window.factoryUI.toast("تم تسجيل كمية القماش الواردة وتحديث الرصيد.");
+      window.factoryUI.toast("تم تسجيل كميات القماش الواردة وتحديث الأرصدة.");
     } catch (error) {
       window.factoryUI.toast(recorded
         ? `تم تسجيل القماش الوارد، لكن تعذر تحديث الشاشة: ${error.message}`
@@ -2098,6 +2307,7 @@ function bindFabricAdminActions(session) {
     fabricForm.querySelector("[data-cancel-fabric-edit]").hidden = false;
     fabricForm.scrollIntoView({ behavior: "smooth", block: "center" });
     fabricForm.elements.name.focus({ preventScroll: true });
+
   }));
   document.querySelectorAll("[data-delete-fabric]").forEach((button) => button.addEventListener("click", async () => {
     const fabric = dashboardData.fabrics.find((item) => item.id === button.dataset.deleteFabric);
@@ -2135,6 +2345,7 @@ function bindActions(session) {
     window.location.replace("../login.html");
   });
 
+  bindFabricEntryRows();
   bindIncomingFabricActions(session);
   if (session.role === "cutting") {
     bindPickers(document.querySelector("#app"));
@@ -2143,9 +2354,77 @@ function bindActions(session) {
   }
   if (session.role !== "admin") return;
   bindFabricAdminActions(session);
-  document.querySelectorAll("#client-accounts [data-quick-client-payment]").forEach((button) => {
+  const cashTransactionForm = document.querySelector("#cash-transaction-form");
+  cashTransactionForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = cashTransactionForm.querySelector('[type="submit"]');
+    button.disabled = true;
+    let saved = false;
+    try {
+      const occurredAt = new Date(cashTransactionForm.elements.occurredAt.value);
+      if (Number.isNaN(occurredAt.getTime())) throw new Error("أدخل تاريخ ووقتًا صالحين.");
+      const { error } = await supabaseClient.rpc("save_factory_cash_transaction", {
+        requested_direction: cashTransactionForm.elements.direction.value,
+        requested_category: String(cashTransactionForm.elements.category.value).trim(),
+        requested_description: String(cashTransactionForm.elements.description.value).trim(),
+        requested_amount: Number(cashTransactionForm.elements.amount.value),
+        requested_payment_method: String(cashTransactionForm.elements.method.value).trim(),
+        requested_occurred_at: occurredAt.toISOString()
+      });
+      if (error?.code === "PGRST202") throw new Error("دالة سجل النقدية غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+      if (error) throw error;
+      saved = true;
+      cashTransactionForm.reset();
+      cashTransactionForm.elements.method.value = "نقدي";
+      cashTransactionForm.elements.occurredAt.value = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+      await refreshDashboard(session);
+      window.factoryUI.toast("تم تسجيل الحركة النقدية وتحديث رصيد السجل.");
+    } catch (error) {
+      window.factoryUI.toast(saved
+        ? `تم تسجيل الحركة، لكن تعذر تحديث الشاشة: ${error.message}`
+        : `تعذر تسجيل الحركة النقدية: ${error.message}`, "error");
+    } finally {
+      button.disabled = false;
+    }
+  });
+  document.querySelectorAll("#clients [data-quick-client-payment]").forEach((button) => {
     button.addEventListener("click", () => openClientPayment(button.dataset.quickClientPayment));
   });
+  document.querySelectorAll("[data-client-tab]").forEach((button) => button.addEventListener("click", () => {
+    clientManagementTab = button.dataset.clientTab;
+    document.querySelectorAll("[data-client-tab]").forEach((tab) => {
+      const selected = tab === button;
+      tab.classList.toggle("active", selected);
+      tab.setAttribute("aria-selected", String(selected));
+    });
+    document.querySelectorAll("[data-client-panel]").forEach((panel) => {
+      panel.hidden = panel.dataset.clientPanel !== clientManagementTab;
+    });
+  }));
+  const modelStatusFilter = document.querySelector("[data-filter-model-status]");
+  modelStatusFilter.addEventListener("change", () => {
+    document.querySelectorAll("[data-model-status-row]").forEach((row) => {
+      row.hidden = Boolean(modelStatusFilter.value) && row.dataset.currentStatus !== modelStatusFilter.value;
+    });
+  });
+  document.querySelectorAll("[data-save-model-status]").forEach((button) => button.addEventListener("click", async () => {
+    const order = dashboardData.models.find((item) => item.id === button.dataset.saveModelStatus);
+    const select = button.closest("[data-model-status-row]")?.querySelector("[data-model-status]");
+    if (!order || !select) {
+      window.factoryUI.toast("تعذر العثور على الموديل أو الحالة المحددة.", "error");
+      return;
+    }
+    button.disabled = true;
+    try {
+      await persistFactoryOrder(order, { status: select.value });
+      await refreshDashboard(session);
+      activateDashboardView("model-review");
+      window.factoryUI.toast(`تم تحديث حالة «${order.name}» يدوياً.`);
+    } catch (error) {
+      button.disabled = false;
+      window.factoryUI.toast(`تعذر تحديث حالة الموديل: ${error.message}`, "error");
+    }
+  }));
   const orderModal = document.querySelector("#order-modal");
   document.body.append(orderModal);
   const editConfigs = {
@@ -2300,7 +2579,12 @@ function bindActions(session) {
     const clientId = String(formData.get("clientId"));
     const clientData = {
       name: String(formData.get("name")).trim(),
+      brand_name: String(formData.get("brandName")).trim(),
+      client_number: String(formData.get("clientNumber")).trim(),
       phone: String(formData.get("phone")).trim(),
+      cash_phone: String(formData.get("cashPhone")).trim(),
+      instagram: String(formData.get("instagram")).trim(),
+      whatsapp: String(formData.get("whatsapp")).trim(),
       notes: String(formData.get("notes")).trim()
     };
     if (!clientData.name) {
@@ -2343,11 +2627,18 @@ function bindActions(session) {
     const form = document.querySelector("#client-form");
     form.elements.clientId.value = client.id;
     form.elements.name.value = client.name;
+    form.elements.brandName.value = client.brand_name || "";
+    form.elements.clientNumber.value = client.client_number || "";
     form.elements.phone.value = client.phone;
+    form.elements.cashPhone.value = client.cash_phone || "";
+    form.elements.instagram.value = client.instagram || "";
+    form.elements.whatsapp.value = client.whatsapp || "";
     form.elements.notes.value = client.notes;
     form.querySelector('[type="submit"]').textContent = "حفظ تعديلات العميل";
     document.querySelector("#client-modal-title").textContent = "تعديل بيانات العميل";
     document.querySelector("#client-modal").hidden = false;
+    clientManagementTab = "profiles";
+    document.querySelector('[data-client-tab="profiles"]').click();
     activateDashboardView("clients");
     form.elements.name.focus();
   }));
@@ -2421,7 +2712,7 @@ function bindActions(session) {
     const price = Number(orderForm.elements.pricePerPiece.value || 0);
     const paid = Number(orderForm.elements.paidAmount.value || 0);
     const total = roundMoney(delivered * price);
-    const expectedTotal = roundMoney(quantity * price);
+    const expectedTotal = roundMoney(Math.max(quantity - delivered, 0) * price);
     const formatAmount = (value) => `${new Intl.NumberFormat("ar-EG", { maximumFractionDigits: 2 }).format(value)} ج.م`;
     orderForm.querySelector("#model-delivered-summary").textContent = `${new Intl.NumberFormat("ar-EG").format(delivered)} قطعة`;
     orderForm.elements.paidAmount.removeAttribute("max");
