@@ -1101,9 +1101,8 @@ create table if not exists public.factory_fabrics (
   name text not null check (length(trim(name)) between 1 and 120),
   fabric_type text not null default '',
   color_name text not null default '',
-  color_number text not null default '',
   color_hex text not null default '#FFFFFF' check (color_hex ~ '^#[0-9A-Fa-f]{6}$'),
-  unit text not null check (unit in ('متر', 'طوب', 'ريب', 'وحدة')),
+  unit text not null check (unit in ('متر', 'طوب')),
   quantity_available numeric(14, 3) not null default 0 check (quantity_available >= 0),
   received_at timestamptz,
   received_by uuid references auth.users (id) on delete set null,
@@ -1114,20 +1113,33 @@ create table if not exists public.factory_fabrics (
 alter table public.factory_fabrics
   add column if not exists stock_scope text not null default 'owner',
   add column if not exists customer_id uuid references public.factory_clients (id) on delete set null,
-  add column if not exists color_number text not null default '',
   add column if not exists received_at timestamptz,
   add column if not exists received_by uuid references auth.users (id) on delete set null;
 
 alter table public.factory_fabrics
   drop constraint if exists factory_fabrics_unit_check;
 
+do $$
+begin
+  if exists (
+    select 1
+    from public.factory_fabrics
+    where unit not in ('متر', 'طوب', 'ثوب')
+  ) then
+    raise exception 'Fabric inventory contains legacy units other than meter or toob. Reconcile those stock records manually before rerunning the schema; quantities were not converted.';
+  end if;
+end;
+$$;
+
 update public.factory_fabrics
-set unit = case unit when 'ثوب' then 'طوب' when 'لفة' then 'وحدة' else unit end
-where unit in ('ثوب', 'لفة');
+set unit = 'طوب'
+where unit = 'ثوب';
+
+alter table public.factory_fabrics drop column if exists color_number;
 
 alter table public.factory_fabrics
   add constraint factory_fabrics_unit_check
-    check (unit in ('متر', 'طوب', 'ريب', 'وحدة'));
+    check (unit in ('متر', 'طوب'));
 
 alter table public.factory_fabrics
   drop constraint if exists factory_fabrics_stock_scope_check,
@@ -1401,13 +1413,13 @@ begin
      or length(coalesce(requested_color_name, '')) > 64
      or upper(coalesce(requested_color_hex, '')) !~ '^#[0-9A-F]{6}$'
      or requested_unit is null
-     or requested_unit not in ('متر', 'طوب', 'ريب', 'وحدة') then
+     or requested_unit not in ('متر', 'طوب') then
     raise exception 'Enter a valid fabric name, type, color, HEX value, and stock unit.';
   end if;
 
   if requested_fabric_id is null then
     insert into public.factory_fabrics (name, fabric_type, color_name, color_hex, unit)
-    values (trim(requested_name), trim(coalesce(requested_type, '')),
+    values (trim(requested_name), '',
             trim(coalesce(requested_color_name, '')), upper(requested_color_hex), requested_unit)
     returning id into saved_fabric_id;
   else
@@ -1429,7 +1441,7 @@ begin
     end if;
     update public.factory_fabrics
     set name = trim(requested_name),
-        fabric_type = trim(coalesce(requested_type, '')),
+        fabric_type = '',
         color_name = trim(coalesce(requested_color_name, '')),
         color_hex = upper(requested_color_hex),
         unit = requested_unit,
@@ -1543,12 +1555,11 @@ $$;
 
 revoke all on function public.record_factory_fabric_receipts(jsonb, timestamptz, text) from public, anon, authenticated;
 
+drop function if exists public.register_factory_incoming_fabric(uuid, text, text, text, text, text, numeric, text, timestamptz, text);
 create or replace function public.register_factory_incoming_fabric(
   requested_customer_id uuid,
   requested_name text,
-  requested_type text,
   requested_color_name text,
-  requested_color_number text,
   requested_color_hex text,
   requested_quantity numeric,
   requested_unit text,
@@ -1568,13 +1579,11 @@ begin
     raise exception 'Only active admins and cutting supervisors can register incoming fabric.';
   end if;
   if length(trim(coalesce(requested_name, ''))) not between 1 and 120
-     or length(coalesce(requested_type, '')) > 120
      or length(coalesce(requested_color_name, '')) > 64
-     or length(coalesce(requested_color_number, '')) > 64
      or upper(coalesce(requested_color_hex, '')) !~ '^#[0-9A-F]{6}$'
      or requested_quantity is null or requested_quantity <= 0
      or requested_quantity > 99999999999.999
-     or requested_unit is null or requested_unit not in ('متر', 'طوب', 'ريب', 'وحدة') then
+     or requested_unit is null or requested_unit not in ('متر', 'طوب') then
     raise exception 'Enter valid incoming fabric details and a positive quantity.';
   end if;
   if requested_customer_id is not null and not exists (
@@ -1584,13 +1593,12 @@ begin
   end if;
 
   insert into public.factory_fabrics (
-    stock_scope, customer_id, name, fabric_type, color_name, color_number, color_hex,
+    stock_scope, customer_id, name, fabric_type, color_name, color_hex,
     unit, quantity_available, received_at, received_by
   )
   values (
     'incoming', requested_customer_id, trim(requested_name),
-    trim(coalesce(requested_type, '')), trim(coalesce(requested_color_name, '')),
-    trim(coalesce(requested_color_number, '')), upper(requested_color_hex),
+    '', trim(coalesce(requested_color_name, '')), upper(requested_color_hex),
     requested_unit, requested_quantity, receipt_time, auth.uid()
   )
   returning id into saved_fabric_id;
@@ -1606,7 +1614,7 @@ begin
 end;
 $$;
 
-revoke all on function public.register_factory_incoming_fabric(uuid, text, text, text, text, text, numeric, text, timestamptz, text) from public, anon, authenticated;
+revoke all on function public.register_factory_incoming_fabric(uuid, text, text, text, numeric, text, timestamptz, text) from public, anon, authenticated;
 
 create or replace function public.register_factory_incoming_fabrics(
   requested_customer_id uuid,
@@ -1622,9 +1630,7 @@ as $$
 declare
   item jsonb;
   item_name text;
-  item_type text;
   item_color_name text;
-  item_color_number text;
   item_color_hex text;
   item_unit text;
   item_quantity numeric;
@@ -1648,30 +1654,26 @@ begin
   for item in select value from jsonb_array_elements(requested_items)
   loop
     item_name := trim(coalesce(item ->> 'name', ''));
-    item_type := trim(coalesce(item ->> 'type', ''));
     item_color_name := trim(coalesce(item ->> 'colorName', ''));
-    item_color_number := trim(coalesce(item ->> 'colorNumber', ''));
     item_color_hex := upper(coalesce(nullif(item ->> 'colorHex', ''), '#FFFFFF'));
     item_unit := item ->> 'unit';
     item_quantity := nullif(item ->> 'quantity', '')::numeric;
 
     if length(item_name) not between 1 and 120
-       or length(item_type) > 120
        or length(item_color_name) > 64
-       or length(item_color_number) > 64
        or item_color_hex !~ '^#[0-9A-F]{6}$'
        or item_quantity is null or item_quantity <= 0 or item_quantity > 99999999999.999
-       or item_unit not in ('متر', 'طوب', 'ريب', 'وحدة') then
+       or item_unit not in ('متر', 'طوب') then
       raise exception 'Each incoming fabric line must include valid fabric, color, unit, and positive quantity details.';
     end if;
 
     insert into public.factory_fabrics (
-      stock_scope, customer_id, name, fabric_type, color_name, color_number, color_hex,
+      stock_scope, customer_id, name, fabric_type, color_name, color_hex,
       unit, quantity_available, received_at, received_by
     )
     values (
-      'incoming', requested_customer_id, item_name, item_type, item_color_name,
-      item_color_number, item_color_hex, item_unit, item_quantity, receipt_time, auth.uid()
+      'incoming', requested_customer_id, item_name, '', item_color_name,
+      item_color_hex, item_unit, item_quantity, receipt_time, auth.uid()
     )
     returning id into saved_fabric_id;
 
@@ -1807,7 +1809,7 @@ $$;
 revoke all on function public.delete_factory_fabric(uuid) from public, anon, authenticated;
 
 drop function if exists public.reconcile_factory_fabric_usage(uuid, uuid, numeric);
-create function public.reconcile_factory_fabric_usage(
+create or replace function public.reconcile_factory_fabric_usage(
   requested_order_id uuid,
   requested_fabric_id uuid,
   requested_quantity numeric,
@@ -2260,7 +2262,7 @@ begin
       fabric = resolved_fabric_name,
       fabric_id = requested_fabric_id,
       external_fabric_source = case when requested_fabric_id is null then resolved_fabric_name else '' end,
-      external_fabric_unit = case when requested_fabric_id is null then coalesce(nullif(trim(requested_external_fabric_unit), ''), 'وحدة') else '' end,
+      external_fabric_unit = case when requested_fabric_id is null then coalesce(nullif(trim(requested_external_fabric_unit), ''), 'متر') else '' end,
       fabric_quantity = requested_fabric_quantity,
       bolt_count = requested_bolt_count,
       layer_count = total_plys,
@@ -2342,7 +2344,7 @@ begin
   set fabric = resolved_fabric_name,
       fabric_id = requested_fabric_id,
       external_fabric_source = case when requested_fabric_id is null then resolved_fabric_name else '' end,
-      external_fabric_unit = case when requested_fabric_id is null then coalesce(nullif(trim(requested_external_fabric_unit), ''), 'وحدة') else '' end,
+      external_fabric_unit = case when requested_fabric_id is null then coalesce(nullif(trim(requested_external_fabric_unit), ''), 'متر') else '' end,
       fabric_quantity = requested_fabric_quantity,
       bolt_count = requested_bolt_count,
       layer_count = total_plys,
@@ -2490,7 +2492,7 @@ begin
       fabric = resolved_fabric_name,
       fabric_id = requested_fabric_id,
       external_fabric_source = case when requested_fabric_id is null then resolved_fabric_name else '' end,
-      external_fabric_unit = case when requested_fabric_id is null then coalesce(nullif(trim(requested_external_fabric_unit), ''), 'وحدة') else '' end,
+      external_fabric_unit = case when requested_fabric_id is null then coalesce(nullif(trim(requested_external_fabric_unit), ''), 'متر') else '' end,
       fabric_quantity = requested_fabric_quantity,
       bolt_count = requested_bolt_count,
       layer_count = total_plys,
@@ -2902,6 +2904,112 @@ grant select on public.factory_live_signals to authenticated;
 grant select on public.factory_auth_events to authenticated;
 grant update (completed_quantity, status, updated_at) on public.production_stages to authenticated;
 revoke all on function public.has_active_factory_role(text[]) from public, anon, authenticated;
+create or replace function public.delete_factory_payment(requested_record_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not public.is_active_factory_admin() then
+    raise exception 'Only active admins can delete factory payments.';
+  end if;
+  if requested_record_id is null then
+    raise exception 'A valid payment record is required.';
+  end if;
+
+  delete from public.factory_records
+  where id = requested_record_id
+    and collection = 'payments';
+  if not found then
+    raise exception 'Payment record not found.';
+  end if;
+end;
+$$;
+
+create or replace function public.delete_factory_cash_transaction(requested_transaction_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not public.is_active_factory_admin() then
+    raise exception 'Only active admins can delete cash transactions.';
+  end if;
+  if requested_transaction_id is null then
+    raise exception 'A valid cash transaction is required.';
+  end if;
+
+  delete from public.factory_cash_transactions
+  where id = requested_transaction_id;
+  if not found then
+    raise exception 'Cash transaction not found.';
+  end if;
+end;
+$$;
+
+create or replace function public.delete_factory_fabric_transaction(requested_transaction_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  movement public.factory_fabric_transactions%rowtype;
+  stock_item public.factory_fabrics%rowtype;
+  stock_delta numeric(14, 3);
+begin
+  if not public.is_active_factory_admin() then
+    raise exception 'Only active admins can delete fabric transactions.';
+  end if;
+  if requested_transaction_id is null then
+    raise exception 'A valid fabric transaction is required.';
+  end if;
+
+  select * into movement
+  from public.factory_fabric_transactions
+  where id = requested_transaction_id
+  for update;
+  if not found then
+    raise exception 'Fabric transaction not found.';
+  end if;
+  if movement.order_id is not null then
+    raise exception 'Fabric transactions linked to a cutting order cannot be deleted.';
+  end if;
+
+  select * into stock_item
+  from public.factory_fabrics
+  where id = movement.fabric_id
+  for update;
+  if not found then
+    raise exception 'The related fabric stock item no longer exists.';
+  end if;
+
+  stock_delta := case
+    when movement.transaction_type in ('receipt', 'return', 'adjustment_in') then -movement.quantity
+    when movement.transaction_type in ('withdrawal', 'adjustment_out') then movement.quantity
+    else null
+  end;
+  if stock_delta is null or stock_item.quantity_available + stock_delta < 0 then
+    raise exception 'Deleting this transaction would make fabric stock invalid.';
+  end if;
+
+  update public.factory_fabrics
+  set quantity_available = quantity_available + stock_delta,
+      updated_at = now()
+  where id = stock_item.id;
+  delete from public.factory_fabric_transactions where id = movement.id;
+end;
+$$;
+
+revoke all on function public.delete_factory_payment(uuid) from public, anon, authenticated;
+grant execute on function public.delete_factory_payment(uuid) to authenticated;
+revoke all on function public.delete_factory_cash_transaction(uuid) from public, anon, authenticated;
+grant execute on function public.delete_factory_cash_transaction(uuid) to authenticated;
+revoke all on function public.delete_factory_fabric_transaction(uuid) from public, anon, authenticated;
+grant execute on function public.delete_factory_fabric_transaction(uuid) to authenticated;
+
 grant execute on function public.has_active_factory_role(text[]) to authenticated;
 revoke all on function public.create_factory_order_stages() from public, anon, authenticated;
 revoke all on function public.sync_factory_client_profile() from public, anon, authenticated;
@@ -2926,8 +3034,8 @@ revoke all on function public.record_factory_fabric_receipt(uuid, numeric, times
 grant execute on function public.record_factory_fabric_receipt(uuid, numeric, timestamptz, text) to authenticated;
 revoke all on function public.record_factory_fabric_receipts(jsonb, timestamptz, text) from public, anon, authenticated;
 grant execute on function public.record_factory_fabric_receipts(jsonb, timestamptz, text) to authenticated;
-revoke all on function public.register_factory_incoming_fabric(uuid, text, text, text, text, text, numeric, text, timestamptz, text) from public, anon, authenticated;
-grant execute on function public.register_factory_incoming_fabric(uuid, text, text, text, text, text, numeric, text, timestamptz, text) to authenticated;
+revoke all on function public.register_factory_incoming_fabric(uuid, text, text, text, numeric, text, timestamptz, text) from public, anon, authenticated;
+grant execute on function public.register_factory_incoming_fabric(uuid, text, text, text, numeric, text, timestamptz, text) to authenticated;
 revoke all on function public.register_factory_incoming_fabrics(uuid, jsonb, timestamptz, text) from public, anon, authenticated;
 grant execute on function public.register_factory_incoming_fabrics(uuid, jsonb, timestamptz, text) to authenticated;
 revoke all on function public.assign_factory_incoming_fabric(uuid, uuid) from public, anon, authenticated;
