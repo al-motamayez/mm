@@ -1163,9 +1163,14 @@ begin
         status = trim(requested_status)
     where id = requested_order_id;
     insert into public.production_stages (order_id, stage_name, target_quantity)
-    select requested_order_id, selected_stage.stage_name, requested_quantity
+    select distinct requested_order_id, selected_stage.stage_name, requested_quantity
     from unnest(requested_work_stages || array['delivery']::text[]) as selected_stage(stage_name)
-    on conflict (order_id, stage_name) do nothing;
+    where not exists (
+      select 1
+      from public.production_stages as existing_stage
+      where existing_stage.order_id = requested_order_id
+        and existing_stage.stage_name = selected_stage.stage_name
+    );
     delete from public.production_stages as stage
     where stage.order_id = requested_order_id
       and stage.stage_name in ('cutting', 'sewing', 'finishing', 'ironing', 'packaging')
@@ -1186,23 +1191,25 @@ begin
   end if;
 
   if requested_operational_expenses > 0 then
-    insert into public.factory_cash_transactions (
-      order_id, direction, category, description, amount, payment_method, occurred_at, created_by
-    )
-    values (
-      saved_order_id,
-      'expense',
-      'مصاريف تشغيل الموديل',
-      concat_ws(' · ', resolved_model_name, nullif(trim(coalesce(requested_model_number, '')), '')),
-      requested_operational_expenses,
-      'نقدي',
-      now(),
-      auth.uid()
-    )
-    on conflict (order_id) where order_id is not null
-    do update set
-      description = excluded.description,
-      amount = excluded.amount;
+    update public.factory_cash_transactions
+    set description = concat_ws(' · ', resolved_model_name, nullif(trim(coalesce(requested_model_number, '')), '')),
+        amount = requested_operational_expenses
+    where order_id = saved_order_id;
+    if not found then
+      insert into public.factory_cash_transactions (
+        order_id, direction, category, description, amount, payment_method, occurred_at, created_by
+      )
+      values (
+        saved_order_id,
+        'expense',
+        'مصاريف تشغيل الموديل',
+        concat_ws(' · ', resolved_model_name, nullif(trim(coalesce(requested_model_number, '')), '')),
+        requested_operational_expenses,
+        'نقدي',
+        now(),
+        auth.uid()
+      );
+    end if;
   else
     delete from public.factory_cash_transactions
     where order_id = saved_order_id;
