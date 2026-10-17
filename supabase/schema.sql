@@ -819,12 +819,14 @@ drop function if exists public.save_factory_order(uuid, uuid, text, text, intege
 drop function if exists public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb, text, jsonb);
 drop function if exists public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb, text, jsonb, text[], text, jsonb);
 drop function if exists public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb, text, jsonb, text[], text, jsonb, numeric);
+drop function if exists public.save_factory_order(uuid, uuid, text, text, integer, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb, text, jsonb, text[], text, jsonb, numeric);
 create function public.save_factory_order(
   requested_order_id uuid,
   requested_customer_id uuid,
   requested_model_name text,
   requested_model_number text,
   requested_quantity integer,
+  requested_original_quantity integer,
   requested_status text,
   requested_fabric text,
   requested_line_name text,
@@ -868,6 +870,8 @@ begin
     or requested_customer_id is null
     or requested_quantity is null
     or requested_quantity < 0
+    or requested_original_quantity is null
+    or requested_original_quantity < 0
     or requested_delivered_pieces is null
     or requested_delivered_pieces < 0
     or (requested_quantity = 0 and requested_delivered_pieces > 0)
@@ -1061,7 +1065,7 @@ begin
       matched_client_id, matched_customer_id, resolved_model_name,
       coalesce(trim(requested_model_number), ''),
       coalesce(trim(requested_colors), ''), normalized_color_names, coalesce(trim(requested_sizes), ''),
-      requested_quantity, requested_quantity, requested_delivered_pieces,
+      requested_original_quantity, requested_quantity, requested_delivered_pieces,
       requested_price_per_piece, requested_paid_amount, requested_expected_delivery_date, requested_model_image_url,
       trim(requested_priority), requested_production_type, requested_work_stages, requested_pricing_mode,
       requested_stage_prices, requested_color_size_distribution, requested_operational_expenses, trim(requested_status)
@@ -1087,12 +1091,13 @@ begin
     if exists (
       select 1 from public.orders
       where id = requested_order_id
-        and (
-          archived_at is not null
-          or status in ('مكتمل', 'تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق')
-        )
+        and archived_at is not null
     ) then
-      raise exception 'Closed or archived factory orders cannot be edited.';
+      raise exception 'Archived factory orders cannot be edited.';
+    end if;
+    if current_status in ('مكتمل', 'تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق')
+       and requested_status is distinct from current_status then
+      raise exception 'A delivered factory order must remain closed.';
     end if;
     if exists (
       select 1 from public.orders
@@ -1141,15 +1146,7 @@ begin
         colors = coalesce(trim(requested_colors), ''),
         color_names = normalized_color_names,
         sizes = coalesce(trim(requested_sizes), ''),
-        original_total_pieces = case
-          when exists (
-            select 1 from public.production_stages
-            where order_id = requested_order_id
-              and stage_name = 'cutting'
-              and status = 'مكتمل'
-          ) then original_total_pieces
-          else requested_quantity
-        end,
+        original_total_pieces = requested_original_quantity,
         total_pieces = requested_quantity,
         delivered_pieces = requested_delivered_pieces,
         price_per_piece = requested_price_per_piece,
@@ -2622,6 +2619,8 @@ declare
   current_order public.orders%rowtype;
   matched_customer_id uuid;
   final_delivered_quantity integer;
+  remaining_quantity integer;
+  has_prior_deliveries boolean;
 begin
   if not public.is_active_factory_admin() then
     raise exception 'Only active admins can complete factory handovers.';
@@ -2662,6 +2661,21 @@ begin
   if current_order.total_pieces <= 0 then
     raise exception 'Record the actual cut quantity before completing the handover.';
   end if;
+  remaining_quantity := greatest(current_order.total_pieces - current_order.delivered_pieces, 0);
+  select current_order.delivered_pieces > 0 or exists (
+    select 1 from public.factory_deliveries
+    where order_id = current_order.id
+  ) into has_prior_deliveries;
+  if requested_final_batch_qty > remaining_quantity then
+    raise exception 'The final delivery quantity cannot exceed the remaining order quantity.';
+  end if;
+  if has_prior_deliveries
+     and requested_final_batch_qty not in (0, remaining_quantity) then
+    raise exception 'After earlier deliveries, close on the delivered total or deliver the entire remainder.';
+  end if;
+  if not has_prior_deliveries and requested_final_batch_qty = 0 then
+    raise exception 'The first handover must record a positive delivery quantity.';
+  end if;
   final_delivered_quantity := current_order.delivered_pieces + requested_final_batch_qty;
   if requested_final_batch_qty > 0 then
     if length(trim(coalesce(requested_recipient_name, ''))) = 0 then
@@ -2690,6 +2704,74 @@ begin
       updated_at = now()
   where order_id = current_order.id
     and stage_name = 'delivery';
+end;
+$$;
+
+create or replace function public.admin_update_factory_delivery_quantity(
+  requested_order_id uuid,
+  requested_delivery_id uuid,
+  requested_quantity integer
+)
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  current_order public.orders%rowtype;
+  updated_delivered_quantity integer;
+begin
+  if not public.is_active_factory_admin() then
+    raise exception 'Only active admins can adjust factory delivery quantities.';
+  end if;
+  if requested_order_id is null or requested_delivery_id is null
+     or requested_quantity is null or requested_quantity <= 0 then
+    raise exception 'A valid order, delivery, and positive quantity are required.';
+  end if;
+
+  select *
+    into current_order
+  from public.orders
+  where id = requested_order_id
+  for update;
+  if not found then
+    raise exception 'Factory order not found.';
+  end if;
+  if current_order.archived_at is not null then
+    raise exception 'Archived factory deliveries cannot be adjusted.';
+  end if;
+
+  perform 1
+  from public.factory_deliveries
+  where id = requested_delivery_id
+    and order_id = requested_order_id
+  for update;
+  if not found then
+    raise exception 'The delivery does not belong to this factory order.';
+  end if;
+
+  update public.factory_deliveries
+  set quantity = requested_quantity
+  where id = requested_delivery_id
+    and order_id = requested_order_id;
+
+  select coalesce(sum(quantity), 0)::integer
+    into updated_delivered_quantity
+  from public.factory_deliveries
+  where order_id = requested_order_id;
+
+  update public.orders
+  set delivered_pieces = updated_delivered_quantity
+  where id = requested_order_id;
+
+  update public.production_stages
+  set target_quantity = greatest(target_quantity, updated_delivered_quantity),
+      completed_quantity = updated_delivered_quantity,
+      updated_at = now()
+  where order_id = requested_order_id
+    and stage_name = 'delivery';
+
+  return updated_delivered_quantity;
 end;
 $$;
 
@@ -3943,12 +4025,14 @@ revoke all on function public.read_factory_client_cash_transactions() from publi
 grant execute on function public.read_factory_client_cash_transactions() to authenticated;
 revoke all on function public.read_factory_cutting_clients() from public, anon, authenticated;
 grant execute on function public.read_factory_cutting_clients() to authenticated;
-revoke all on function public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb, text, jsonb, text[], text, jsonb, numeric) from public, anon, authenticated;
-grant execute on function public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb, text, jsonb, text[], text, jsonb, numeric) to authenticated;
+revoke all on function public.save_factory_order(uuid, uuid, text, text, integer, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb, text, jsonb, text[], text, jsonb, numeric) from public, anon, authenticated;
+grant execute on function public.save_factory_order(uuid, uuid, text, text, integer, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb, text, jsonb, text[], text, jsonb, numeric) to authenticated;
 revoke all on function public.record_factory_delivery(uuid, integer, text) from public, anon, authenticated;
 grant execute on function public.record_factory_delivery(uuid, integer, text) to authenticated;
 revoke all on function public.complete_factory_handover(uuid, integer, text) from public, anon, authenticated;
 grant execute on function public.complete_factory_handover(uuid, integer, text) to authenticated;
+revoke all on function public.admin_update_factory_delivery_quantity(uuid, uuid, integer) from public, anon, authenticated;
+grant execute on function public.admin_update_factory_delivery_quantity(uuid, uuid, integer) to authenticated;
 revoke all on function public.calculate_factory_cutting_breakdown(jsonb, jsonb) from public, anon, authenticated;
 revoke all on function public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, integer, text, uuid, numeric, text) from public, anon, authenticated;
 grant execute on function public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, integer, text, uuid, numeric, text) to authenticated;

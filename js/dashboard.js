@@ -347,7 +347,9 @@ async function readDashboardData(session) {
       quantityDifference: deliveredPieces - originalQuantity,
       pricePerPiece: Number(order.price_per_piece || 0),
       totalAmount: Number(order.total_amount || 0),
-      expectedAmount: Number(order.expected_total_amount ?? (Math.max(Number(order.total_pieces || 0) - Number(order.delivered_pieces || 0), 0) * Number(order.price_per_piece || 0))),
+      expectedAmount: ["مكتمل", "تم التسليم", "تم التسليم بالكامل", "تم التسليم والإغلاق"].includes(order.status)
+        ? 0
+        : Number(order.expected_total_amount ?? (Math.max(Number(order.total_pieces || 0) - Number(order.delivered_pieces || 0), 0) * Number(order.price_per_piece || 0))),
       operationalExpenses: Number(order.operational_expenses || 0),
       paidAmount: Number(order.paid_amount || 0),
       remainingAmount: Number(order.remaining_amount || 0),
@@ -1143,7 +1145,7 @@ function orderCards(models, withActions = false) {
       <span class="order-compact-price">${money(item.pricePerPiece)} / قطعة</span>
       ${statusTag(item.displayStatus || item.status)}
       <button class="row-action" type="button" data-open-model-id="${escapeHtml(item.id)}">تفاصيل الطلبية</button>
-      ${withActions ? `<div class="order-card-actions">${item.archivedAt || LOCKED_FACTORY_ORDER_STATUSES.includes(item.status) ? "" : `<button class="row-action" type="button" data-edit-kind="models" data-index="${index}">تعديل الطلبية</button>`}${item.customerId ? `${item.archivedAt || LOCKED_FACTORY_ORDER_STATUSES.includes(item.status) ? "" : `<button class="row-action" type="button" data-action="record-delivery" data-index="${index}">تسجيل تسليم</button><button class="row-action order-close-action" type="button" data-action="complete-handover" data-index="${index}"${item.quantity ? "" : " disabled"}>تسوية التسليم وإغلاق الطلب</button>`}` : '<span class="order-delete-protected">عيّن العميل قبل تسجيل أي تسليم</span>'}${item.archivedAt || LOCKED_FACTORY_ORDER_STATUSES.includes(item.status) ? '<span class="status">مغلق / مؤرشف</span>' : ""}${orderCanBeDeleted(item) ? `<button class="row-action order-delete-action" type="button" data-action="delete-order" data-order-id="${escapeHtml(item.id)}">حذف الموديل</button>` : '<span class="order-delete-protected">محمي بسجل مالي / تسليم</span>'}</div>` : ""}
+      ${withActions ? `<div class="order-card-actions">${item.archivedAt ? "" : `<button class="row-action" type="button" data-edit-kind="models" data-index="${index}">تعديل الطلبية</button>`}${item.customerId ? `${item.archivedAt || LOCKED_FACTORY_ORDER_STATUSES.includes(item.status) ? "" : `<button class="row-action" type="button" data-action="record-delivery" data-index="${index}"${item.remainingPieces > 0 ? "" : " disabled"}>تسجيل تسليم</button><button class="row-action order-close-action" type="button" data-action="complete-handover" data-index="${index}"${item.quantity ? "" : " disabled"}>تسوية التسليم وإغلاق الطلب</button>`}` : '<span class="order-delete-protected">عيّن العميل قبل تسجيل أي تسليم</span>'}${item.archivedAt || LOCKED_FACTORY_ORDER_STATUSES.includes(item.status) ? '<span class="status">مغلق / تم التسليم</span>' : ""}${orderCanBeDeleted(item) ? `<button class="row-action order-delete-action" type="button" data-action="delete-order" data-order-id="${escapeHtml(item.id)}">حذف الموديل</button>` : '<span class="order-delete-protected">محمي بسجل مالي / تسليم</span>'}</div>` : ""}
     </article>`;
   }).join("")}</div>`;
 }
@@ -1491,7 +1493,7 @@ function clientDetailsView(client, data) {
       ${order.senderName ? `<div><dt>تم الإرسال بواسطة</dt><dd>${escapeHtml(order.senderName)}</dd></div>` : ""}
       ${archived ? `<div><dt>تاريخ الأرشفة</dt><dd>${formatDateTime(order.archivedAt)}</dd></div>` : ""}
     </dl>
-    ${!archived ? `<footer class="order-card-actions">${locked ? '<span class="status">تم التسليم / مغلق</span>' : `<button class="row-action" type="button" data-edit-client-order="${escapeHtml(order.id)}">تعديل السعر أو بيانات الموديل</button>${order.customerId ? `<button class="row-action" type="button" data-action="record-delivery" data-index="${index}"${order.quantity ? "" : " disabled"}>تسجيل تسليم</button><button class="row-action order-close-action" type="button" data-action="complete-handover" data-index="${index}"${order.quantity ? "" : " disabled"}>تسوية التسليم وإغلاق الطلب</button>` : ""}`}${orderCanBeDeleted(order) ? `<button class="row-action order-delete-action" type="button" data-action="delete-order" data-order-id="${escapeHtml(order.id)}">حذف الموديل</button>` : '<span class="order-delete-protected" title="لا يمكن حذف طلب له تسليمات أو مصروفات تشغيل أو مبالغ مسجلة">محمي بسجل مالي / مصروفات / تسليم</span>'}</footer>` : ""}
+    ${!archived ? `<footer class="order-card-actions"><button class="row-action" type="button" data-edit-client-order="${escapeHtml(order.id)}">تعديل السعر أو بيانات الموديل</button>${locked ? '<span class="status">تم التسليم / مغلق</span>' : order.customerId ? `<button class="row-action" type="button" data-action="record-delivery" data-index="${index}"${order.quantity ? "" : " disabled"}>تسجيل تسليم</button><button class="row-action order-close-action" type="button" data-action="complete-handover" data-index="${index}"${order.quantity ? "" : " disabled"}>تسوية التسليم وإغلاق الطلب</button>` : ""}${orderCanBeDeleted(order) ? `<button class="row-action order-delete-action" type="button" data-action="delete-order" data-order-id="${escapeHtml(order.id)}">حذف الموديل</button>` : '<span class="order-delete-protected" title="لا يمكن حذف طلب له تسليمات أو مصروفات تشغيل أو مبالغ مسجلة">محمي بسجل مالي / مصروفات / تسليم</span>'}</footer>` : ""}
   </article>`;
   };
   const clientNotes = data.clientNotes.filter((note) => note.customerId === client.id);
@@ -1516,6 +1518,7 @@ function pendingAccountRows(accounts) {
 }
 
 function modelDetailsModalView(order, showPricingBreakdown = false) {
+  const canEditDeliveryQuantities = showPricingBreakdown && !order.archivedAt;
   const pricingDetails = showPricingBreakdown && order.pricingMode === "stages"
     ? Object.entries(order.stagePrices || {}).map(([stage, price]) => {
       const label = WORK_STAGES.find(([key]) => key === stage)?.[1] || stage;
@@ -1523,7 +1526,7 @@ function modelDetailsModalView(order, showPricingBreakdown = false) {
     }).join("")
     : "";
   const deliveryHistory = order.deliveryHistory?.length
-    ? table(["#", "الكمية", "المستلم", "تاريخ التسليم"], order.deliveryHistory.map((delivery, index) => `<tr><td>${index + 1}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(delivery.quantity)} قطعة</td><td>${escapeHtml(delivery.recipient_name || "—")}</td><td>${formatDateTime(delivery.delivered_at)}</td></tr>`))
+    ? table(["#", "الكمية", "المستلم", "تاريخ التسليم", ...(canEditDeliveryQuantities ? ["تعديل الكمية"] : [])], order.deliveryHistory.map((delivery, index) => `<tr><td>${index + 1}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(delivery.quantity)} قطعة</td><td>${escapeHtml(delivery.recipient_name || "—")}</td><td>${formatDateTime(delivery.delivered_at)}</td>${canEditDeliveryQuantities ? `<td><label class="field"><span>كمية الدفعة ${index + 1}</span><input type="number" min="1" step="1" value="${delivery.quantity}" data-edit-delivery-quantity="${escapeHtml(delivery.id)}"></label><button class="row-action" type="button" data-save-delivery-quantity="${escapeHtml(delivery.id)}">حفظ الكمية</button></td>` : ""}</tr>`))
     : '<div class="empty-state">لا توجد دفعات تسليم مسجلة.</div>';
   return `<header class="modal-view-heading">${modelImageMarkup(order.modelImageUrl)}<div><small>تفاصيل الطلبية / الفرشة</small><h2 id="model-details-title">${escapeHtml(order.name || "موديل بدون اسم")}</h2><p>رقم الموديل: ${escapeHtml(order.modelNumber || "—")} · العميل: ${escapeHtml(order.client || "—")}</p></div>${statusTag(order.displayStatus || order.status)}</header>
     <div class="compact-detail-grid">
@@ -1776,6 +1779,7 @@ function adminView(data, accounts) {
           <div class="field model-name-field"><label for="model-name">اسم الموديل</label><input id="model-name" name="name"></div>
           <div class="field model-number-field"><label for="model-number">رقم الموديل</label><input id="model-number" name="modelNumber"></div>
           <div class="field model-quantity-field"><label for="model-quantity">العدد الكلي</label><input id="model-quantity" name="quantity" type="number" min="0" step="1" placeholder="أدخل العدد أو اتركه حتى انتهاء القص"><small>يمكن إدخال العدد الآن أو تأجيله؛ عند اختيار الألوان والمقاسات يوزع النظام العدد تلقائياً.</small></div>
+          <div class="field" data-original-quantity-field hidden><label for="model-original-quantity">العدد المطلوب الأصلي</label><input id="model-original-quantity" name="originalQuantity" type="number" min="0" step="1"></div>
         </div></section>
         <section class="form-section"><h3>التفاصيل التشغيلية <span>اختياري</span></h3><div class="form-section-grid">
           <div class="field"><label for="model-production-type">طبيعة شغل الموديل</label><select id="model-production-type" name="productionType" required><option value="full_cutting">شغل كامل بدءاً من القص</option><option value="ready_sewing">شغل مقصوص جاهز - خياطة مباشرة / أمبلاج</option></select></div>
@@ -1785,7 +1789,7 @@ function adminView(data, accounts) {
           <div class="model-allocation field"><label>توزيع العدد على الألوان والمقاسات</label><div data-model-allocation-grid><p class="muted">أدخل العدد الكلي واختر الألوان والمقاسات لعرض التوزيع.</p></div><input type="hidden" name="colorSizeDistribution" value='{"colors":[]}'></div>
           <label class="field model-image-field"><span>صورة الموديل (اختياري)</span><input type="file" name="modelImage" accept="image/jpeg,image/png,image/webp"><small>JPG أو PNG أو WEBP بحد أقصى 5 ميجابايت.</small><div data-model-image-preview></div></label>
           <div class="field"><label for="model-expected-delivery">تاريخ التسليم المتوقع (اختياري)</label><input id="model-expected-delivery" name="expectedDeliveryDate" type="date"></div>
-          <div class="field"><label for="model-status">حالة الطلب</label><select id="model-status" name="status"><option>قيد الانتظار</option><option>معلق</option><option>تحت الإنشاء</option><option>قيد الفرش</option><option>تم الفرش / جاهز للقص</option><option>تم القص</option><option>معلق - في انتظار الخياطة</option><option>في الخياطة</option><option>جاهز للتسليم</option></select></div>
+          <div class="field"><label for="model-status">حالة الطلب</label><select id="model-status" name="status"><option>قيد الانتظار</option><option>معلق</option><option>تحت الإنشاء</option><option>قيد الفرش</option><option>تم الفرش / جاهز للقص</option><option>تم القص</option><option>معلق - في انتظار الخياطة</option><option>في الخياطة</option><option>جاهز للتسليم</option><option>تم التسليم</option></select></div>
           <div class="field"><label for="model-priority">أولوية التنفيذ</label><select id="model-priority" name="priority"><option>عادي</option><option>مرتفع</option><option>عاجل</option></select></div>
         </div></section>
         <section class="form-section"><h3>التفاصيل المالية <span>اختياري</span></h3><div class="form-section-grid">
@@ -1801,7 +1805,7 @@ function adminView(data, accounts) {
         </div></section>
         <div class="form-actions"><button class="button button-primary" type="submit">حفظ الطلبية</button><button class="row-action" type="button" data-cancel-edit hidden>إلغاء التعديل</button><button class="row-action" type="button" data-close-order>إغلاق</button></div>
       </form></section></div>
-      <div class="modal-backdrop" id="delivery-modal" hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="delivery-modal-title"><button class="modal-close" type="button" data-close-delivery aria-label="إغلاق">×</button><h2 id="delivery-modal-title">تسجيل تسليم جديد</h2><p id="delivery-modal-description">أدخل كمية هذه الدفعة واسم مستلمها؛ ستُضاف إلى إجمالي ما تم تسليمه حتى الآن.</p><form id="delivery-form" class="modal-form"><input type="hidden" name="orderId"><input type="hidden" name="finalize" value=""><label for="delivery-quantity" id="delivery-quantity-label">كمية التسليم</label><input id="delivery-quantity" name="quantity" type="number" min="1" step="1" required><label for="delivery-recipient">اسم المستلم</label><input id="delivery-recipient" name="recipientName" required><div class="form-actions"><button class="button button-primary" type="submit">تسجيل التسليم</button><button class="row-action" type="button" data-close-delivery>إلغاء</button></div></form></section></div>
+      <div class="modal-backdrop" id="delivery-modal" hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="delivery-modal-title"><button class="modal-close" type="button" data-close-delivery aria-label="إغلاق">×</button><h2 id="delivery-modal-title">تسجيل تسليم جديد</h2><p id="delivery-modal-description">أدخل كمية هذه الدفعة واسم مستلمها؛ ستُضاف إلى إجمالي ما تم تسليمه حتى الآن.</p><form id="delivery-form" class="modal-form"><input type="hidden" name="orderId"><input type="hidden" name="finalize" value=""><label for="delivery-settlement-choice" data-settlement-choice-field hidden>طريقة التسوية</label><select id="delivery-settlement-choice" name="settlementChoice" data-settlement-choice-field hidden></select><label for="delivery-quantity" id="delivery-quantity-label">كمية التسليم</label><input id="delivery-quantity" name="quantity" type="number" min="1" step="1" required><label for="delivery-recipient">اسم المستلم</label><input id="delivery-recipient" name="recipientName" required><div class="form-actions"><button class="button button-primary" type="submit">تسجيل التسليم</button><button class="row-action" type="button" data-close-delivery>إلغاء</button></div></form></section></div>
     </section>
     <section id="finance" class="dashboard-section">
       ${panel("تسجيل دفعة مالية", `<div class="panel-body"><form id="payment-form" class="form-grid payment-form"><input type="hidden" name="editIndex" value=""><div class="field"><label for="payment-client">العميل</label><select id="payment-client" name="customerId" required><option value="">اختر العميل</option>${paymentClientOptions}</select></div><div class="field"><label for="payment-amount">المبلغ المدفوع (ج.م)</label><input id="payment-amount" name="amount" type="number" min="0.01" step="0.01" required></div><div class="field"><label for="payment-date">تاريخ الدفعة</label><input id="payment-date" name="date" type="date" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10)}" required></div><div class="field"><label for="payment-method">طريقة الدفع</label><select id="payment-method" name="method"><option>تحويل بنكي</option><option>نقدي</option><option>محفظة إلكترونية</option></select></div><div class="field"><label for="payment-reference">رقم الطلبية / مرجع</label><input id="payment-reference" name="reference" autocomplete="off"></div><div class="field"><label for="payment-notes">ملاحظات</label><input id="payment-notes" name="notes"></div><div class="form-actions"><button class="button button-primary" type="submit">تسجيل الدفعة</button><button class="row-action" type="button" data-cancel-edit hidden>إلغاء التعديل</button></div></form></div>`, "تُربط الدفعة بملف العميل المحدد")}
@@ -2216,6 +2220,7 @@ async function persistFactoryOrder(order, changes = {}) {
     requested_model_name: updated.name || "",
     requested_model_number: updated.modelNumber || "",
     requested_quantity: Number(updated.quantity),
+    requested_original_quantity: Number(updated.originalQuantity ?? updated.quantity),
     requested_status: updated.status,
     requested_fabric: updated.fabric || "",
     requested_line_name: updated.line || "",
@@ -3176,6 +3181,10 @@ function bindActions(session) {
       window.factoryUI.toast("تعذر العثور على السجل المطلوب تعديله.", "error");
       return;
     }
+    if (button.dataset.editKind === "models") {
+      openOrderEditor(item);
+      return;
+    }
     const form = document.querySelector(`#${config.form}`);
     form.elements.editIndex.value = button.dataset.editKind === "payments" ? item._recordId : button.dataset.index;
     for (const field of config.fields) {
@@ -3183,28 +3192,9 @@ function bindActions(session) {
     }
     form.querySelector('[type="submit"]').textContent = "حفظ التعديلات";
     form.querySelector("[data-cancel-edit]").hidden = false;
-    if (button.dataset.editKind === "models") {
-      syncOrderCustomerSelection(form, item.customerId);
-      form.elements.stagePrices.value = JSON.stringify(item.stagePrices || {});
-      form.querySelectorAll('[name="workStage"]').forEach((input) => {
-        input.checked = (item.workStages || []).includes(input.value);
-      });
-      updateStagePricing(form);
-      form.elements.deliveredPieces.value = item.deliveredPieces;
-      form.querySelector("#model-price-history-note").hidden = item.deliveredPieces <= 0;
-      setSizePicker(form.querySelector("[data-size-picker]"), item.sizes);
-      setColorPicker(form.querySelector("[data-color-picker]"), item.colors, item.colorNames);
-      renderModelAllocation(form, item.colorSizeDistribution);
-      form.querySelector("[data-model-image-preview]").innerHTML = modelImageMarkup(item.modelImageUrl);
-      updateOrderTotals();
-      activateDashboardView("orders");
-      document.querySelector("#order-modal-title").textContent = "تعديل الموديل / الطلبية";
-      document.querySelector("#order-modal").hidden = false;
-    } else {
-      activateDashboardView("finance");
-      form.scrollIntoView({ behavior: "smooth", block: "center" });
-    }
-    (button.dataset.editKind === "models" ? form.elements.customerSelection : form.elements[config.fields[0]]).focus();
+    activateDashboardView("finance");
+    form.scrollIntoView({ behavior: "smooth", block: "center" });
+    form.elements[config.fields[0]].focus();
   }));
   const orderForm = document.querySelector("#model-form");
   bindPickers(orderForm);
@@ -3244,6 +3234,8 @@ function bindActions(session) {
     orderModal.hidden = true;
     orderForm.reset();
     orderForm.elements.editIndex.value = "";
+    orderForm.elements.status.disabled = false;
+    orderForm.querySelector("[data-original-quantity-field]").hidden = true;
     updateStagePricing(orderForm);
     orderForm.querySelector("#model-price-history-note").hidden = true;
     if (modelPreviewObjectUrl) URL.revokeObjectURL(modelPreviewObjectUrl);
@@ -3256,13 +3248,17 @@ function bindActions(session) {
   };
   const openOrderEditor = (order) => {
     const orderIndex = dashboardData.models.findIndex((entry) => entry.id === order.id);
-    if (orderIndex < 0 || order.archivedAt || LOCKED_FACTORY_ORDER_STATUSES.includes(order.status)) {
+    if (orderIndex < 0 || order.archivedAt) {
       window.factoryUI.toast("هذا الطلب غير متاح للتعديل.", "error");
       return;
     }
     orderForm.reset();
     orderForm.elements.savedOrderId.value = "";
     orderForm.elements.editIndex.value = String(orderIndex);
+    const closedOrder = LOCKED_FACTORY_ORDER_STATUSES.includes(order.status);
+    orderForm.querySelector("[data-original-quantity-field]").hidden = !closedOrder;
+    orderForm.elements.originalQuantity.value = String(order.originalQuantity);
+    orderForm.elements.status.disabled = closedOrder;
     for (const field of ["customerId", "name", "modelNumber", "pricePerPiece", "paidAmount", "operationalExpenses", "status", "priority", "productionType", "pricingMode", "expectedDeliveryDate"]) {
       orderForm.elements[field].value = order[field] ?? "";
     }
@@ -3286,7 +3282,7 @@ function bindActions(session) {
     orderModal.hidden = false;
     orderForm.elements.pricePerPiece.focus();
   };
-  document.querySelector("#app").addEventListener("click", (event) => {
+  document.querySelector("#app").addEventListener("click", async (event) => {
     if (event.target.closest("[data-close-model-view]") || event.target === modelDetailsModal) {
       modelDetailsModal.hidden = true;
       return;
@@ -3304,6 +3300,35 @@ function bindActions(session) {
       printDocument("فاتورة موديل", modelPrintMarkup(order));
       return;
     }
+    const saveDeliveryQuantityButton = event.target.closest("[data-save-delivery-quantity]");
+    if (saveDeliveryQuantityButton) {
+      const orderId = modelDetailsModal.dataset.orderId;
+      const deliveryId = saveDeliveryQuantityButton.dataset.saveDeliveryQuantity;
+      const input = modelDetailsModal.querySelector(`[data-edit-delivery-quantity="${CSS.escape(deliveryId)}"]`);
+      const quantity = Number(input?.value);
+      if (!Number.isSafeInteger(quantity) || quantity <= 0) {
+        window.factoryUI.toast("أدخل كمية صحيحة وموجبة لدفعة التسليم.", "error");
+        return;
+      }
+      saveDeliveryQuantityButton.disabled = true;
+      try {
+        const { error } = await supabaseClient.rpc("admin_update_factory_delivery_quantity", {
+          requested_order_id: orderId,
+          requested_delivery_id: deliveryId,
+          requested_quantity: quantity
+        });
+        if (error?.code === "PGRST202") {
+          throw new Error("دالة تعديل دفعة التسليم غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+        }
+        if (error) throw error;
+        await refreshDashboard(session);
+        window.factoryUI.toast("تم تعديل كمية الدفعة وتحديث إجمالي المسلّم وحساب العميل.");
+      } catch (error) {
+        saveDeliveryQuantityButton.disabled = false;
+        window.factoryUI.toast(`تعذر تعديل كمية الدفعة: ${error.message}`, "error");
+      }
+      return;
+    }
     const modelEditButton = event.target.closest("[data-edit-model-from-details]");
     if (modelEditButton) {
       const order = dashboardData.models.find((item) => item.id === modelDetailsModal.dataset.orderId);
@@ -3313,22 +3338,7 @@ function bindActions(session) {
     }
     if (event.target.closest("[data-open-final-handover]")) {
       const order = dashboardData.models.find((item) => item.id === modelDetailsModal.dataset.orderId);
-      if (!order || order.archivedAt || LOCKED_FACTORY_ORDER_STATUSES.includes(order.status)) {
-        window.factoryUI.toast("هذا الطلب مغلق أو غير متاح للتسوية.", "error");
-        return;
-      }
-      deliveryForm.elements.orderId.value = order.id;
-      deliveryForm.elements.finalize.value = "true";
-      deliveryForm.elements.quantity.min = "0";
-      deliveryForm.elements.quantity.value = "0";
-      deliveryRecipientInput.value = "";
-      deliveryModalTitle.textContent = "إنهاء التسليم وإغلاق الطلب";
-      deliveryModalDescription.textContent = `أدخل كمية الدفعة الأخيرة فقط. الكمية المسجلة حتى الآن: ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.deliveredPieces)} قطعة. أدخل 0 إذا كنت تريد إغلاق الطلب دون إضافة دفعة.`;
-      deliveryQuantityLabel.textContent = "كمية الدفعة الأخيرة (0 للإغلاق فقط)";
-      deliverySubmitButton.textContent = "إنهاء التسليم وإغلاق الطلب";
-      updateDeliveryRecipientRequirement();
-      deliveryModal.hidden = false;
-      deliveryForm.elements.quantity.focus();
+      openFinalHandover(order);
       return;
     }
     const previewButton = event.target.closest("[data-open-model-id]");
@@ -3341,8 +3351,7 @@ function bindActions(session) {
       modelDetailsModal.dataset.orderId = order.id;
       modelDetailsModal.querySelector("#model-details-modal-content").innerHTML = modelDetailsModalView(order, session.role === "admin");
       modelDetailsModal.querySelector("[data-edit-model-from-details]").hidden = session.role !== "admin"
-        || Boolean(order.archivedAt)
-        || LOCKED_FACTORY_ORDER_STATUSES.includes(order.status);
+        || Boolean(order.archivedAt);
       const deleteButton = modelDetailsModal.querySelector("[data-action='delete-order']");
       deleteButton.dataset.orderId = order.id;
       deleteButton.hidden = session.role !== "admin" || !orderCanBeDeleted(order);
@@ -3529,15 +3538,67 @@ function bindActions(session) {
   const deliveryQuantityLabel = document.querySelector("#delivery-quantity-label");
   const deliverySubmitButton = deliveryForm.querySelector('[type="submit"]');
   const deliveryRecipientInput = deliveryForm.elements.recipientName;
+  const settlementChoice = deliveryForm.elements.settlementChoice;
+  const settlementChoiceFields = deliveryForm.querySelectorAll("[data-settlement-choice-field]");
+  const applySettlementChoice = () => {
+    const order = dashboardData.models.find((item) => item.id === deliveryForm.elements.orderId.value);
+    if (!order) return;
+    const hasEarlierDeliveries = Boolean(order.deliveryHistory?.length || order.deliveredPieces > 0);
+    if (hasEarlierDeliveries) {
+      deliveryForm.elements.quantity.value = settlementChoice.value === "deliver-remainder" ? String(order.remainingPieces) : "0";
+      deliveryForm.elements.quantity.readOnly = true;
+      return;
+    }
+    deliveryForm.elements.quantity.readOnly = settlementChoice.value === "full";
+    deliveryForm.elements.quantity.value = settlementChoice.value === "full" ? String(order.quantity) : "1";
+  };
   const updateDeliveryRecipientRequirement = () => {
     const isFinalHandover = deliveryForm.elements.finalize.value === "true";
     const quantity = Number(deliveryForm.elements.quantity.value);
     deliveryRecipientInput.required = !isFinalHandover || quantity > 0;
   };
+  const openFinalHandover = (order) => {
+    if (!order || order.archivedAt || LOCKED_FACTORY_ORDER_STATUSES.includes(order.status)) {
+      window.factoryUI.toast("هذا الطلب مغلق أو غير متاح للتسوية.", "error");
+      return;
+    }
+    if (!order.quantity) {
+      window.factoryUI.toast("سجّل العدد الفعلي بعد الفرش والقص قبل التسوية.", "error");
+      return;
+    }
+    const hasEarlierDeliveries = Boolean(order.deliveryHistory?.length || order.deliveredPieces > 0);
+    deliveryForm.elements.orderId.value = order.id;
+    deliveryForm.elements.finalize.value = "true";
+    deliveryForm.elements.quantity.min = hasEarlierDeliveries ? "0" : "1";
+    deliveryForm.elements.quantity.max = hasEarlierDeliveries ? String(order.remainingPieces) : String(order.quantity);
+    deliveryModalTitle.textContent = "تسوية وإغلاق الطلب";
+    settlementChoiceFields.forEach((field) => { field.hidden = false; });
+    if (hasEarlierDeliveries) {
+      settlementChoice.innerHTML = `<option value="close-current">إغلاق على ${order.deliveredPieces} قطعة مسلّمة</option>${order.remainingPieces > 0 ? `<option value="deliver-remainder">تسليم المتبقي (${order.remainingPieces} قطعة) ثم الإغلاق</option>` : ""}`;
+      settlementChoice.value = "close-current";
+      deliveryModalDescription.textContent = `سبق تسجيل ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.deliveredPieces)} قطعة. اختر إغلاق الطلب على الكمية المسلّمة أو تسليم جميع القطع المتبقية ثم الإغلاق.`;
+      deliveryQuantityLabel.textContent = "كمية الدفعة الأخيرة";
+      deliverySubmitButton.textContent = "تسوية وإغلاق الطلب";
+    } else {
+      settlementChoice.innerHTML = `<option value="full">تسليم كامل العدد (${order.quantity} قطعة)</option>${order.quantity > 1 ? '<option value="partial">تسجيل دفعة أولى جزئية</option>' : ""}`;
+      settlementChoice.value = "full";
+      deliveryModalDescription.textContent = `لم تُسجل دفعات سابقة. يمكنك تسليم العدد كاملاً (${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity)} قطعة) أو إدخال كمية أول دفعة جزئية. سيُغلق الطلب بعد التسوية.`;
+      deliveryQuantityLabel.textContent = "كمية التسليم";
+      deliverySubmitButton.textContent = "تسليم وإغلاق الطلب";
+    }
+    deliveryRecipientInput.value = "";
+    applySettlementChoice();
+    updateDeliveryRecipientRequirement();
+    deliveryModal.hidden = false;
+    deliveryForm.elements.quantity.focus();
+  };
   const closeDeliveryModal = () => {
     deliveryModal.hidden = true;
     deliveryForm.reset();
     deliveryForm.elements.quantity.min = "1";
+    deliveryForm.elements.quantity.max = "";
+    deliveryForm.elements.quantity.readOnly = false;
+    settlementChoiceFields.forEach((field) => { field.hidden = true; });
     deliveryRecipientInput.required = true;
     deliveryModalTitle.textContent = "تسجيل تسليم جديد";
     deliveryModalDescription.textContent = "أدخل كمية هذه الدفعة واسم مستلمها؛ ستُضاف إلى إجمالي ما تم تسليمه حتى الآن.";
@@ -3549,6 +3610,10 @@ function bindActions(session) {
     if (event.target === deliveryModal) closeDeliveryModal();
   });
   deliveryForm.elements.quantity.addEventListener("input", updateDeliveryRecipientRequirement);
+  settlementChoice.addEventListener("change", () => {
+    applySettlementChoice();
+    updateDeliveryRecipientRequirement();
+  });
   deliveryForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const order = dashboardData.models.find((item) => item.id === deliveryForm.elements.orderId.value);
@@ -3562,6 +3627,23 @@ function bindActions(session) {
       window.factoryUI.toast("سجّل العدد الفعلي بعد الفرش والقص قبل إدخال التسليمات.", "error");
       return;
     }
+    if (finalize) {
+      const hasEarlierDeliveries = Boolean(order.deliveryHistory?.length || order.deliveredPieces > 0);
+      const validFinalQuantity = hasEarlierDeliveries
+        ? quantity === 0 || quantity === order.remainingPieces
+        : quantity > 0 && quantity <= order.quantity;
+      if (!validFinalQuantity
+          || (!hasEarlierDeliveries && settlementChoice.value === "full" && quantity !== order.quantity)
+          || (!hasEarlierDeliveries && settlementChoice.value === "partial" && quantity >= order.quantity)) {
+        window.factoryUI.toast(hasEarlierDeliveries
+          ? "اختر إغلاق الكمية المسلّمة أو تسليم جميع القطع المتبقية."
+          : "اختر التسليم الكامل أو أدخل كمية أقل من العدد الكلي كدفعة جزئية.", "error");
+        return;
+      }
+    } else if (quantity > order.remainingPieces) {
+      window.factoryUI.toast("كمية التسليم تتجاوز المتبقي من الطلب.", "error");
+      return;
+    }
     if ((!finalize || quantity > 0) && !String(deliveryRecipientInput.value).trim()) {
       window.factoryUI.toast("أدخل اسم المستلم للتسليم.", "error");
       deliveryRecipientInput.focus();
@@ -3569,7 +3651,7 @@ function bindActions(session) {
     }
     if (finalize && !await window.factoryUI.confirmAction({
       title: "تأكيد إنهاء التسليم",
-      message: `سيُضاف ${quantity} قطعة إلى سجل دفعات الموديل، فيصبح إجمالي المسلّم ${order.deliveredPieces + quantity} قطعة. ${quantity === 0 ? "لن تضاف دفعة جديدة." : "ستسجل الدفعة باسم المستلم."} سيتم إغلاق الطلب وقفل تعديل حالته.`,
+      message: `${quantity > 0 ? `ستضاف دفعة ${quantity} قطعة، ليصبح إجمالي المسلّم ${order.deliveredPieces + quantity} قطعة. ` : "سيُغلق الطلب على إجمالي الكمية المسلّمة حالياً. "}سيُقفل الطلب أمام التسليمات الجديدة، مع إتاحة تعديل الإدارة.`,
       confirmLabel: "إنهاء التسليم وإغلاق الطلب"
     })) return;
     const submitButton = deliverySubmitButton;
@@ -3597,7 +3679,7 @@ function bindActions(session) {
       closeDeliveryModal();
       await refreshDashboard(session);
       window.factoryUI.toast(finalize
-        ? "تم إنهاء التسليم وتسوية حساب الطلب وقفل حالته."
+        ? "تم إنهاء التسليم وتسوية حساب الطلب."
         : "تم تسجيل التسليم وإضافته إلى إجمالي الكمية المسلّمة.");
     } catch (error) {
       window.factoryUI.toast(deliverySaved
@@ -3691,6 +3773,8 @@ function bindActions(session) {
     const form = event.currentTarget;
     const formData = new FormData(form);
     const submitButton = form.querySelector('[type="submit"]');
+    const editIndex = String(formData.get("editIndex") || "");
+    const existingOrder = editIndex ? dashboardData.models[Number(editIndex)] : null;
     const quantityValue = String(formData.get("quantity")).trim();
     const sizeQuantity = sizePickerTotal(form);
     const quantity = quantityValue ? Number(quantityValue) : sizeQuantity;
@@ -3713,6 +3797,13 @@ function bindActions(session) {
     }
     if (!Number.isSafeInteger(quantity) || quantity < 0 || !Number.isSafeInteger(deliveredPieces) || deliveredPieces < 0) {
       window.factoryUI.toast("تحقق من إدخال أعداد صحيحة غير سالبة للكمية والتسليم.", "error");
+      return;
+    }
+    const requestedOriginalQuantity = existingOrder && LOCKED_FACTORY_ORDER_STATUSES.includes(existingOrder.status)
+      ? Number(form.elements.originalQuantity.value)
+      : Number(existingOrder?.originalQuantity ?? quantity);
+    if (!Number.isSafeInteger(requestedOriginalQuantity) || requestedOriginalQuantity < 0) {
+      window.factoryUI.toast("أدخل العدد المطلوب الأصلي كعدد صحيح غير سالب.", "error");
       return;
     }
     if (!Number.isFinite(operationalExpenses) || operationalExpenses < 0 || operationalExpenses > 999999999999.99) {
@@ -3753,8 +3844,6 @@ function bindActions(session) {
     submitButton.disabled = true;
     let savedOrderId = "";
     try {
-      const editIndex = String(formData.get("editIndex"));
-      const existingOrder = editIndex ? dashboardData.models[Number(editIndex)] : null;
       const orderToSave = {
         ...existingOrder,
         id: existingOrder?.id || form.elements.savedOrderId.value || undefined,
@@ -3762,11 +3851,14 @@ function bindActions(session) {
         name: modelName,
         modelNumber,
         quantity,
+        originalQuantity: requestedOriginalQuantity,
         deliveredPieces,
         pricePerPiece,
         paidAmount,
         operationalExpenses,
-        status: String(formData.get("status")),
+        status: existingOrder && LOCKED_FACTORY_ORDER_STATUSES.includes(existingOrder.status)
+          ? existingOrder.status
+          : String(formData.get("status")),
         priority: String(formData.get("priority")),
         productionType: String(formData.get("productionType")),
         workStages,
@@ -3931,6 +4023,9 @@ function bindActions(session) {
       if (button.dataset.action === "record-delivery") {
         deliveryForm.elements.orderId.value = order.id;
         deliveryForm.elements.finalize.value = "";
+        settlementChoiceFields.forEach((field) => { field.hidden = true; });
+        deliveryForm.elements.quantity.readOnly = false;
+        deliveryForm.elements.quantity.max = String(Math.max(0, order.remainingPieces));
         deliveryForm.elements.quantity.min = "1";
         deliveryForm.elements.quantity.value = "";
         deliveryRecipientInput.required = true;
@@ -3943,20 +4038,7 @@ function bindActions(session) {
         deliveryForm.elements.quantity.focus();
         return;
       }
-      deliveryForm.elements.orderId.value = order.id;
-      deliveryForm.elements.finalize.value = "true";
-      deliveryForm.elements.quantity.min = "0";
-      deliveryForm.elements.quantity.value = "0";
-      deliveryRecipientInput.value = "";
-      deliveryModalTitle.textContent = "إنهاء التسليم وإغلاق الطلب";
-      deliveryModalDescription.textContent = `أدخل كمية الدفعة الأخيرة فقط. الكمية المسجلة حتى الآن: ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.deliveredPieces)} قطعة. أدخل 0 إذا كنت تريد إغلاق الطلب دون إضافة دفعة.`;
-      deliveryQuantityLabel.textContent = "كمية الدفعة الأخيرة (0 للإغلاق فقط)";
-      deliverySubmitButton.textContent = "إنهاء التسليم وإغلاق الطلب";
-      deliveryForm.elements.quantity.min = "0";
-      deliveryModal.hidden = false;
-      updateDeliveryRecipientRequirement();
-      updateDeliveryRecipientRequirement();
-      deliveryForm.elements.quantity.focus();
+      openFinalHandover(order);
       return;
     }
     if (button.dataset.action === "activate-account") {
