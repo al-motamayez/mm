@@ -615,6 +615,7 @@ set model_name = coalesce(
       ), 0), 0)
     ),
     status = case trim(factory_order.status)
+      when 'تم التسليم والإغلاق' then 'تم التسليم والإغلاق'
       when 'تم التسليم بالكامل' then 'تم التسليم بالكامل'
       when 'مكتمل' then 'مكتمل'
       when 'تم الانتهاء' then 'مكتمل'
@@ -1087,7 +1088,7 @@ begin
       where id = requested_order_id
         and (
           archived_at is not null
-          or status in ('تم التسليم بالكامل', 'تم التسليم والإغلاق')
+          or status in ('مكتمل', 'تم التسليم بالكامل', 'تم التسليم والإغلاق')
         )
     ) then
       raise exception 'Archived factory orders cannot be edited.';
@@ -2570,7 +2571,8 @@ begin
   if not found or current_order.customer_id <> matched_customer_id then
     raise exception 'Factory order changed while the delivery was being recorded.';
   end if;
-  if current_order.archived_at is not null then
+  if current_order.archived_at is not null
+     or current_order.status in ('مكتمل', 'تم التسليم بالكامل', 'تم التسليم والإغلاق') then
     raise exception 'Archived factory orders cannot receive new deliveries.';
   end if;
   if current_order.total_pieces <= 0 then
@@ -2653,7 +2655,7 @@ begin
   if current_order.archived_at is not null then
     raise exception 'Archived factory orders cannot be completed again.';
   end if;
-  if current_order.status in ('تم التسليم بالكامل', 'تم التسليم والإغلاق') then
+  if current_order.status in ('مكتمل', 'تم التسليم بالكامل', 'تم التسليم والإغلاق') then
     raise exception 'Closed factory orders cannot be completed again.';
   end if;
   if current_order.total_pieces <= 0 then
@@ -3029,7 +3031,8 @@ begin
   from public.orders
   where id = requested_order_id
   for update;
-  if not found or current_order.archived_at is not null then
+  if not found or current_order.archived_at is not null
+     or current_order.status in ('مكتمل', 'تم التسليم بالكامل', 'تم التسليم والإغلاق') then
     raise exception 'This order is not accepting live cutting updates.';
   end if;
 
@@ -3098,7 +3101,8 @@ begin
   from public.orders
   where id = requested_order_id
   for update;
-  if not found or current_order.archived_at is not null then
+  if not found or current_order.archived_at is not null
+     or current_order.status in ('مكتمل', 'تم التسليم بالكامل', 'تم التسليم والإغلاق') then
     raise exception 'The active factory order was not found.';
   end if;
 
@@ -3218,7 +3222,8 @@ begin
   from public.orders
   where id = requested_order_id
   for update;
-  if not found or current_order.archived_at is not null then
+  if not found or current_order.archived_at is not null
+     or current_order.status in ('مكتمل', 'تم التسليم بالكامل', 'تم التسليم والإغلاق') then
     raise exception 'The active factory order was not found.';
   end if;
   if not exists (
@@ -3296,7 +3301,8 @@ begin
   if not found then
     raise exception 'Factory order not found.';
   end if;
-  if current_order.archived_at is not null then
+  if current_order.archived_at is not null
+     or current_order.status in ('مكتمل', 'تم التسليم بالكامل', 'تم التسليم والإغلاق') then
     raise exception 'Archived factory orders cannot be deleted.';
   end if;
   if current_order.delivered_pieces > 0
@@ -3626,17 +3632,28 @@ create policy "Supervisors update their production stages"
         select 1 from public.orders
         where orders.id = production_stages.order_id
           and orders.archived_at is null
+          and orders.status not in ('مكتمل', 'تم التسليم بالكامل', 'تم التسليم والإغلاق')
       )
     )
     or (
       stage_name = 'cutting'
       and public.has_active_factory_role(array['cutting'])
-      and exists (select 1 from public.orders where orders.id = production_stages.order_id and orders.archived_at is null)
+      and exists (
+        select 1 from public.orders
+        where orders.id = production_stages.order_id
+          and orders.archived_at is null
+          and orders.status not in ('مكتمل', 'تم التسليم بالكامل', 'تم التسليم والإغلاق')
+      )
     )
     or (
       stage_name = 'sewing'
       and public.has_active_factory_role(array['sewing'])
-      and exists (select 1 from public.orders where orders.id = production_stages.order_id and orders.archived_at is null)
+      and exists (
+        select 1 from public.orders
+        where orders.id = production_stages.order_id
+          and orders.archived_at is null
+          and orders.status not in ('مكتمل', 'تم التسليم بالكامل', 'تم التسليم والإغلاق')
+      )
     )
   )
   with check (
@@ -3646,17 +3663,28 @@ create policy "Supervisors update their production stages"
         select 1 from public.orders
         where orders.id = production_stages.order_id
           and orders.archived_at is null
+          and orders.status not in ('مكتمل', 'تم التسليم بالكامل', 'تم التسليم والإغلاق')
       )
     )
     or (
       stage_name = 'cutting'
       and public.has_active_factory_role(array['cutting'])
-      and exists (select 1 from public.orders where orders.id = production_stages.order_id and orders.archived_at is null)
+      and exists (
+        select 1 from public.orders
+        where orders.id = production_stages.order_id
+          and orders.archived_at is null
+          and orders.status not in ('مكتمل', 'تم التسليم بالكامل', 'تم التسليم والإغلاق')
+      )
     )
     or (
       stage_name = 'sewing'
       and public.has_active_factory_role(array['sewing'])
-      and exists (select 1 from public.orders where orders.id = production_stages.order_id and orders.archived_at is null)
+      and exists (
+        select 1 from public.orders
+        where orders.id = production_stages.order_id
+          and orders.archived_at is null
+          and orders.status not in ('مكتمل', 'تم التسليم بالكامل', 'تم التسليم والإغلاق')
+      )
     )
   );
 

@@ -1124,7 +1124,7 @@ function stat(label, value, note = "") {
 
 function orderCanBeDeleted(item) {
   return !item.archivedAt
-    && !["تم التسليم بالكامل", "تم التسليم والإغلاق"].includes(item.status)
+    && !LOCKED_FACTORY_ORDER_STATUSES.includes(item.status)
     && Number(item.deliveredPieces) === 0
     && Number(item.paidAmount) === 0
     && Number(item.operationalExpenses) === 0
@@ -1143,7 +1143,7 @@ function orderCards(models, withActions = false) {
       <span class="order-compact-price">${money(item.pricePerPiece)} / قطعة</span>
       ${statusTag(item.displayStatus || item.status)}
       <button class="row-action" type="button" data-open-model-id="${escapeHtml(item.id)}">تفاصيل الطلبية</button>
-      ${withActions ? `<div class="order-card-actions">${item.archivedAt || ["تم التسليم بالكامل", "تم التسليم والإغلاق"].includes(item.status) ? "" : `<button class="row-action" type="button" data-edit-kind="models" data-index="${index}">تعديل الطلبية</button>`}${item.customerId ? `${item.archivedAt || ["تم التسليم بالكامل", "تم التسليم والإغلاق"].includes(item.status) ? "" : `<button class="row-action" type="button" data-action="record-delivery" data-index="${index}">تسجيل تسليم</button><button class="row-action order-close-action" type="button" data-action="complete-handover" data-index="${index}"${item.quantity ? "" : " disabled"}>تسوية التسليم وإغلاق الطلب</button>`}` : '<span class="order-delete-protected">عيّن العميل قبل تسجيل أي تسليم</span>'}${item.archivedAt || ["تم التسليم بالكامل", "تم التسليم والإغلاق"].includes(item.status) ? '<span class="status">مغلق / مؤرشف</span>' : ""}${orderCanBeDeleted(item) ? `<button class="row-action order-delete-action" type="button" data-action="delete-order" data-order-id="${escapeHtml(item.id)}">حذف الموديل</button>` : '<span class="order-delete-protected">محمي بسجل مالي / تسليم</span>'}</div>` : ""}
+      ${withActions ? `<div class="order-card-actions">${item.archivedAt || LOCKED_FACTORY_ORDER_STATUSES.includes(item.status) ? "" : `<button class="row-action" type="button" data-edit-kind="models" data-index="${index}">تعديل الطلبية</button>`}${item.customerId ? `${item.archivedAt || LOCKED_FACTORY_ORDER_STATUSES.includes(item.status) ? "" : `<button class="row-action" type="button" data-action="record-delivery" data-index="${index}">تسجيل تسليم</button><button class="row-action order-close-action" type="button" data-action="complete-handover" data-index="${index}"${item.quantity ? "" : " disabled"}>تسوية التسليم وإغلاق الطلب</button>`}` : '<span class="order-delete-protected">عيّن العميل قبل تسجيل أي تسليم</span>'}${item.archivedAt || LOCKED_FACTORY_ORDER_STATUSES.includes(item.status) ? '<span class="status">مغلق / مؤرشف</span>' : ""}${orderCanBeDeleted(item) ? `<button class="row-action order-delete-action" type="button" data-action="delete-order" data-order-id="${escapeHtml(item.id)}">حذف الموديل</button>` : '<span class="order-delete-protected">محمي بسجل مالي / تسليم</span>'}</div>` : ""}
     </article>`;
   }).join("")}</div>`;
 }
@@ -1370,6 +1370,7 @@ const FACTORY_ORDER_STATUSES = [
   "تم الفرش / جاهز للقص", "تم القص", "معلق - في انتظار الخياطة",
   "في الخياطة", "جاهز للتسليم", "مكتمل"
 ];
+const LOCKED_FACTORY_ORDER_STATUSES = ["مكتمل", "تم التسليم بالكامل", "تم التسليم والإغلاق"];
 
 function adminDashboardView(data) {
   const activeOrders = data.models.filter((order) => !order.archivedAt);
@@ -1386,17 +1387,25 @@ function adminDashboardView(data) {
 }
 
 function modelStatusReviewView(data) {
-  const orders = data.models.filter((order) => !order.archivedAt);
-  const statusOptions = (selected) => FACTORY_ORDER_STATUSES
+  const orders = data.models;
+  const statusOptions = (selected, includeLocked = false) => [...new Set([
+    ...FACTORY_ORDER_STATUSES,
+    ...(includeLocked ? LOCKED_FACTORY_ORDER_STATUSES : []),
+    ...(selected && !FACTORY_ORDER_STATUSES.includes(selected) ? [selected] : [])
+  ])]
     .map((status) => `<option value="${escapeHtml(status)}"${selected === status ? " selected" : ""}>${escapeHtml(status)}</option>`)
     .join("");
-  return `<div class="clients-toolbar"><div><h2>الموديلات</h2><p>حالة الموديل لا تتغير تلقائياً؛ اختر الحالة المطلوبة واحفظها يدوياً.</p></div><label class="field model-status-filter"><span>تصفية حسب الحالة</span><select data-filter-model-status><option value="">كل الحالات</option>${statusOptions("")}</select></label></div>
-    ${orders.length ? `<div class="model-status-list">${orders.map((order) => `<article class="model-status-row" data-model-status-row data-current-status="${escapeHtml(order.status)}">
+  return `<div class="clients-toolbar"><div><h2>الموديلات</h2><p>حالة الموديل لا تتغير تلقائياً. تُقفل حالة الموديل المكتمل أو المؤرشف.</p></div><label class="field model-status-filter"><span>تصفية حسب الحالة</span><select data-filter-model-status><option value="">كل الحالات</option>${statusOptions("", true)}</select></label></div>
+    ${orders.length ? `<div class="model-status-list">${orders.map((order) => {
+      const isLocked = Boolean(order.archivedAt) || LOCKED_FACTORY_ORDER_STATUSES.includes(order.status);
+      return `<article class="model-status-row" data-model-status-row data-current-status="${escapeHtml(order.status)}">
       <div class="model-status-info"><strong>${escapeHtml(order.name)}</strong><span>العميل: ${escapeHtml(order.client || "—")}</span><span>العدد: ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity)} قطعة</span><span>السعر: ${money(order.pricePerPiece)}</span></div>
       ${statusTag(order.displayStatus || order.status)}
-      <label class="model-status-control"><span>الحالة اليدوية</span><select data-model-status="${escapeHtml(order.id)}">${statusOptions(order.status)}</select></label>
-      <button class="button button-secondary" type="button" data-save-model-status="${escapeHtml(order.id)}">حفظ الحالة</button>
-    </article>`).join("")}</div>` : '<div class="empty-state">لا توجد موديلات لمراجعتها.</div>'}`;
+      <label class="model-status-control"><span>الحالة اليدوية${isLocked ? " · مقفلة" : ""}</span><select data-model-status="${escapeHtml(order.id)}"${isLocked ? " disabled" : ""}>${statusOptions(order.status, isLocked)}</select></label>
+      <button class="button button-secondary" type="button" data-save-model-status="${escapeHtml(order.id)}"${isLocked ? " disabled" : ""}>حفظ الحالة</button>
+      ${isLocked ? '<span class="order-delete-protected">لا يمكن تغيير حالة موديل مكتمل أو مؤرشف.</span>' : ""}
+    </article>`;
+    }).join("")}</div>` : '<div class="empty-state">لا توجد موديلات لمراجعتها.</div>'}`;
 }
 
 function clientDetailsView(client, data) {
@@ -1498,7 +1507,7 @@ function modelDetailsModalView(order, showPricingBreakdown = false) {
       <div><span>العدد المطلوب الأصلي</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.originalQuantity)} قطعة</strong></div>
       <div><span>العدد</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity)} قطعة</strong></div>
       <div><span>إجمالي العدد المسلّم</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.deliveredPieces)} قطعة</strong></div>
-      ${["تم التسليم والإغلاق", "تم التسليم بالكامل"].includes(order.status) ? `<div><span>فرق التسليم عن المطلوب</span><strong>${order.quantityDifference > 0 ? `زيادة ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantityDifference)} قطعة` : order.quantityDifference < 0 ? `نقص ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(Math.abs(order.quantityDifference))} قطعة` : "مطابق للعدد المطلوب"}</strong></div>` : ""}
+      ${LOCKED_FACTORY_ORDER_STATUSES.includes(order.status) ? `<div><span>فرق التسليم عن المطلوب</span><strong>${order.quantityDifference > 0 ? `زيادة ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantityDifference)} قطعة` : order.quantityDifference < 0 ? `نقص ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(Math.abs(order.quantityDifference))} قطعة` : "مطابق للعدد المطلوب"}</strong></div>` : ""}
       <div><span>سعر القطعة</span><strong>${money(order.pricePerPiece)}</strong></div>
       <div><span>مصاريف تشغيل إضافية</span><strong>${money(order.operationalExpenses)}</strong></div>
       <div><span>المتوقع / غير المسلم</span><strong>${money(order.expectedAmount)} <small>لم يتم التسليم بعد</small></strong></div>
@@ -3087,6 +3096,10 @@ function bindActions(session) {
       window.factoryUI.toast("تعذر العثور على الموديل أو الحالة المحددة.", "error");
       return;
     }
+    if (order.archivedAt || LOCKED_FACTORY_ORDER_STATUSES.includes(order.status)) {
+      window.factoryUI.toast("الموديل مكتمل أو مؤرشف؛ لا يمكن تغيير حالته.", "error");
+      return;
+    }
     button.disabled = true;
     try {
       await persistFactoryOrder(order, { status: select.value });
@@ -3195,7 +3208,7 @@ function bindActions(session) {
   };
   const openOrderEditor = (order) => {
     const orderIndex = dashboardData.models.findIndex((entry) => entry.id === order.id);
-    if (orderIndex < 0 || order.archivedAt || ["تم التسليم بالكامل", "تم التسليم والإغلاق"].includes(order.status)) {
+    if (orderIndex < 0 || order.archivedAt || LOCKED_FACTORY_ORDER_STATUSES.includes(order.status)) {
       window.factoryUI.toast("هذا الطلب غير متاح للتعديل.", "error");
       return;
     }
@@ -3261,7 +3274,7 @@ function bindActions(session) {
       modelDetailsModal.querySelector("#model-details-modal-content").innerHTML = modelDetailsModalView(order, session.role === "admin");
       modelDetailsModal.querySelector("[data-edit-model-from-details]").hidden = session.role !== "admin"
         || Boolean(order.archivedAt)
-        || ["تم التسليم بالكامل", "تم التسليم والإغلاق"].includes(order.status);
+        || LOCKED_FACTORY_ORDER_STATUSES.includes(order.status);
       const deleteButton = modelDetailsModal.querySelector("[data-action='delete-order']");
       deleteButton.dataset.orderId = order.id;
       deleteButton.hidden = session.role !== "admin" || !orderCanBeDeleted(order);
