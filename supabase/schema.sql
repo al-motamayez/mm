@@ -2669,10 +2669,17 @@ begin
      or coalesce(jsonb_typeof(requested_size_data), '') <> 'object'
      or requested_color_ply_data is null
      or coalesce(jsonb_typeof(requested_color_ply_data), '') <> 'object'
+     or coalesce(jsonb_typeof(requested_color_ply_data -> 'colors'), '') <> 'array'
+     or coalesce(jsonb_typeof(requested_color_ply_data -> 'sizes'), '') <> 'array'
+     or coalesce(requested_color_ply_data ->> 'type', '') not in ('men', 'women', 'children')
      or length(trim(coalesce(requested_fabric, ''))) = 0
      or requested_bolt_count is null or requested_bolt_count < 0
      or requested_fabric_quantity is null or requested_fabric_quantity <= 0 then
     raise exception 'A valid model, fabric, and positive fabric quantity are required.';
+  end if;
+  if jsonb_array_length(requested_color_ply_data -> 'colors') = 0
+     or jsonb_array_length(requested_color_ply_data -> 'sizes') = 0 then
+    raise exception 'A complete cutting story requires at least one size and one color with a positive ply count.';
   end if;
   if requested_fabric_id is null
      and coalesce(nullif(trim(requested_external_fabric_unit), ''), '') not in ('متر', 'توب') then
@@ -2721,6 +2728,9 @@ begin
          breakdown.total_pieces, breakdown.total_plys
     into normalized_sizes, normalized_colors, cut_total, total_plys
   from public.calculate_factory_cutting_breakdown(requested_size_data, requested_color_ply_data) as breakdown;
+  if cut_total < 1 or total_plys < 1 then
+    raise exception 'A complete cutting story requires at least one size, one color, and a positive ply count.';
+  end if;
 
   insert into public.orders (
     id, client_id, customer_id, model_name, model_number, sender_name, colors, color_names, sizes,
@@ -2739,8 +2749,8 @@ begin
       where length(trim(coalesce(color_entry ->> 'name', ''))) > 0
     ), '{}'::jsonb),
     normalized_sizes::text,
-    0,
-    'قيد الفرش',
+    cut_total,
+    'تم الفرش / جاهز للقص',
     nullif(trim(coalesce(requested_model_image_url, '')), '')
   );
 
@@ -2749,7 +2759,7 @@ begin
   );
 
   update public.production_stages
-  set target_quantity = 0,
+  set target_quantity = cut_total,
       completed_quantity = 0,
       fabric = resolved_fabric_name,
       fabric_id = requested_fabric_id,
@@ -2760,11 +2770,14 @@ begin
       layer_count = total_plys,
       color_ply_data = requested_color_ply_data,
       technical_notes = coalesce(trim(requested_technical_notes), ''),
-      status = 'قيد الفرش',
+      status = 'تم الفرش / جاهز للقص',
       updated_at = now()
   where order_id = requested_order_id and stage_name = 'cutting';
+  if not found then
+    raise exception 'The cutting stage for this order does not exist.';
+  end if;
 
-  return total_plys;
+  return cut_total;
 end;
 $$;
 
@@ -2930,6 +2943,10 @@ begin
       updated_at = now()
   where order_id = requested_order_id
     and stage_name = 'cutting';
+
+  update public.orders
+  set status = 'تم الفرش / جاهز للقص'
+  where id = requested_order_id;
 end;
 $$;
 
@@ -3044,7 +3061,8 @@ begin
         where length(trim(coalesce(color_entry ->> 'name', ''))) > 0
       ), '{}'::jsonb),
       model_image_url = coalesce(nullif(trim(requested_model_image_url), ''), model_image_url),
-      total_pieces = cut_total
+      total_pieces = cut_total,
+      status = 'تم القص'
   where id = requested_order_id;
 
   update public.production_stages

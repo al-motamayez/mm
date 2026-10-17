@@ -632,7 +632,7 @@ function updateCuttingCalculation(form) {
       ? table(["اللون", "المقاس", "عدد القطع"], breakdown)
       : '<p class="muted">حدد المقاسات وأدخل عدد الراقات لكل لون لعرض التوزيع المحسوب.</p>';
   }
-  return { sizeData, colorPlyData: { colors: validRows, sizes: selectedSizes, type: sizeType }, colors: [...new Set(selectedColors)], total };
+  return { sizeData, colorPlyData: { colors: colorRows, sizes: selectedSizes, type: sizeType }, colors: [...new Set(selectedColors)], total };
 }
 
 function parseColorNames(value) {
@@ -1769,7 +1769,6 @@ function cuttingView(data) {
         <label class="field"><span>اختيار قماش الفرشة</span><select name="fabricId" data-fabric-select required>${fabricSelectOptions(data.fabrics, item.fabricId, data.clients, true)}</select><small data-fabric-stock-hint></small></label>
         <label class="field"><span>وحدة السحب</span><select name="fabricUnit" data-fabric-unit-select><option value="توب" ${item.fabricUnit === "توب" ? "selected" : ""}>عدد التوب</option><option value="متر" ${item.fabricUnit === "متر" ? "selected" : ""}>الكمية بالمتر</option></select></label>
         <label class="field"><span>الكمية المستخدمة</span><input name="fabricQuantity" type="number" min="0.001" step="0.001" value="${item.fabricQuantity || ""}" required></label>
-        <div class="field"><label>إضافة كمية أثناء الفرش</label><div class="inline-quantity-entry"><input name="fabricAddition" type="number" min="0.001" step="0.001" placeholder="كمية إضافية"><button type="button" class="row-action" data-add-fabric-amount>إضافة للكمية المسحوبة</button></div></div>
         <input type="hidden" name="boltCount" value="${item.boltCount || 0}">
         <label class="field" data-external-fabric-source-field hidden><span>مصدر الخامة الخارجية</span><input name="externalFabricSource" maxlength="160" value="${escapeHtml(item.externalFabricSource || "")}" placeholder="مثال: بواقي قماش قديم من المخزن"></label>
         <input type="hidden" name="externalFabricUnit" value="متر">
@@ -1780,8 +1779,7 @@ function cuttingView(data) {
       <div class="cutting-breakdown" data-cutting-breakdown></div>
       <label class="field"><span>صورة الموديل (اختياري)</span><input type="file" name="modelImage" accept="image/jpeg,image/png,image/webp"><small>الحد الأقصى 5 ميجابايت.</small></label>
       <label class="field"><span>ملاحظات فنية للفرشة والقص</span><textarea name="technicalNotes" rows="3">${escapeHtml(item.technicalNotes || "")}</textarea></label>
-      <small data-cutting-save-status aria-live="polite">تُحفظ تغييرات الجلسة تلقائياً.</small>
-      <div class="form-actions">${bedReady ? "" : `<button type="button" class="button button-secondary" data-add-live-ply>＋ إضافة راقة / لون</button><button type="button" class="button button-secondary" data-save-cutting-progress="${escapeHtml(item.order)}">حفظ تحديث الفرش</button><button type="button" class="button button-primary" data-ready-cutting="${escapeHtml(item.order)}">تم الفرش / جاهز للقص</button>`}<button type="submit" class="button button-primary" ${bedReady ? "" : "hidden"}>إنهاء وتأكيد القصة</button></div>
+      <div class="form-actions">${bedReady ? "" : `<button type="button" class="button button-primary" data-ready-cutting="${escapeHtml(item.order)}">حفظ التفاصيل واعتمادها جاهزة للقص</button>`}<button type="submit" class="button button-primary" ${bedReady ? "" : "hidden"}>تأكيد انتهاء القص</button></div>
     </form>
   </article>`;
   }).join("")}</div>` : '<div class="empty-state">لا توجد أوامر قص نشطة حاليًا.</div>';
@@ -1804,7 +1802,7 @@ function cuttingRequestsView(data) {
     .join("");
   return `<section id="admin-requests" class="dashboard-section">${cuttingView(data)}</section>
     <section id="new-cutting" class="dashboard-section">${panel("قصة جديدة", `<form class="cutting-submit-form modal-form" id="cutting-submit-form">
-      <section class="form-section"><h3>بدء جلسة فرش <span>أدخل بيانات البداية فقط</span></h3><div class="form-section-grid">
+      <section class="form-section"><h3>تسجيل القصة بعد الفرش <span>أدخل التفاصيل كاملة مرة واحدة</span></h3><div class="form-section-grid">
         <input type="hidden" name="customerId">
         <label class="field"><span>اسم العميل</span><select name="customerSelection"><option value="">اختر العميل</option>${clientOptions}</select></label>
         <label class="field"><span>اسم البراند</span><select name="brandSelection"><option value="">اختر البراند</option>${brandOptions}</select></label>
@@ -1817,10 +1815,14 @@ function cuttingRequestsView(data) {
         <label class="field" data-external-fabric-source-field hidden><span>مصدر الخامة الخارجية</span><input name="externalFabricSource" maxlength="160" placeholder="مثال: بواقي قماش قديم من المخزن"></label>
         <input type="hidden" name="externalFabricUnit" value="">
       </div></section>
+      ${sizePickerMarkup("", "new-cutting", false)}
+      ${cuttingColorPlyMarkup(null, "", 0, "new-cutting")}
+      <p class="cutting-calculated-total">إجمالي الراقات: <strong data-cutting-plys>0</strong> · إجمالي قطع القصة: <strong data-cutting-total>0</strong> قطعة</p>
+      <div class="cutting-breakdown" data-cutting-breakdown></div>
       <label class="field"><span>صورة الموديل (اختياري)</span><input type="file" name="modelImage" accept="image/jpeg,image/png,image/webp"><small>الحد الأقصى 5 ميجابايت.</small></label>
-      <label class="field"><span>ملاحظات فنية للفرشة والقص</span><textarea name="technicalNotes" rows="4"></textarea></label>
-      <div class="form-actions"><button type="submit" class="button button-primary">بدء جلسة الفرش</button></div>
-    </form>`, "تبدأ الجلسة باسم العميل أو البراند والقماش المسحوب فقط. تُضاف الراقات والألوان والمقاسات تدريجياً في نفس جلسة القص.")}</section>`;
+      <label class="field"><span>ملاحظات فنية للفرشة والقص</span><textarea name="technicalNotes" rows="3"></textarea></label>
+      <div class="form-actions"><button type="submit" class="button button-primary">حفظ القصة واعتمادها جاهزة للقص</button></div>
+    </form>`, "بعد إتمام الفرش، سجّل كمية القماش والألوان والمقاسات وعدد الراقات دفعة واحدة. تُحفظ القصة جاهزة للقص عند الإرسال.")}</section>`;
 }
 
 function cuttingPersonalAccountView(data) {
@@ -2270,35 +2272,22 @@ function bindCuttingActions(session) {
     if (error) throw error;
     return data;
   };
-  const cuttingProgressAutoSave = new WeakMap();
-  document.querySelectorAll("[data-save-cutting-progress], [data-ready-cutting]").forEach((button) => button.addEventListener("click", async () => {
+  document.querySelectorAll("[data-ready-cutting]").forEach((button) => button.addEventListener("click", async () => {
     const form = button.closest("form");
-    const autoSaveState = cuttingProgressAutoSave.get(form);
-    if (autoSaveState) {
-      clearTimeout(autoSaveState.timer);
-      autoSaveState.timer = null;
-      autoSaveState.saveAgain = false;
-      if (autoSaveState.pending) await autoSaveState.pending;
-      if (!form.isConnected) return;
-    }
-    const cuttingData = readCuttingInputs(form, button.matches("[data-ready-cutting]"));
+    const cuttingData = readCuttingInputs(form, true);
     if (!cuttingData) return;
     button.disabled = true;
     let progressSaved = false;
     try {
       const totalPlys = await saveProgress(form, cuttingData);
       progressSaved = true;
-      if (button.matches("[data-ready-cutting]")) {
-        const { error } = await supabaseClient.rpc("mark_factory_cutting_ready", {
-          requested_order_id: form.dataset.finishCutting
-        });
-        if (error?.code === "PGRST202") throw new Error("دالة اعتماد جاهزية الفرش غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
-        if (error) throw error;
-      }
+      const { error } = await supabaseClient.rpc("mark_factory_cutting_ready", {
+        requested_order_id: form.dataset.finishCutting
+      });
+      if (error?.code === "PGRST202") throw new Error("دالة اعتماد جاهزية الفرش غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+      if (error) throw error;
       await refreshDashboard(session);
-      window.factoryUI.toast(button.matches("[data-ready-cutting]")
-        ? `تم حفظ ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(totalPlys)} راقات واعتماد الفرشة جاهزة للقص.`
-        : `تم تحديث الفرش وحفظ ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(totalPlys)} راقات.`);
+      window.factoryUI.toast(`تم حفظ ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(totalPlys)} راقات واعتماد الفرشة جاهزة للقص.`);
     } catch (error) {
       if (progressSaved) await refreshDashboard(session);
       window.factoryUI.toast(`${progressSaved ? "تم حفظ الراقات لكن تعذر اعتماد جاهزية الفرشة. " : ""}تعذر تحديث الفرش: ${error.message}`, "error");
@@ -2306,76 +2295,6 @@ function bindCuttingActions(session) {
       button.disabled = false;
     }
   }));
-  document.querySelectorAll(".cutting-finish-form[data-finish-cutting]").forEach((form) => {
-    if (!form.querySelector("[data-save-cutting-progress]")) return;
-    const state = { timer: null, saving: false, saveAgain: false, pending: null };
-    cuttingProgressAutoSave.set(form, state);
-    const persistDraft = async () => {
-      if (state.saving) {
-        state.saveAgain = true;
-        return;
-      }
-      const cuttingData = readCuttingInputs(form, false, false);
-      if (!cuttingData) return;
-      state.saving = true;
-      const saveStatus = form.querySelector("[data-cutting-save-status]");
-      if (saveStatus) saveStatus.textContent = "جاري حفظ الجلسة...";
-      try {
-        state.pending = saveProgress(form, cuttingData);
-        await state.pending;
-        if (saveStatus) saveStatus.textContent = "تم الحفظ تلقائياً";
-      } catch (error) {
-        if (saveStatus) saveStatus.textContent = "تعذر الحفظ التلقائي";
-        window.factoryUI.toast(`تعذر حفظ جلسة الفرش تلقائياً: ${error.message}`, "error");
-      } finally {
-        state.saving = false;
-        state.pending = null;
-        if (state.saveAgain) {
-          state.saveAgain = false;
-          queueSave();
-        }
-      }
-    };
-    const queueSave = () => {
-      clearTimeout(state.timer);
-      state.timer = setTimeout(() => { void persistDraft(); }, 700);
-    };
-    form.addEventListener("input", (event) => {
-      if (event.target.matches('[name="fabricQuantity"], [name="externalFabricSource"], [data-ply-name], [data-ply-count], [name="technicalNotes"]')) {
-        updateCuttingCalculation(form);
-        queueSave();
-      }
-    });
-    form.addEventListener("change", (event) => {
-      if (event.target.matches('[name="fabricId"], [name="fabricUnit"], [data-ply-color], [data-size-type]')) {
-        updateCuttingCalculation(form);
-        queueSave();
-      }
-    });
-    form.addEventListener("click", (event) => {
-      if (event.target.closest("[data-add-live-ply]")) {
-        form.querySelector("[data-color-ply-rows]").insertAdjacentHTML("beforeend", cuttingColorPlyRow("#000000", "", ""));
-        updateCuttingCalculation(form);
-      } else if (event.target.closest("[data-add-fabric-amount]")) {
-        const additionInput = form.elements.fabricAddition;
-        const addition = Number(additionInput.value);
-        const total = Number(form.elements.fabricQuantity.value);
-        const unit = form.elements.fabricUnit.value;
-        if (!Number.isFinite(addition) || addition <= 0 || !Number.isFinite(total)
-          || (unit === "توب" && !Number.isSafeInteger(addition))) {
-          window.factoryUI.toast("أدخل كمية إضافية موجبة ومتوافقة مع وحدة القماش.", "error");
-          return;
-        }
-        form.elements.fabricQuantity.value = String(Math.round((total + addition) * 1000) / 1000);
-        additionInput.value = "";
-        form.elements.boltCount.value = unit === "توب" ? form.elements.fabricQuantity.value : "0";
-        queueSave();
-      } else if (event.target.closest("[data-add-ply-color], [data-remove-ply-color], [data-size-toggle]")) {
-        updateCuttingCalculation(form);
-        queueSave();
-      }
-    });
-  });
   document.querySelectorAll(".cutting-finish-form").forEach((form) => form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const cuttingData = readCuttingInputs(form, true);
@@ -2442,25 +2361,12 @@ function bindCuttingActions(session) {
       window.factoryUI.toast("اختر العميل الذي ستُسجل القصة على حسابه.", "error");
       return;
     }
-    const selectedFabricId = submitForm.elements.fabricId.value;
-    const isExternal = selectedFabricId === "external";
-    const fabricUnit = submitForm.elements.fabricUnit.value;
-    const fabricQuantity = Number(submitForm.elements.fabricQuantity.value);
-    const fabricId = isExternal ? null : selectedFabricId;
-    const externalFabricSource = isExternal ? String(submitForm.elements.externalFabricSource.value).trim() : "";
-    const fabric = isExternal ? externalFabricSource : submitForm.elements.fabricId.selectedOptions[0]?.dataset.name || "";
-    const boltCount = fabricUnit === "توب" ? fabricQuantity : 0;
-    if ((!isExternal && !fabricId) || !fabric || !["متر", "توب"].includes(fabricUnit)
-      || (!isExternal && fabricUnit !== submitForm.elements.fabricId.selectedOptions[0]?.dataset.unit)
-      || !Number.isFinite(fabricQuantity) || fabricQuantity <= 0
-      || (fabricUnit === "توب" && !Number.isSafeInteger(fabricQuantity))) {
-      window.factoryUI.toast("حدد العميل أو البراند، والقماش، والكمية بوحدتها الصحيحة لبدء جلسة الفرش.", "error");
-      return;
-    }
+    const cuttingData = readCuttingInputs(submitForm, true);
+    if (!cuttingData) return;
     const button = submitForm.querySelector('[type="submit"]');
     button.disabled = true;
     let imageUploaded = false;
-    let sessionCreated = false;
+    let storySaved = false;
     try {
       const orderId = crypto.randomUUID();
       const imageUrl = await uploadModelImage(orderId, submitForm.elements.modelImage.files[0]);
@@ -2470,34 +2376,27 @@ function bindCuttingActions(session) {
         requested_customer_id: customerId,
         requested_model_name: modelName,
         requested_model_number: modelNumber,
-        requested_size_data: { type: "", counts: {} },
-        requested_color_ply_data: { colors: [], sizes: [], type: "" },
+        requested_size_data: cuttingData.sizeData,
+        requested_color_ply_data: cuttingData.colorPlyData,
         requested_model_image_url: imageUrl,
-        requested_fabric: fabric,
-        requested_bolt_count: boltCount,
-        requested_technical_notes: String(submitForm.elements.technicalNotes.value).trim(),
-        requested_fabric_id: fabricId,
-        requested_fabric_quantity: fabricQuantity,
-        requested_external_fabric_unit: isExternal ? fabricUnit : ""
+        requested_fabric: cuttingData.fabric,
+        requested_bolt_count: cuttingData.boltCount,
+        requested_technical_notes: cuttingData.technicalNotes,
+        requested_fabric_id: cuttingData.fabricId,
+        requested_fabric_quantity: cuttingData.fabricQuantity,
+        requested_external_fabric_unit: cuttingData.externalFabricUnit
       });
-      if (error?.code === "PGRST202") throw new Error("دالة إرسال القصة غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+      if (error?.code === "PGRST202") throw new Error("دالة تسجيل القصة بالدفعة الواحدة غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
       if (error) throw error;
-      sessionCreated = true;
-      submitForm.reset();
-      submitForm.elements.customerId.value = "";
-      submitForm.elements.fabricQuantity.value = "";
-      submitForm.elements.boltCount.value = "0";
-      submitForm.elements.fabricUnit.value = "توب";
-      submitForm.elements.externalFabricUnit.value = "";
-      submitForm.elements.fabricId.dispatchEvent(new Event("change", { bubbles: true }));
+      storySaved = true;
       await refreshDashboard(session);
       activateDashboardView("admin-requests");
       const activeSession = document.querySelector(`[data-finish-cutting="${orderId}"]`);
       activeSession?.scrollIntoView({ behavior: "smooth", block: "center" });
-      window.factoryUI.toast("بدأت جلسة الفرش. أضف الألوان والراقات تدريجياً؛ تُحفظ التغييرات تلقائياً.");
+      window.factoryUI.toast(`تم تسجيل ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(data)} قطعة وأصبحت القصة جاهزة للقص.`);
     } catch (error) {
       button.disabled = false;
-      window.factoryUI.toast(`${imageUploaded && !sessionCreated ? "رُفعت الصورة لكن لم تُسجل القصة. " : ""}تعذر بدء جلسة الفرش: ${error.message}`, "error");
+      window.factoryUI.toast(`${imageUploaded && !storySaved ? "رُفعت الصورة لكن لم تُسجل القصة. " : ""}تعذر حفظ القصة: ${error.message}`, "error");
     }
     });
   }
