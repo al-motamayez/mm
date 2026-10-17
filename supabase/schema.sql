@@ -657,7 +657,8 @@ alter table public.orders
     status in (
       'قيد الانتظار', 'معلق', 'تحت الإنشاء', 'قيد الفرش',
       'تم الفرش / جاهز للقص', 'تم القص', 'معلق - في انتظار الخياطة',
-      'في الخياطة', 'جاهز للتسليم', 'مكتمل', 'تم التسليم بالكامل'
+      'في الخياطة', 'جاهز للتسليم', 'مكتمل', 'تم التسليم بالكامل',
+      'تم التسليم والإغلاق'
     )
   );
 
@@ -1083,7 +1084,11 @@ begin
     -- Accept only canonical units plus legacy values that are normalized below.
     if exists (
       select 1 from public.orders
-      where id = requested_order_id and archived_at is not null
+      where id = requested_order_id
+        and (
+          archived_at is not null
+          or status in ('تم التسليم بالكامل', 'تم التسليم والإغلاق')
+        )
     ) then
       raise exception 'Archived factory orders cannot be edited.';
     end if;
@@ -2599,9 +2604,10 @@ begin
 end;
 $$;
 
-create or replace function public.complete_factory_handover(
+drop function if exists public.complete_factory_handover(uuid, integer, text);
+create function public.complete_factory_handover(
   requested_order_id uuid,
-  requested_actual_delivered_qty integer,
+  requested_final_batch_qty integer,
   requested_recipient_name text
 )
 returns void
@@ -2611,37 +2617,50 @@ set search_path = public
 as $$
 declare
   current_order public.orders%rowtype;
-  additional_quantity integer;
+  matched_customer_id uuid;
+  final_delivered_quantity integer;
 begin
   if not public.is_active_factory_admin() then
     raise exception 'Only active admins can complete factory handovers.';
   end if;
   if requested_order_id is null
-     or requested_actual_delivered_qty is null
-     or requested_actual_delivered_qty <= 0 then
-    raise exception 'A valid order and positive final delivered quantity are required.';
+     or requested_final_batch_qty is null
+     or requested_final_batch_qty < 0 then
+    raise exception 'A valid order and nonnegative final delivery batch quantity are required.';
   end if;
+
+  select customer_id
+    into matched_customer_id
+  from public.orders
+  where id = requested_order_id;
+  if not found or matched_customer_id is null then
+    raise exception 'Factory order not found or has no customer.';
+  end if;
+
+  perform 1
+  from public.factory_clients
+  where id = matched_customer_id
+  for update;
 
   select *
     into current_order
   from public.orders
   where id = requested_order_id
   for update;
-  if not found or current_order.customer_id is null then
-    raise exception 'Factory order not found or has no customer.';
+  if not found or current_order.customer_id is distinct from matched_customer_id then
+    raise exception 'Factory order changed while the handover was being completed.';
   end if;
   if current_order.archived_at is not null then
     raise exception 'Archived factory orders cannot be completed again.';
   end if;
+  if current_order.status in ('تم التسليم بالكامل', 'تم التسليم والإغلاق') then
+    raise exception 'Closed factory orders cannot be completed again.';
+  end if;
   if current_order.total_pieces <= 0 then
     raise exception 'Record the actual cut quantity before completing the handover.';
   end if;
-  if requested_actual_delivered_qty < current_order.delivered_pieces then
-    raise exception 'Final delivered quantity cannot be lower than quantities already recorded as delivered.';
-  end if;
-
-  additional_quantity := requested_actual_delivered_qty - current_order.delivered_pieces;
-  if additional_quantity > 0 then
+  final_delivered_quantity := current_order.delivered_pieces + requested_final_batch_qty;
+  if requested_final_batch_qty > 0 then
     if length(trim(coalesce(requested_recipient_name, ''))) = 0 then
       raise exception 'A recipient name is required when recording an additional delivery.';
     end if;
@@ -2650,21 +2669,21 @@ begin
       order_id, customer_id, quantity, price_per_piece, recipient_name, expected_delivery_date
     )
     values (
-      current_order.id, current_order.customer_id, additional_quantity,
+      current_order.id, current_order.customer_id, requested_final_batch_qty,
       current_order.price_per_piece, trim(requested_recipient_name),
       current_order.expected_delivery_date
     );
   end if;
 
   update public.orders
-  set delivered_pieces = requested_actual_delivered_qty,
-      status = 'تم التسليم بالكامل',
+  set delivered_pieces = final_delivered_quantity,
+      status = 'تم التسليم والإغلاق',
       archived_at = now()
   where id = current_order.id;
 
   update public.production_stages
-  set target_quantity = greatest(target_quantity, requested_actual_delivered_qty),
-      completed_quantity = requested_actual_delivered_qty,
+  set target_quantity = greatest(target_quantity, final_delivered_quantity),
+      completed_quantity = final_delivered_quantity,
       status = 'مكتمل',
       updated_at = now()
   where order_id = current_order.id
@@ -3601,7 +3620,14 @@ drop policy if exists "Supervisors update their production stages" on public.pro
 create policy "Supervisors update their production stages"
   on public.production_stages for update to authenticated
   using (
-    public.is_active_factory_admin()
+    (
+      public.is_active_factory_admin()
+      and exists (
+        select 1 from public.orders
+        where orders.id = production_stages.order_id
+          and orders.archived_at is null
+      )
+    )
     or (
       stage_name = 'cutting'
       and public.has_active_factory_role(array['cutting'])
@@ -3614,7 +3640,14 @@ create policy "Supervisors update their production stages"
     )
   )
   with check (
-    public.is_active_factory_admin()
+    (
+      public.is_active_factory_admin()
+      and exists (
+        select 1 from public.orders
+        where orders.id = production_stages.order_id
+          and orders.archived_at is null
+      )
+    )
     or (
       stage_name = 'cutting'
       and public.has_active_factory_role(array['cutting'])
