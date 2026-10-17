@@ -1675,13 +1675,6 @@ function adminView(data, accounts) {
     .join("");
   return `
     <section id="dashboard" class="dashboard-section">
-      <div class="clients-toolbar">
-        <div>
-          <h2>إدارة المصنع</h2>
-          <p>إعادة ضبط البيانات التجريبية ومسح القيم الاختبارية فوراً.</p>
-        </div>
-        <button class="button button-danger" type="button" data-reset-factory>إعادة ضبط المصنع / مسح كافة البيانات</button>
-      </div>
       ${adminDashboardView(data)}<div class="stats-grid">${stat("إجمالي القطع", new Intl.NumberFormat("ar-EG-u-nu-latn").format(totalUnits), "قطعة")}${stat("المدفوعات المسجلة", money(paid), "إجمالي الدفعات")}${stat("طلبات الانصراف", data.leaves.filter((item) => item.status === "قيد المراجعة").length, "بانتظار المراجعة")}</div>
     </section>
     <section id="model-review" class="dashboard-section">${modelStatusReviewView(data)}</section>
@@ -1754,6 +1747,7 @@ function adminView(data, accounts) {
             || accounts.find((user) => user.id === entry.user_id);
           return `<tr><td>${escapeHtml(account?.name || entry.user_id)}</td><td>${entry.event_type === "signup" ? "إنشاء حساب" : "تسجيل دخول"}</td><td>${formatDateTime(entry.occurred_at)}</td></tr>`;
         })))}
+        ${panel("إعادة ضبط النظام", `<div class="panel-body"><p>مسح جميع بيانات المصنع وحسابات المستخدمين الأخرى نهائياً، مع الإبقاء على حساب الأدمن الحالي فقط.</p><button class="button button-danger" type="button" data-reset-factory>مسح البيانات وإعادة النظام للبداية</button></div>`)}
     </section>
     <div class="modal-backdrop" id="client-account-modal" hidden><section class="modal-card compact-view-modal" role="dialog" aria-modal="true" aria-labelledby="client-account-modal-title"><button class="modal-close" type="button" data-close-client-view aria-label="إغلاق">×</button><div id="client-account-modal-content"></div></section></div>
     <div class="modal-backdrop" id="model-details-modal" hidden><section class="modal-card compact-view-modal" role="dialog" aria-modal="true" aria-labelledby="model-details-title"><button class="modal-close" type="button" data-close-model-view aria-label="إغلاق">×</button><div id="model-details-modal-content"></div><div class="form-actions"><button class="button button-secondary" type="button" data-print-model-details>طباعة الموديل</button><button class="button button-secondary" type="button" data-edit-model-from-details>تعديل الطلبية</button><button class="row-action order-delete-action" type="button" data-action="delete-order">حذف الطلبية</button><button class="row-action" type="button" data-close-model-view>إغلاق</button></div></section></div>`;
@@ -2886,9 +2880,9 @@ function bindActions(session) {
   if (resetFactoryButton) {
     resetFactoryButton.addEventListener("click", async () => {
       const confirmed = await window.factoryUI.confirmAction({
-        title: "إعادة ضبط المصنع",
-        message: "هل تريد مسح بيانات المصنع؟ سيتم حذف العملاء والموديلات والمخزون والحركات المالية والقصات وسجلات التشغيل بشكل دائم، مع الاحتفاظ بحسابات الدخول. لا يمكن التراجع عن هذا الإجراء.",
-        confirmLabel: "مسح كافة البيانات",
+        title: "مسح بيانات النظام والحسابات",
+        message: "سيتم حذف جميع العملاء والموديلات والمخزون والحركات والسجلات وصور الموديلات وجميع حسابات الدخول الأخرى نهائياً. سيبقى حساب الأدمن الحالي فقط لتتمكن من استخدام النظام بعد المسح. لا يمكن التراجع عن هذا الإجراء.",
+        confirmLabel: "مسح كل البيانات والحسابات",
         cancelLabel: "إلغاء",
         danger: true
       });
@@ -2903,7 +2897,7 @@ function bindActions(session) {
         if (error) throw error;
         resetApplied = true;
         await refreshDashboard(session);
-        window.factoryUI.toast("تمت إعادة ضبط بيانات المصنع. بقيت حسابات المستخدمين كما هي.");
+        window.factoryUI.toast("تم مسح بيانات النظام وحسابات المستخدمين الأخرى. بقي حساب الأدمن الحالي.");
       } catch (error) {
         window.factoryUI.toast(
           resetApplied

@@ -1637,6 +1637,12 @@ begin
   delete from public.factory_fabrics;
   delete from public.factory_clients;
   delete from public.factory_live_signals;
+  delete from storage.objects
+  where bucket_id = 'factory-model-images';
+  delete from public.users
+  where id <> auth.uid();
+  delete from auth.users
+  where id <> auth.uid();
 end;
 $$;
 
