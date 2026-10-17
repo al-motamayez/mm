@@ -2887,36 +2887,30 @@ function bindActions(session) {
     resetFactoryButton.addEventListener("click", async () => {
       const confirmed = await window.factoryUI.confirmAction({
         title: "إعادة ضبط المصنع",
-        message: "هل تريد مسح جميع بيانات المصنع التجريبية؟ سيتم حذف العملاء والموديلات والمخزون والحركات المالية والقصات بشكل دائم. لا يمكن التراجع عن هذا الإجراء.",
+        message: "هل تريد مسح بيانات المصنع؟ سيتم حذف العملاء والموديلات والمخزون والحركات المالية والقصات وسجلات التشغيل بشكل دائم، مع الاحتفاظ بحسابات الدخول. لا يمكن التراجع عن هذا الإجراء.",
         confirmLabel: "مسح كافة البيانات",
         cancelLabel: "إلغاء",
         danger: true
       });
       if (!confirmed) return;
       resetFactoryButton.disabled = true;
+      let resetApplied = false;
       try {
-        const resetTables = [
-          "factory_cash_transactions",
-          "factory_deliveries",
-          "factory_fabric_transactions",
-          "factory_fabrics",
-          "factory_auth_events",
-          "factory_live_signals",
-          "factory_records",
-          "production_stages",
-          "orders",
-          "factory_clients"
-        ];
-        for (const tableName of resetTables) {
-          const { error } = await supabaseClient.from(tableName).delete().neq("id", "00000000-0000-0000-0000-000000000000");
-          if (error && !["42P01", "42703", "PGRST205"].includes(error.code)) {
-            throw new Error(`${tableName}: ${error.message}`);
-          }
+        const { error } = await supabaseClient.rpc("reset_factory_data");
+        if (error?.code === "PGRST202") {
+          throw new Error("دالة إعادة ضبط المصنع غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
         }
+        if (error) throw error;
+        resetApplied = true;
         await refreshDashboard(session);
-        window.factoryUI.toast("تمت إعادة ضبط المصنع ومسح البيانات التجريبية بنجاح.");
+        window.factoryUI.toast("تمت إعادة ضبط بيانات المصنع. بقيت حسابات المستخدمين كما هي.");
       } catch (error) {
-        window.factoryUI.toast(`تعذر إعادة ضبط المصنع: ${error.message}`, "error");
+        window.factoryUI.toast(
+          resetApplied
+            ? `تمت إعادة الضبط، لكن تعذر تحديث الشاشة: ${error.message}`
+            : `تعذر إعادة ضبط المصنع: ${error.message}`,
+          "error"
+        );
       } finally {
         resetFactoryButton.disabled = false;
       }

@@ -67,6 +67,8 @@ input:focus, select:focus { border-color: #5e9b83; box-shadow: 0 0 0 3px #5e9b83
 .auth-message { margin: 0 0 16px; padding: 11px 13px; border-radius: 9px; font-size: 13px; line-height: 1.8; }
 .message-error { color: #8c3636; background: #fff0ee; }
 .message-success { color: #276347; background: #eaf5ed; }
+.auth-reset-button { justify-self: center; padding: 7px 4px; border: 0; color: var(--green); background: transparent; font-size: 12px; text-decoration: underline; }
+.auth-reset-button:hover { color: var(--green-dark); }
 .card-heading h3 { margin: 0 0 7px; font-size: 18px; }
 .card-heading h3 + p { margin: 0 0 18px; color: var(--muted); font-size: 13px; }
 .auth-security-note { margin: 20px 0 0; color: var(--muted); font-size: 11px; line-height: 1.8; }

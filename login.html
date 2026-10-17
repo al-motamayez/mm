@@ -29,6 +29,16 @@
           <input id="login-password" name="password" type="password" autocomplete="current-password" required>
           <label class="remember-login-option"><input name="remember" type="checkbox" checked> البقاء مسجلاً للدخول على هذا الجهاز</label>
           <button class="button button-primary button-full" type="submit">دخول إلى حسابي <span aria-hidden="true">←</span></button>
+          <button class="auth-reset-button" id="request-password-reset" type="button">نسيت كلمة المرور؟ أرسل رابط إعادة التعيين</button>
+        </form>
+      </section>
+      <section id="password-recovery-panel" hidden>
+        <form id="password-recovery-form" class="form-stack">
+          <label for="recovery-password">كلمة المرور الجديدة</label>
+          <input id="recovery-password" name="password" type="password" autocomplete="new-password" minlength="8" required>
+          <label for="recovery-password-confirm">تأكيد كلمة المرور الجديدة</label>
+          <input id="recovery-password-confirm" name="passwordConfirm" type="password" autocomplete="new-password" minlength="8" required>
+          <button class="button button-primary button-full" type="submit">حفظ كلمة المرور الجديدة</button>
         </form>
       </section>
       <section id="signup-panel" hidden>

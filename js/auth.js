@@ -16,9 +16,23 @@ const signupForm = document.querySelector("#signup-form");
 const message = document.querySelector("#auth-message");
 const loginPanel = document.querySelector("#login-panel");
 const signupPanel = document.querySelector("#signup-panel");
+const passwordRecoveryPanel = document.querySelector("#password-recovery-panel");
 const signupButton = signupForm.querySelector('[type="submit"]');
 signupButton.disabled = true;
 let signupDisabledReason = "";
+
+function hasPasswordRecoveryHash() {
+  return new URLSearchParams(window.location.hash.slice(1)).get("type") === "recovery"
+    || new URLSearchParams(window.location.search).get("type") === "recovery";
+}
+
+function showPasswordRecovery() {
+  document.querySelector("#auth-tabs").hidden = true;
+  loginPanel.hidden = true;
+  signupPanel.hidden = true;
+  passwordRecoveryPanel.hidden = false;
+  showMessage("أدخل كلمة مرور جديدة لا تقل عن 8 أحرف.");
+}
 
 function usernameEmail(username) {
   return `${username.trim().toLocaleLowerCase()}@${AUTH_EMAIL_DOMAIN}`;
@@ -178,6 +192,71 @@ document.querySelectorAll("[data-auth-mode]").forEach((button) => {
   button.addEventListener("click", () => showAuthMode(button.dataset.authMode));
 });
 
+document.querySelector("#request-password-reset").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  const identifier = loginForm.elements.username.value.trim();
+  const validEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identifier);
+  const validUsername = /^[a-zA-Z0-9._-]{3,30}$/.test(identifier);
+  if (!validEmail && !validUsername) {
+    showMessage("اكتب البريد الإلكتروني أو اسم المستخدم أولاً لإرسال رابط إعادة التعيين.");
+    loginForm.elements.username.focus();
+    return;
+  }
+
+  button.disabled = true;
+  try {
+    const email = await loginEmailFor(identifier);
+    const redirectTo = new URL(window.location.pathname, window.location.origin).toString();
+    const { error } = await supabaseClient.auth.resetPasswordForEmail(email, { redirectTo });
+    if (error) throw error;
+    showMessage("إذا كان البريد مرتبطًا بحساب، فسيصلك رابط إعادة تعيين كلمة المرور. افتح الرابط من هذا الجهاز.", false);
+  } catch (error) {
+    console.error("تعذر إرسال رابط إعادة تعيين كلمة المرور.", error);
+    showMessage(`تعذر إرسال رابط إعادة التعيين: ${error.message}`);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+document.querySelector("#password-recovery-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const password = form.elements.password.value;
+  if (password.length < 8 || password !== form.elements.passwordConfirm.value) {
+    showMessage(password.length < 8
+      ? "يجب أن تتكون كلمة المرور من 8 أحرف على الأقل."
+      : "كلمتا المرور غير متطابقتين.");
+    return;
+  }
+
+  const button = form.querySelector('[type="submit"]');
+  button.disabled = true;
+  try {
+    const { data: { session }, error: sessionError } = await supabaseClient.auth.getSession();
+    if (sessionError) throw sessionError;
+    if (!session) throw new Error("رابط إعادة التعيين غير صالح أو انتهت صلاحيته. اطلب رابطًا جديدًا.");
+
+    const { error } = await supabaseClient.auth.updateUser({ password });
+    if (error) throw error;
+    const { error: signOutError } = await supabaseClient.auth.signOut();
+    if (signOutError) {
+      console.error("تم تغيير كلمة المرور لكن تعذر إنهاء جلسة الاستعادة.", signOutError);
+      throw new Error("تم تغيير كلمة المرور، لكن تعذر إنهاء جلسة الاستعادة. أغلق الصفحة ثم سجّل الدخول بكلمة المرور الجديدة.");
+    }
+    window.history.replaceState(null, "", window.location.pathname);
+    form.reset();
+    passwordRecoveryPanel.hidden = true;
+    document.querySelector("#auth-tabs").hidden = false;
+    showAuthMode("login");
+    showMessage("تم تغيير كلمة المرور. سجّل الدخول بالبريد وكلمة المرور الجديدة.", false);
+  } catch (error) {
+    console.error("تعذر تغيير كلمة المرور من رابط الاستعادة.", error);
+    showMessage(`تعذر تغيير كلمة المرور: ${error.message}`);
+  } finally {
+    button.disabled = false;
+  }
+});
+
 signupForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const fullName = signupForm.elements.fullName.value.trim();
@@ -273,7 +352,18 @@ loginForm.addEventListener("submit", async (event) => {
         showMessage("تعذر الاتصال بخدمة تسجيل الدخول. تحقق من اتصال الإنترنت وإعدادات Supabase ثم حاول مجددًا.");
         return;
       }
-      showMessage("اسم المستخدم أو كلمة المرور غير صحيحة. تأكد من بيانات الدخول، وأن حسابك مفعّل.");
+      if (error.code === "email_not_confirmed") {
+        showMessage("البريد غير مؤكّد في Supabase Auth. أكّد البريد من رسالة التفعيل أو من لوحة Supabase ثم حاول مجددًا.");
+      } else if (error.code === "user_banned") {
+        showMessage("تم إيقاف حساب المصادقة. راجع إعدادات المستخدم في Supabase Auth.");
+      } else if (error.code === "over_request_rate_limit" || error.code === "too_many_requests") {
+        showMessage("محاولات كثيرة خلال وقت قصير. انتظر قليلاً ثم حاول مجددًا.");
+      } else if (error.code === "invalid_credentials") {
+        showMessage("رفض Supabase Auth بيانات الدخول. إذا كان البريد صحيحًا، اضغط «نسيت كلمة المرور؟» لإعادة تعيين كلمة مرور Auth؛ بيانات جدول users لا تكفي لتسجيل الدخول.");
+      } else {
+        console.error("رفض Supabase Auth محاولة تسجيل الدخول.", error);
+        showMessage(`تعذر تسجيل الدخول عبر Supabase Auth${error.code ? ` (${error.code})` : ""}. تحقق من البريد وكلمة المرور وحالة الحساب في لوحة Supabase.`);
+      }
       return;
     }
     if (!data.user) {
@@ -297,6 +387,14 @@ async function initializeAuth() {
   showAuthMode("login");
   const { data: { session }, error: sessionError } = await supabaseClient.auth.getSession();
   if (sessionError) throw sessionError;
+  if (hasPasswordRecoveryHash()) {
+    if (!session) {
+      showMessage("رابط إعادة التعيين غير صالح أو انتهت صلاحيته. اطلب رابطًا جديدًا.");
+      return;
+    }
+    showPasswordRecovery();
+    return;
+  }
   if (session?.user) {
     await routeAuthenticatedUser(session.user);
     return;

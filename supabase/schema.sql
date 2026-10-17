@@ -1440,6 +1440,12 @@ declare
   payment_customer_id uuid;
   payment_period_started_at timestamptz;
 begin
+  if tg_op = 'DELETE'
+     and current_setting('factory.reset_in_progress', true) = 'on'
+     and public.is_active_factory_admin() then
+    return old;
+  end if;
+
   if old.collection = 'settlements' then
     raise exception 'Settled account history is immutable.';
   end if;
@@ -1609,7 +1615,34 @@ begin
 end;
 $$;
 
+create or replace function public.reset_factory_data()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not public.is_active_factory_admin() then
+    raise exception 'Only active admins can reset factory data.';
+  end if;
+
+  perform set_config('factory.reset_in_progress', 'on', true);
+  delete from public.factory_auth_events;
+  delete from public.factory_fabric_transactions;
+  delete from public.factory_deliveries;
+  delete from public.factory_cash_transactions;
+  delete from public.factory_records;
+  delete from public.production_stages;
+  delete from public.orders;
+  delete from public.factory_fabrics;
+  delete from public.factory_clients;
+  delete from public.factory_live_signals;
+end;
+$$;
+
 revoke all on function public.record_factory_auth_event(text) from public, anon, authenticated;
+revoke all on function public.reset_factory_data() from public, anon, authenticated;
+grant execute on function public.reset_factory_data() to authenticated;
 
 alter table public.factory_fabrics enable row level security;
 alter table public.factory_fabric_transactions enable row level security;
