@@ -6,9 +6,13 @@ let usersTableHasStatus = false;
 let selectedClientId = "";
 let clientManagementTab = "summary";
 let realtimeChannel = null;
+let presenceChannel = null;
 let realtimeRefreshTimer = null;
-let realtimeChangeCount = 0;
 let realtimeRefreshRunning = false;
+let realtimeNotifications = [];
+let notificationStorageAccount = "";
+let onlineUserCount = 0;
+let activeFinanceTab = "payments";
 const rolePages = {
   admin: "admin.html",
   cutting: "cutting.html",
@@ -105,7 +109,9 @@ function emptyDashboardData() {
     clientNotes: [],
     personalAttendance: [],
     personalAdvances: [],
-    personalPayroll: []
+    personalPayroll: [],
+    workerAdvances: [],
+    workerPayroll: []
   };
 }
 
@@ -177,7 +183,7 @@ async function readDashboardData(session) {
     : session.role === "client"
       ? supabaseClient.rpc("read_factory_client_cash_transactions")
       : Promise.resolve({ data: [], error: null });
-  const [payments, leaves, tasks, settlements, deliveriesResult, cashTransactionsResult, personalAttendance, personalAdvances, personalPayroll, fabricsResult, fabricTransactionsResult, authEventsResult] = await Promise.all([
+  const [payments, leaves, tasks, settlements, deliveriesResult, cashTransactionsResult, personalAttendance, personalAdvances, personalPayroll, workerAdvances, workerPayroll, fabricsResult, fabricTransactionsResult, authEventsResult] = await Promise.all([
     readFlexibleRecords("payments"),
     readFlexibleRecords("leaves"),
     readFlexibleRecords("tasks"),
@@ -187,6 +193,8 @@ async function readDashboardData(session) {
     session.role === "cutting" ? readFlexibleRecords("attendance") : Promise.resolve([]),
     session.role === "cutting" ? readFlexibleRecords("advances") : Promise.resolve([]),
     session.role === "cutting" ? readFlexibleRecords("payroll") : Promise.resolve([]),
+    session.role === "admin" ? readFlexibleRecords("advances") : Promise.resolve([]),
+    session.role === "admin" ? readFlexibleRecords("payroll") : Promise.resolve([]),
     ...fabricPromises,
     authEventsPromise
   ]);
@@ -215,6 +223,8 @@ async function readDashboardData(session) {
   data.personalAttendance = personalAttendance;
   data.personalAdvances = personalAdvances;
   data.personalPayroll = personalPayroll;
+  data.workerAdvances = workerAdvances;
+  data.workerPayroll = workerPayroll;
   if (session.role === "cutting") {
     const { data: cuttingClients, error: cuttingClientsError } = await supabaseClient.rpc("read_factory_cutting_clients");
     if (cuttingClientsError?.code === "PGRST202") {
@@ -1315,16 +1325,35 @@ function clientAccountsOverview(data) {
     ${clientAccountCards(data)}`;
 }
 
+function workerCashOutflows(data) {
+  return [
+    ...data.workerAdvances.map((record) => ({
+      category: "سلفة عامل",
+      description: `${record.workerName || record.name || record.username || "عامل"} · ${record.description || record.reason || record.reference || ""}`,
+      amount: Number(record.amount ?? record.value ?? record.netAmount ?? 0),
+      date: record._createdAt || record.created_at || record.date
+    })),
+    ...data.workerPayroll.filter((record) => Number(record.paidAmount ?? record.paid ?? 0) > 0).map((record) => ({
+      category: "صرف راتب عامل",
+      description: `${record.workerName || record.name || record.username || "عامل"} · ${record.period || record.month || ""}`,
+      amount: Number(record.paidAmount ?? record.paid ?? 0),
+      date: record.paidAt || record.paid_at || record._createdAt || record.created_at || record.date
+    }))
+  ].filter((entry) => Number.isFinite(entry.amount) && entry.amount > 0);
+}
+
 function cashLedgerView(data) {
+  const workerWithdrawals = workerCashOutflows(data);
   const customerIncome = data.payments.reduce((sum, payment) => addMoney(sum, payment.amount), 0);
   const otherIncome = data.cashTransactions
     .filter((entry) => entry.direction === "income")
     .reduce((sum, entry) => addMoney(sum, entry.amount), 0);
   const orderPayments = data.models
     .reduce((sum, order) => addMoney(sum, order.paidAmount || 0), 0);
-  const expenses = data.cashTransactions
-    .filter((entry) => entry.direction === "expense")
-    .reduce((sum, entry) => addMoney(sum, entry.amount), 0);
+  const expenses = sumMoney([
+    ...data.cashTransactions.filter((entry) => entry.direction === "expense").map((entry) => entry.amount),
+    ...workerWithdrawals.map((entry) => entry.amount)
+  ]);
   const entries = [
     ...data.payments.map((payment) => ({
       direction: "income",
@@ -1351,6 +1380,14 @@ function cashLedgerView(data) {
       amount: Number(entry.amount),
       method: entry.payment_method,
       date: entry.occurred_at
+    })),
+    ...workerWithdrawals.map((entry) => ({
+      direction: "expense",
+      category: entry.category,
+      description: entry.description,
+      amount: entry.amount,
+      method: "صرف عامل",
+      date: entry.date
     }))
   ].sort((left, right) => new Date(right.date).getTime() - new Date(left.date).getTime());
   const localDateTime = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16);
@@ -1376,9 +1413,10 @@ function adminDashboardView(data) {
     ...data.models.map((order) => order.paidAmount),
     ...data.cashTransactions.filter((entry) => entry.direction === "income").map((entry) => entry.amount)
   ]);
-  const drawerExpenses = sumMoney(data.cashTransactions
-    .filter((entry) => entry.direction === "expense")
-    .map((entry) => entry.amount));
+  const drawerExpenses = sumMoney([
+    ...data.cashTransactions.filter((entry) => entry.direction === "expense").map((entry) => entry.amount),
+    ...workerCashOutflows(data).map((entry) => entry.amount)
+  ]);
   const drawerBalance = subtractMoney(drawerIncome, drawerExpenses);
   const clientSummaries = data.clients.map((client) => clientAccountSummary(client, data));
   const customerReceivables = sumMoney(clientSummaries.map((summary) =>
@@ -1803,9 +1841,15 @@ function adminView(data, accounts) {
       <div class="modal-backdrop" id="delivery-modal" hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="delivery-modal-title"><button class="modal-close" type="button" data-close-delivery aria-label="إغلاق">×</button><h2 id="delivery-modal-title">تسجيل تسليم جديد</h2><p id="delivery-modal-description">أدخل كمية هذه الدفعة واسم مستلمها؛ ستُضاف إلى إجمالي ما تم تسليمه حتى الآن.</p><form id="delivery-form" class="modal-form"><input type="hidden" name="orderId"><input type="hidden" name="finalize" value=""><label for="delivery-settlement-choice" data-settlement-choice-field hidden>طريقة التسوية</label><select id="delivery-settlement-choice" name="settlementChoice" data-settlement-choice-field hidden></select><label for="delivery-quantity" id="delivery-quantity-label">كمية التسليم</label><input id="delivery-quantity" name="quantity" type="number" min="1" step="1" required><label for="delivery-recipient">اسم المستلم</label><input id="delivery-recipient" name="recipientName" required><div class="form-actions"><button class="button button-primary" type="submit">تسجيل التسليم</button><button class="row-action" type="button" data-close-delivery>إلغاء</button></div></form></section></div>
     </section>
     <section id="finance" class="dashboard-section">
-      ${panel("تسجيل دفعة مالية", `<div class="panel-body"><form id="payment-form" class="form-grid payment-form"><input type="hidden" name="editIndex" value=""><div class="field"><label for="payment-client">العميل</label><select id="payment-client" name="customerId" required><option value="">اختر العميل</option>${paymentClientOptions}</select></div><div class="field"><label for="payment-amount">المبلغ المدفوع (ج.م)</label><input id="payment-amount" name="amount" type="number" min="0.01" step="0.01" required></div><div class="field"><label for="payment-date">تاريخ الدفعة</label><input id="payment-date" name="date" type="date" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10)}" required></div><div class="field"><label for="payment-method">طريقة الدفع</label><select id="payment-method" name="method"><option>تحويل بنكي</option><option>نقدي</option><option>محفظة إلكترونية</option></select></div><div class="field"><label for="payment-reference">رقم الطلبية / مرجع</label><input id="payment-reference" name="reference" autocomplete="off"></div><div class="field"><label for="payment-notes">ملاحظات</label><input id="payment-notes" name="notes"></div><div class="form-actions"><button class="button button-primary" type="submit">تسجيل الدفعة</button><button class="row-action" type="button" data-cancel-edit hidden>إلغاء التعديل</button></div></form></div>`, "تُربط الدفعة بملف العميل المحدد")}
-      ${panel("سجل الدفعات المالية", `<div class="panel-body"><div class="payment-filter field"><label for="payment-filter-client">تصفية حسب العميل</label><select id="payment-filter-client"><option value="">كل العملاء</option>${paymentFilterOptions}</select></div>${table(["العميل","المبلغ","التاريخ والوقت","طريقة الدفع","رقم الطلبية / المرجع","ملاحظات","إجراء"], paymentRows(data.payments, true, data.clients))}</div>`)}
-      ${cashLedgerView(data)}
+      <div class="client-management-tabs finance-management-tabs" role="tablist" aria-label="حسابات العملاء والمصاريف">
+        <button type="button" role="tab" aria-selected="${activeFinanceTab === "payments"}" class="client-management-tab${activeFinanceTab === "payments" ? " active" : ""}" data-finance-tab="payments">الدفعات المالية</button>
+        <button type="button" role="tab" aria-selected="${activeFinanceTab === "ledger"}" class="client-management-tab${activeFinanceTab === "ledger" ? " active" : ""}" data-finance-tab="ledger">الداخل والخارج</button>
+      </div>
+      <div data-finance-panel="payments"${activeFinanceTab === "payments" ? "" : " hidden"}>
+        ${panel("تسجيل دفعة مالية", `<div class="panel-body"><form id="payment-form" class="form-grid payment-form"><input type="hidden" name="editIndex" value=""><div class="field"><label for="payment-client">العميل</label><select id="payment-client" name="customerId" required><option value="">اختر العميل</option>${paymentClientOptions}</select></div><div class="field"><label for="payment-amount">المبلغ المدفوع (ج.م)</label><input id="payment-amount" name="amount" type="number" min="0.01" step="0.01" required></div><div class="field"><label for="payment-date">تاريخ الدفعة</label><input id="payment-date" name="date" type="date" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10)}" required></div><div class="field"><label for="payment-method">طريقة الدفع</label><select id="payment-method" name="method"><option>تحويل بنكي</option><option>نقدي</option><option>محفظة إلكترونية</option></select></div><div class="field"><label for="payment-reference">رقم الطلبية / مرجع</label><input id="payment-reference" name="reference" autocomplete="off"></div><div class="field"><label for="payment-notes">ملاحظات</label><input id="payment-notes" name="notes"></div><div class="form-actions"><button class="button button-primary" type="submit">تسجيل الدفعة</button><button class="row-action" type="button" data-cancel-edit hidden>إلغاء التعديل</button></div></form></div>`, "تُربط الدفعة بملف العميل المحدد")}
+        ${panel("سجل الدفعات المالية", `<div class="panel-body"><div class="payment-filter field"><label for="payment-filter-client">تصفية حسب العميل</label><select id="payment-filter-client"><option value="">كل العملاء</option>${paymentFilterOptions}</select></div>${table(["العميل","المبلغ","التاريخ والوقت","طريقة الدفع","رقم الطلبية / المرجع","ملاحظات","إجراء"], paymentRows(data.payments, true, data.clients))}</div>`)}
+      </div>
+      <div data-finance-panel="ledger"${activeFinanceTab === "ledger" ? "" : " hidden"}>${cashLedgerView(data)}</div>
     </section>
     <section id="workers-production" class="dashboard-section">${panel("طلبات وأذونات الانصراف", table(["الموظف","التاريخ","السبب","الحالة","إجراء"], data.leaves.map((item, index) => `<tr><td>${escapeHtml(item.name)}</td><td>${formatRecordDate(item.date)}</td><td>${escapeHtml(item.reason)}</td><td>${statusTag(item.status)}</td><td>${item.status === "قيد المراجعة" ? `<button class="row-action" data-action="approve-leave" data-index="${index}" type="button">اعتماد</button> <button class="row-action" data-action="deny-leave" data-index="${index}" type="button">رفض</button>` : "—"}</td></tr>`)))}</section>
     ${fabricStockView(data, true)}
@@ -2025,6 +2069,7 @@ function navigationItems(role, info) {
 }
 
 function render(session, data, accounts) {
+  initializeRealtimeNotifications(session);
   document.querySelectorAll("body > #order-modal").forEach((modal) => modal.remove());
   const info = roleInfo[session.role];
   const username = escapeHtml(session.username);
@@ -2043,13 +2088,15 @@ function render(session, data, accounts) {
     <div class="app-shell${collapsedClass}">
       <button class="sidebar-backdrop" type="button" data-sidebar-close aria-label="إغلاق القائمة الجانبية"></button>
       <aside class="sidebar" id="sidebar"><a class="brand" href="../login.html"><img class="brand-logo" src="../assets/al-motamayez-logo.png" alt="AL-MOTAMAYEZ logo"><span class="brand-copy"><strong>AL-MOTAMAYEZ</strong></span></a><nav aria-label="القائمة الرئيسية"><p class="side-label">القائمة الرئيسية</p>${navigation}</nav><div class="sidebar-bottom"><div class="profile-chip"><span class="avatar">${username.slice(0, 1)}</span><div class="profile-details"><strong>${username}</strong><span>${escapeHtml(session.roleName)}</span></div></div><button class="logout-button" id="logout" type="button">↪ تسجيل الخروج</button></div></aside>
-      <main class="main-content"><header class="topbar"><div class="topbar-leading"><button class="sidebar-toggle" type="button" data-sidebar-toggle aria-controls="sidebar" aria-expanded="true" aria-label="طي القائمة الجانبية"><span aria-hidden="true">☰</span></button><div class="topbar-title"><h1>${info.title}</h1><p>${info.description}</p></div></div><div class="header-brand"><button class="live-notification-button" type="button" data-live-notifications aria-label="التحديثات الحية"><span aria-hidden="true">◉</span><span class="live-notification-badge" data-live-badge aria-live="polite" ${realtimeChangeCount ? "" : "hidden"}>${realtimeChangeCount > 99 ? "99+" : realtimeChangeCount}</span></button><img class="header-logo" src="../assets/al-motamayez-logo.png" alt="AL-MOTAMAYEZ logo"><div class="brand-copy"><strong>AL-MOTAMAYEZ</strong></div><span class="date-label">${new Intl.DateTimeFormat("ar-EG-u-nu-latn", { dateStyle: "full" }).format(new Date())}</span></div></header>
+      <main class="main-content"><header class="topbar"><div class="topbar-leading"><button class="sidebar-toggle" type="button" data-sidebar-toggle aria-controls="sidebar" aria-expanded="true" aria-label="طي القائمة الجانبية"><span aria-hidden="true">☰</span></button><div class="topbar-title"><h1>${info.title}</h1><p>${info.description}</p></div></div><div class="header-brand"><span class="online-indicator${onlineUserCount ? " online" : ""}" data-online-indicator role="status" title="حالة اتصال المستخدمين"><span class="online-indicator-dot"></span><span>متصلون الآن: <strong data-online-count>${onlineUserCount}</strong></span></span><div class="notification-control"><button class="live-notification-button" type="button" data-live-notifications aria-label="الإشعارات" aria-expanded="false"><span aria-hidden="true">🔔</span><span class="live-notification-badge" data-live-badge aria-live="polite" hidden></span></button><section class="notification-dropdown" data-notification-dropdown hidden aria-label="الإشعارات"><header><strong>آخر التحديثات</strong><button type="button" class="notification-mark-read" data-mark-notifications-read>تعليم الكل كمقروء</button></header><div class="notification-list" data-notification-list>${notificationListMarkup()}</div></section></div><img class="header-logo" src="../assets/al-motamayez-logo.png" alt="AL-MOTAMAYEZ logo"><div class="brand-copy"><strong>AL-MOTAMAYEZ</strong></div><span class="date-label">${new Intl.DateTimeFormat("ar-EG-u-nu-latn", { dateStyle: "full" }).format(new Date())}</span></div></header>
     ${content}
       <footer class="page-footer">AL-MOTAMAYEZ</footer></main>
     </div>`;
   activateDashboardView(window.location.hash.slice(1) || "dashboard", false);
   bindSidebar();
   bindActions(session);
+  refreshNotificationDropdown();
+  updateOnlineIndicator();
 }
 
 function activateDashboardView(viewId, updateHash = true) {
@@ -2105,9 +2152,26 @@ function bindSidebar() {
     app.classList.remove("drawer-open");
     setExpanded(false);
   });
-  document.querySelector("[data-live-notifications]").addEventListener("click", () => {
-    realtimeChangeCount = 0;
-    updateRealtimeBadge();
+  const notificationButton = document.querySelector("[data-live-notifications]");
+  const notificationDropdown = document.querySelector("[data-notification-dropdown]");
+  notificationButton.addEventListener("click", () => {
+    notificationDropdown.hidden = !notificationDropdown.hidden;
+    notificationButton.setAttribute("aria-expanded", String(!notificationDropdown.hidden));
+  });
+  document.querySelector("[data-mark-notifications-read]").addEventListener("click", () => {
+    realtimeNotifications.forEach((notification) => { notification.read = true; });
+    persistRealtimeNotifications();
+    refreshNotificationDropdown();
+  });
+  notificationDropdown.addEventListener("click", (event) => {
+    const notificationButtonClicked = event.target.closest("[data-notification-id]");
+    if (!notificationButtonClicked) return;
+    const notification = realtimeNotifications.find((entry) => entry.id === notificationButtonClicked.dataset.notificationId);
+    if (notification) {
+      notification.read = true;
+      persistRealtimeNotifications();
+      refreshNotificationDropdown();
+    }
   });
   document.querySelectorAll("[data-sidebar-link]").forEach((link) => link.addEventListener("click", (event) => {
     event.preventDefault();
@@ -2122,40 +2186,167 @@ function bindSidebar() {
 function updateRealtimeBadge() {
   const badge = document.querySelector("[data-live-badge]");
   if (!badge) return;
-  badge.hidden = realtimeChangeCount <= 0;
-  badge.textContent = realtimeChangeCount > 99 ? "99+" : String(realtimeChangeCount);
+  const unreadCount = realtimeNotifications.filter((notification) => !notification.read).length;
+  badge.hidden = unreadCount <= 0;
+  badge.textContent = unreadCount > 99 ? "99+" : String(unreadCount);
+}
+
+function updateOnlineIndicator() {
+  const indicator = document.querySelector("[data-online-indicator]");
+  if (!indicator) return;
+  indicator.classList.toggle("online", onlineUserCount > 0);
+  const count = indicator.querySelector("[data-online-count]");
+  if (count) count.textContent = String(onlineUserCount);
+}
+
+function notificationStorageKey(accountId) {
+  return `factory-live-notifications:${accountId}`;
+}
+
+function initializeRealtimeNotifications(session) {
+  if (notificationStorageAccount === session.accountId) return;
+  notificationStorageAccount = session.accountId;
+  try {
+    const saved = JSON.parse(localStorage.getItem(notificationStorageKey(session.accountId)) || "[]");
+    realtimeNotifications = Array.isArray(saved)
+      ? saved.filter((item) => item && typeof item.id === "string" && typeof item.message === "string")
+        .map((item) => ({ ...item, sources: Array.isArray(item.sources) ? item.sources : [] }))
+        .slice(0, 40)
+      : [];
+  } catch (error) {
+    realtimeNotifications = [];
+    console.warn("تعذر تحميل الإشعارات المحفوظة محلياً.", error);
+  }
+}
+
+function persistRealtimeNotifications() {
+  if (!notificationStorageAccount) return;
+  try {
+    localStorage.setItem(notificationStorageKey(notificationStorageAccount), JSON.stringify(realtimeNotifications.slice(0, 40)));
+  } catch (error) {
+    console.warn("تعذر حفظ حالة قراءة الإشعارات محلياً.", error);
+  }
+}
+
+function notificationListMarkup() {
+  if (!realtimeNotifications.length) return '<p class="notification-empty">لا توجد تحديثات حديثة.</p>';
+  return realtimeNotifications.slice(0, 20).map((notification) => `
+    <button class="notification-entry${notification.read ? " read" : " unread"}" type="button" data-notification-id="${escapeHtml(notification.id)}">
+      <span class="notification-entry-message">${escapeHtml(notification.message)}</span>
+      <time>${formatDateTime(notification.createdAt)}</time>
+    </button>`).join("");
+}
+
+function refreshNotificationDropdown() {
+  const list = document.querySelector("[data-notification-list]");
+  if (list) list.innerHTML = notificationListMarkup();
+  updateRealtimeBadge();
+}
+
+function recordRealtimeNotification(source, payload = {}) {
+  const eventType = payload.eventType || payload.event || "";
+  const action = { INSERT: "إضافة", UPDATE: "تعديل", DELETE: "حذف" }[eventType] || "تحديث";
+  const recordId = payload.new?.id || payload.old?.id || "";
+  let messageSource = source;
+  if (source === "التسليمات") {
+    messageSource = eventType === "DELETE" ? "حذف تسليم موديل" : eventType === "UPDATE" ? "تعديل تسليم موديل" : "تسليم موديل";
+  } else if (source === "الحركة النقدية") {
+    const transaction = payload.new || payload.old || {};
+    messageSource = `${transaction.direction === "income" ? "إيراد خزينة" : "مصروف خزينة"}${transaction.category ? ` · ${transaction.category}` : ""}`;
+  } else if (source === "السجلات") {
+    const record = payload.new || payload.old || {};
+    const collectionLabels = { payments: "دفعة مالية", advances: "سلفة عامل", payroll: "صرف راتب", leaves: "طلب انصراف", tasks: "مهمة", settlements: "تصفية حساب" };
+    messageSource = collectionLabels[record.collection] || "سجل النظام";
+  } else if (source === "تسجيلات الدخول والحسابات") {
+    const authEvent = payload.new || payload.old || {};
+    messageSource = authEvent.event_type === "login" ? "تسجيل دخول مستخدم" : "إنشاء حساب مستخدم";
+  } else if (source === "الحسابات") {
+    messageSource = "حساب مستخدم";
+  }
+  const commitKey = payload.commit_timestamp || "";
+  const existingCommit = commitKey
+    ? realtimeNotifications.find((notification) => notification.commitKey === commitKey)
+    : null;
+  if (existingCommit) {
+    if (!Array.isArray(existingCommit.sources)) existingCommit.sources = [];
+    if (!existingCommit.sources.includes(messageSource)) {
+      existingCommit.sources.push(messageSource);
+      existingCommit.message = `تحديثات: ${existingCommit.sources.join("، ")}`;
+      persistRealtimeNotifications();
+      refreshNotificationDropdown();
+    }
+    return;
+  }
+  const fingerprint = `${messageSource}:${eventType}:${commitKey || recordId || crypto.randomUUID()}`;
+  if (realtimeNotifications.some((notification) => notification.id === fingerprint)) return;
+  realtimeNotifications.unshift({
+    id: fingerprint,
+    message: `${action}: ${messageSource}`,
+    sources: [messageSource],
+    commitKey,
+    createdAt: payload.commit_timestamp || new Date().toISOString(),
+    read: false
+  });
+  realtimeNotifications = realtimeNotifications.slice(0, 40);
+  persistRealtimeNotifications();
+  refreshNotificationDropdown();
 }
 
 function subscribeToFactoryUpdates(session) {
   if (realtimeChannel) supabaseClient.removeChannel(realtimeChannel);
+  if (presenceChannel) supabaseClient.removeChannel(presenceChannel);
   let channel = supabaseClient
     .channel(`factory-dashboard-${session.accountId}`)
-    .on("postgres_changes", { event: "*", schema: "public", table: "factory_live_signals" }, () => scheduleRealtimeRefresh(session, "الطلبات ومراحل الإنتاج"));
+    .on("postgres_changes", { event: "*", schema: "public", table: "factory_live_signals" }, (payload) => scheduleRealtimeRefresh(session, "الطلبات ومراحل الإنتاج", payload));
   channel = channel
-    .on("postgres_changes", { event: "*", schema: "public", table: "factory_records" }, () => scheduleRealtimeRefresh(session, "السجلات"))
-    .on("postgres_changes", { event: "*", schema: "public", table: "factory_deliveries" }, () => scheduleRealtimeRefresh(session, "التسليمات"))
-    .on("postgres_changes", { event: "*", schema: "public", table: "users" }, () => {
+    .on("postgres_changes", { event: "*", schema: "public", table: "factory_records" }, (payload) => scheduleRealtimeRefresh(session, "السجلات", payload))
+    .on("postgres_changes", { event: "*", schema: "public", table: "factory_deliveries" }, (payload) => scheduleRealtimeRefresh(session, "التسليمات", payload))
+    .on("postgres_changes", { event: "*", schema: "public", table: "users" }, (payload) => {
       if (session.role === "admin") {
-        scheduleRealtimeRefresh(session, "الحسابات");
+        scheduleRealtimeRefresh(session, "الحسابات", payload);
       } else {
         void revalidateSessionAfterAccountChange(session);
       }
     });
   if (["admin", "cutting"].includes(session.role)) {
-    channel = channel.on("postgres_changes", { event: "*", schema: "public", table: "factory_fabrics" }, () => scheduleRealtimeRefresh(session, "مخزون القماش"));
+    channel = channel.on("postgres_changes", { event: "*", schema: "public", table: "factory_fabrics" }, (payload) => scheduleRealtimeRefresh(session, "مخزون القماش", payload));
   }
   if (session.role === "admin") {
     channel = channel
-      .on("postgres_changes", { event: "*", schema: "public", table: "factory_fabric_transactions" }, () => scheduleRealtimeRefresh(session, "حركات القماش"))
-      .on("postgres_changes", { event: "*", schema: "public", table: "factory_cash_transactions" }, () => scheduleRealtimeRefresh(session, "الحركة النقدية"))
-      .on("postgres_changes", { event: "*", schema: "public", table: "factory_auth_events" }, () => scheduleRealtimeRefresh(session, "تسجيلات الدخول والحسابات"))
-      .on("postgres_changes", { event: "*", schema: "public", table: "factory_clients" }, () => scheduleRealtimeRefresh(session, "ملفات العملاء"));
+      .on("postgres_changes", { event: "*", schema: "public", table: "factory_fabric_transactions" }, (payload) => scheduleRealtimeRefresh(session, "حركات القماش", payload))
+      .on("postgres_changes", { event: "*", schema: "public", table: "factory_cash_transactions" }, (payload) => scheduleRealtimeRefresh(session, "الحركة النقدية", payload))
+      .on("postgres_changes", { event: "*", schema: "public", table: "factory_auth_events" }, (payload) => scheduleRealtimeRefresh(session, "تسجيلات الدخول والحسابات", payload))
+      .on("postgres_changes", { event: "*", schema: "public", table: "factory_clients" }, (payload) => scheduleRealtimeRefresh(session, "ملفات العملاء", payload));
   }
   realtimeChannel = channel.subscribe((status, error) => {
       if (status === "SUBSCRIBED") return;
       if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
         console.error("تعذر إنشاء اشتراك التحديثات الحية.", error || status);
         window.factoryUI.toast("تعذر الاتصال بالتحديثات الحية. تحقق من إعدادات Realtime في Supabase.", "error");
+      }
+    });
+  presenceChannel = supabaseClient
+    .channel("factory-online-presence", { config: { presence: { key: session.accountId } } })
+    .on("presence", { event: "sync" }, () => {
+      onlineUserCount = Object.keys(presenceChannel.presenceState()).length;
+      updateOnlineIndicator();
+    })
+    .subscribe(async (status, error) => {
+      if (status === "SUBSCRIBED") {
+        try {
+          const trackStatus = await presenceChannel.track({
+            username: session.username,
+            role: session.role,
+            online_at: new Date().toISOString()
+          });
+          if (trackStatus !== "ok") throw new Error(`Supabase Presence returned ${trackStatus}.`);
+        } catch (trackError) {
+          console.error("تعذر تسجيل حالة الاتصال الحالية.", trackError);
+          window.factoryUI.toast(`تعذر تسجيل حالة الاتصال: ${trackError.message || trackError}`, "error");
+        }
+      } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+        console.error("تعذر إنشاء قناة حالة الاتصال.", error || status);
+        window.factoryUI.toast("تعذر تحميل حالة اتصال المستخدمين عبر Realtime.", "error");
       }
     });
 }
@@ -2170,9 +2361,8 @@ async function revalidateSessionAfterAccountChange(session) {
     }
 }
 
-function scheduleRealtimeRefresh(session, source) {
-  realtimeChangeCount = Math.min(100, realtimeChangeCount + 1);
-  updateRealtimeBadge();
+function scheduleRealtimeRefresh(session, source, payload) {
+  recordRealtimeNotification(source, payload);
   if (realtimeRefreshTimer) window.clearTimeout(realtimeRefreshTimer);
   realtimeRefreshTimer = window.setTimeout(() => {
     realtimeRefreshTimer = null;
@@ -2192,7 +2382,6 @@ async function refreshFromRealtime(session, source) {
   realtimeRefreshRunning = true;
   try {
     await refreshDashboard(session);
-    window.factoryUI.toast(`تم تحديث بيانات ${source} تلقائيًا.`);
   } catch (error) {
     console.error("تعذر تحديث بيانات المصنع عبر Realtime.", error);
     window.factoryUI.toast(`وصل تحديث جديد لكن تعذر تحميل البيانات: ${error.message}`, "error");
@@ -2977,6 +3166,17 @@ function bindActions(session) {
     });
     document.querySelectorAll("[data-orders-tab-panel]").forEach((panel) => {
       panel.hidden = panel.dataset.ordersTabPanel !== activeOrdersTab;
+    });
+  }));
+  document.querySelectorAll("[data-finance-tab]").forEach((button) => button.addEventListener("click", () => {
+    activeFinanceTab = button.dataset.financeTab;
+    document.querySelectorAll("[data-finance-tab]").forEach((tab) => {
+      const selected = tab === button;
+      tab.classList.toggle("active", selected);
+      tab.setAttribute("aria-selected", String(selected));
+    });
+    document.querySelectorAll("[data-finance-panel]").forEach((panel) => {
+      panel.hidden = panel.dataset.financePanel !== activeFinanceTab;
     });
   }));
   const resetFactoryButton = document.querySelector("[data-reset-factory]");
