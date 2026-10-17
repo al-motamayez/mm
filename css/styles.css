@@ -57,6 +57,9 @@ input:focus, select:focus { border-color: #5e9b83; box-shadow: 0 0 0 3px #5e9b83
 .button-primary:hover { background: #174a40; }
 .button-secondary { border: 1px solid #b7c9be; color: #173d34; background: #eef5f0; }
 .button-secondary:hover { border-color: #719b83; background: #e4efe8; }
+.button-danger { color: #fff; background: #b6403b; }
+.button-danger:hover { background: #8f2f2a; }
+.button-danger:disabled { cursor: wait; opacity: .7; }
 .button-full { width: 100%; min-height: 48px; }
 .auth-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin: 0 0 20px; padding: 4px; border-radius: 10px; background: #f0f4f1; }
 .auth-tab { min-height: 38px; border: 0; border-radius: 8px; color: #69766f; background: transparent; font-size: 13px; }

@@ -1674,7 +1674,16 @@ function adminView(data, accounts) {
     .map((client) => `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)}</option>`)
     .join("");
   return `
-    <section id="dashboard" class="dashboard-section">${adminDashboardView(data)}<div class="stats-grid">${stat("إجمالي القطع", new Intl.NumberFormat("ar-EG-u-nu-latn").format(totalUnits), "قطعة")}${stat("المدفوعات المسجلة", money(paid), "إجمالي الدفعات")}${stat("طلبات الانصراف", data.leaves.filter((item) => item.status === "قيد المراجعة").length, "بانتظار المراجعة")}</div></section>
+    <section id="dashboard" class="dashboard-section">
+      <div class="clients-toolbar">
+        <div>
+          <h2>إدارة المصنع</h2>
+          <p>إعادة ضبط البيانات التجريبية ومسح القيم الاختبارية فوراً.</p>
+        </div>
+        <button class="button button-danger" type="button" data-reset-factory>إعادة ضبط المصنع / مسح كافة البيانات</button>
+      </div>
+      ${adminDashboardView(data)}<div class="stats-grid">${stat("إجمالي القطع", new Intl.NumberFormat("ar-EG-u-nu-latn").format(totalUnits), "قطعة")}${stat("المدفوعات المسجلة", money(paid), "إجمالي الدفعات")}${stat("طلبات الانصراف", data.leaves.filter((item) => item.status === "قيد المراجعة").length, "بانتظار المراجعة")}</div>
+    </section>
     <section id="model-review" class="dashboard-section">${modelStatusReviewView(data)}</section>
     <section id="orders" class="dashboard-section">
       <div class="clients-toolbar"><div><h2>الموديلات والطلبيات</h2><p>سجّل الموديل أولاً، ثم حدّث العدد الفعلي بعد الفرش والقص.</p></div><button class="button button-primary" type="button" data-open-order-modal>＋ إضافة موديل / طلبية</button></div>
@@ -2873,6 +2882,46 @@ function bindActions(session) {
   }
   if (session.role !== "admin") return;
   bindFabricAdminActions(session);
+  const resetFactoryButton = document.querySelector("[data-reset-factory]");
+  if (resetFactoryButton) {
+    resetFactoryButton.addEventListener("click", async () => {
+      const confirmed = await window.factoryUI.confirmAction({
+        title: "إعادة ضبط المصنع",
+        message: "هل تريد مسح جميع بيانات المصنع التجريبية؟ سيتم حذف العملاء والموديلات والمخزون والحركات المالية والقصات بشكل دائم. لا يمكن التراجع عن هذا الإجراء.",
+        confirmLabel: "مسح كافة البيانات",
+        cancelLabel: "إلغاء",
+        danger: true
+      });
+      if (!confirmed) return;
+      resetFactoryButton.disabled = true;
+      try {
+        const resetTables = [
+          "factory_cash_transactions",
+          "factory_deliveries",
+          "factory_fabric_transactions",
+          "factory_fabrics",
+          "factory_auth_events",
+          "factory_live_signals",
+          "factory_records",
+          "production_stages",
+          "orders",
+          "factory_clients"
+        ];
+        for (const tableName of resetTables) {
+          const { error } = await supabaseClient.from(tableName).delete().neq("id", "00000000-0000-0000-0000-000000000000");
+          if (error && !["42P01", "42703", "PGRST205"].includes(error.code)) {
+            throw new Error(`${tableName}: ${error.message}`);
+          }
+        }
+        await refreshDashboard(session);
+        window.factoryUI.toast("تمت إعادة ضبط المصنع ومسح البيانات التجريبية بنجاح.");
+      } catch (error) {
+        window.factoryUI.toast(`تعذر إعادة ضبط المصنع: ${error.message}`, "error");
+      } finally {
+        resetFactoryButton.disabled = false;
+      }
+    });
+  }
   const cashTransactionForm = document.querySelector("#cash-transaction-form");
   const resetCashTransactionForm = () => {
     cashTransactionForm.reset();
