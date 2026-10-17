@@ -3537,6 +3537,7 @@ function bindActions(session) {
   const deliveryRecipientInput = deliveryForm.elements.recipientName;
   const settlementChoice = deliveryForm.elements.settlementChoice;
   const settlementChoiceFields = deliveryForm.querySelectorAll("[data-settlement-choice-field]");
+  let deliverySubmissionPending = false;
   const applySettlementChoice = () => {
     const order = dashboardData.models.find((item) => item.id === deliveryForm.elements.orderId.value);
     if (!order) return;
@@ -3589,7 +3590,8 @@ function bindActions(session) {
     deliveryModal.hidden = false;
     deliveryForm.elements.quantity.focus();
   };
-  const closeDeliveryModal = () => {
+  const closeDeliveryModal = (force = false) => {
+    if (deliverySubmissionPending && !force) return;
     deliveryModal.hidden = true;
     deliveryForm.reset();
     deliveryForm.elements.quantity.min = "1";
@@ -3613,10 +3615,17 @@ function bindActions(session) {
   });
   deliveryForm.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (deliverySubmissionPending) return;
     const order = dashboardData.models.find((item) => item.id === deliveryForm.elements.orderId.value);
     const quantity = Number(deliveryForm.elements.quantity.value);
     const finalize = deliveryForm.elements.finalize.value === "true";
-    if (!order || !Number.isSafeInteger(quantity) || (finalize ? quantity < 0 : quantity <= 0)) {
+    const recipientName = String(deliveryRecipientInput.value).trim();
+    if (!order || order.archivedAt || LOCKED_FACTORY_ORDER_STATUSES.includes(order.status)) {
+      window.factoryUI.toast("هذا الطلب مغلق أو غير متاح للتسليم.", "error");
+      closeDeliveryModal();
+      return;
+    }
+    if (!Number.isSafeInteger(quantity) || (finalize ? quantity < 0 : quantity <= 0)) {
       window.factoryUI.toast(finalize ? "أدخل كمية دفعة أخيرة صحيحة (صفر أو أكثر)." : "اختر طلبية وأدخل كمية تسليم صحيحة.", "error");
       return;
     }
@@ -3641,30 +3650,40 @@ function bindActions(session) {
       window.factoryUI.toast("كمية التسليم تتجاوز المتبقي من الطلب.", "error");
       return;
     }
-    if ((!finalize || quantity > 0) && !String(deliveryRecipientInput.value).trim()) {
+    if ((!finalize || quantity > 0) && !recipientName) {
       window.factoryUI.toast("أدخل اسم المستلم للتسليم.", "error");
       deliveryRecipientInput.focus();
       return;
     }
-    if (finalize && !await window.factoryUI.confirmAction({
-      title: "تأكيد إنهاء التسليم",
-      message: `${quantity > 0 ? `ستضاف دفعة ${quantity} قطعة، ليصبح إجمالي المسلّم ${order.deliveredPieces + quantity} قطعة. ` : "سيُغلق الطلب على إجمالي الكمية المسلّمة حالياً. "}سيُقفل الطلب أمام التسليمات الجديدة، مع إتاحة تعديل الإدارة.`,
-      confirmLabel: "إنهاء التسليم وإغلاق الطلب"
-    })) return;
+    deliverySubmissionPending = true;
     const submitButton = deliverySubmitButton;
     submitButton.disabled = true;
+    deliveryModal.querySelectorAll("[data-close-delivery]").forEach((button) => { button.disabled = true; });
     let deliverySaved = false;
     try {
+      if (finalize && !await window.factoryUI.confirmAction({
+        title: "تأكيد إنهاء التسليم",
+        message: `${quantity > 0 ? `ستضاف دفعة ${quantity} قطعة، ليصبح إجمالي المسلّم ${order.deliveredPieces + quantity} قطعة. ` : "سيُغلق الطلب على إجمالي الكمية المسلّمة حالياً. "}سيُقفل الطلب أمام التسليمات الجديدة، مع إتاحة تعديل الإدارة.`,
+        confirmLabel: "إنهاء التسليم وإغلاق الطلب"
+      })) return;
+
+      const currentOrder = dashboardData.models.find((item) => item.id === order.id);
+      if (!currentOrder || currentOrder.archivedAt || LOCKED_FACTORY_ORDER_STATUSES.includes(currentOrder.status)) {
+        window.factoryUI.toast("تم إغلاق الطلب أو تغييره قبل تنفيذ التسليم. حدّث البيانات وحاول مجددًا.", "error");
+        closeDeliveryModal(true);
+        return;
+      }
+
       const { error } = finalize
         ? await supabaseClient.rpc("complete_factory_handover", {
           requested_order_id: order.id,
           requested_final_batch_qty: quantity,
-          requested_recipient_name: String(deliveryForm.elements.recipientName.value).trim()
+          requested_recipient_name: recipientName
         })
         : await supabaseClient.rpc("record_factory_delivery", {
           requested_order_id: order.id,
           requested_quantity: quantity,
-          requested_recipient_name: String(deliveryForm.elements.recipientName.value).trim()
+          requested_recipient_name: recipientName
         });
       if (error?.code === "PGRST202") {
         throw new Error(finalize
@@ -3673,7 +3692,7 @@ function bindActions(session) {
       }
       if (error) throw error;
       deliverySaved = true;
-      closeDeliveryModal();
+      closeDeliveryModal(true);
       await refreshDashboard(session);
       window.factoryUI.toast(finalize
         ? "تم إنهاء التسليم وتسوية حساب الطلب."
@@ -3683,7 +3702,9 @@ function bindActions(session) {
         ? `تم ${finalize ? "إنهاء التسليم" : "تسجيل التسليم"}، لكن تعذر تحديث البيانات المعروضة: ${error.message}`
         : `تعذر ${finalize ? "إنهاء التسليم" : "تسجيل التسليم"}: ${error.message}`, "error");
     } finally {
+      deliverySubmissionPending = false;
       submitButton.disabled = false;
+      deliveryModal.querySelectorAll("[data-close-delivery]").forEach((button) => { button.disabled = false; });
     }
   });
   const updateOrderTotals = () => {

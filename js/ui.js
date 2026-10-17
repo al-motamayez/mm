@@ -39,6 +39,7 @@
     } = options;
     const backdrop = document.createElement("div");
     backdrop.className = "confirm-backdrop";
+    backdrop.style.zIndex = String(1400 + document.querySelectorAll(".confirm-backdrop").length);
     const dialog = document.createElement("section");
     dialog.className = "confirm-dialog";
     dialog.setAttribute("role", "alertdialog");
