@@ -390,6 +390,33 @@ alter table public.orders
   add column if not exists client_id uuid references auth.users (id) on delete set null,
   add column if not exists customer_id uuid references public.factory_clients (id) on delete set null;
 
+do $$
+declare
+  foreign_key_name text;
+begin
+  for foreign_key_name in
+    select constraint_row.conname
+    from pg_constraint as constraint_row
+    where constraint_row.conrelid = 'public.orders'::regclass
+      and constraint_row.contype = 'f'
+      and exists (
+        select 1
+        from unnest(constraint_row.conkey) as constrained_column(attnum)
+        join pg_attribute as column_info
+          on column_info.attrelid = constraint_row.conrelid
+         and column_info.attnum = constrained_column.attnum
+        where column_info.attname = 'client_id'
+      )
+  loop
+    execute format('alter table public.orders drop constraint %I', foreign_key_name);
+  end loop;
+end;
+$$;
+
+alter table public.orders
+  add constraint orders_client_id_fkey
+    foreign key (client_id) references auth.users (id) on delete set null;
+
 alter table public.orders
   add column if not exists model_name text,
   add column if not exists model_number text not null default '',
@@ -3129,6 +3156,73 @@ begin
 end;
 $$;
 
+create or replace function public.delete_factory_client(requested_client_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  target_client public.factory_clients%rowtype;
+begin
+  if not public.is_active_factory_admin() then
+    raise exception 'Only active admins can delete factory client profiles.';
+  end if;
+  if requested_client_id is null then
+    raise exception 'A valid factory client is required.';
+  end if;
+
+  select *
+    into target_client
+  from public.factory_clients
+  where id = requested_client_id
+  for update;
+  if not found then
+    raise exception 'Factory client not found.';
+  end if;
+  if target_client.user_id is not null
+     and exists (
+       select 1
+       from public.users
+       where id = target_client.user_id
+     ) then
+    raise exception 'Delete the linked login account first, then delete the client profile.';
+  end if;
+  if exists (
+    select 1 from public.orders
+    where customer_id = requested_client_id
+       or (target_client.user_id is not null and client_id = target_client.user_id)
+  ) or exists (
+    select 1 from public.factory_deliveries
+    where customer_id = requested_client_id
+  ) or exists (
+    select 1 from public.factory_cash_transactions
+    where customer_id = requested_client_id
+  ) or exists (
+    select 1 from public.factory_fabrics
+    where customer_id = requested_client_id
+  ) or exists (
+    select 1
+    from public.factory_records
+    where payload ->> 'customerId' = requested_client_id::text
+       or payload ->> 'customer_id' = requested_client_id::text
+       or (
+         target_client.user_id is not null
+         and owner_id = target_client.user_id
+         and collection in ('payments', 'settlements')
+       )
+  ) then
+    raise exception 'Client has linked production, financial, or inventory history; preserve it by keeping this profile.';
+  end if;
+
+  delete from public.factory_clients
+  where id = requested_client_id;
+  if not found then
+    raise exception 'Factory client profile was not deleted.';
+  end if;
+end;
+$$;
+
 create or replace function public.save_factory_payment(
   requested_record_id uuid,
   requested_customer_id uuid,
@@ -3687,6 +3781,8 @@ revoke all on function public.finish_factory_cutting(uuid, jsonb, jsonb, text, t
 grant execute on function public.finish_factory_cutting(uuid, jsonb, jsonb, text, text, integer, text, uuid, numeric, text) to authenticated;
 revoke all on function public.delete_factory_order(uuid) from public, anon, authenticated;
 grant execute on function public.delete_factory_order(uuid) to authenticated;
+revoke all on function public.delete_factory_client(uuid) from public, anon, authenticated;
+grant execute on function public.delete_factory_client(uuid) to authenticated;
 revoke all on function public.save_factory_payment(uuid, uuid, numeric, date, text, text, text) from public, anon, authenticated;
 grant execute on function public.save_factory_payment(uuid, uuid, numeric, date, text, text, text) to authenticated;
 revoke all on function public.settle_factory_client_account(uuid) from public, anon, authenticated;

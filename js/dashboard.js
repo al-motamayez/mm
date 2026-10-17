@@ -1261,7 +1261,7 @@ function clientAccountCards(data) {
         ${modelMetric("لم يُحدد عددها", uncountedOrders, `uncounted-${escapeHtml(client.id)}`)}
       </div>
       <p class="client-notes-preview">${escapeHtml(client.notes || "لا توجد ملاحظات مسجلة.")}</p>
-      <div class="client-card-actions"><button class="button button-primary" type="button" data-open-client-details="${escapeHtml(client.id)}">التفاصيل</button><button class="button button-secondary" type="button" data-quick-client-payment="${escapeHtml(client.id)}">＋ إضافة دفعة مالية</button><button class="row-action" type="button" data-edit-customer="${escapeHtml(client.id)}">تعديل بيانات العميل</button></div>
+      <div class="client-card-actions"><button class="button button-primary" type="button" data-open-client-details="${escapeHtml(client.id)}">التفاصيل</button><button class="button button-secondary" type="button" data-quick-client-payment="${escapeHtml(client.id)}">＋ إضافة دفعة مالية</button><button class="row-action" type="button" data-edit-customer="${escapeHtml(client.id)}">تعديل بيانات العميل</button><button class="row-action order-delete-action" type="button" data-delete-customer="${escapeHtml(client.id)}">حذف العميل</button></div>
     </article>`;
   }).join("")}</div>`;
 }
@@ -1740,7 +1740,7 @@ function adminView(data, accounts) {
       <div class="clients-toolbar"><div><h2>ملفات العملاء</h2><p>بيانات العميل والمحل ووسائل التواصل والحساب.</p></div><button class="button button-primary" type="button" data-open-client-modal>＋ إضافة عميل جديد</button></div>
       ${panel("سجل ملفات العملاء", table(["العميل / المحل","رقم العميل","الهاتف / واتساب","حساب الدخول","إجراء"], data.clients.map((client) => {
         const linkedUser = data.users.find((user) => user.id === client.user_id);
-        return `<tr><td>${escapeHtml(client.name)}${client.brand_name ? `<br><small>${escapeHtml(client.brand_name)}</small>` : ""}</td><td>${escapeHtml(client.client_number || "—")}</td><td>${escapeHtml(client.whatsapp || client.phone || "—")}</td><td>${linkedUser ? `${escapeHtml(linkedUser.username)} · ${escapeHtml(linkedUser.status === "suspended" ? "متوقف" : "نشط")}` : "لا يوجد حساب دخول"}</td><td><button class="row-action" type="button" data-open-client-details="${escapeHtml(client.id)}">تفاصيل الحساب والعمولة</button> <button class="row-action" type="button" data-edit-customer="${escapeHtml(client.id)}">تعديل البيانات</button></td></tr>`;
+        return `<tr><td>${escapeHtml(client.name)}${client.brand_name ? `<br><small>${escapeHtml(client.brand_name)}</small>` : ""}</td><td>${escapeHtml(client.client_number || "—")}</td><td>${escapeHtml(client.whatsapp || client.phone || "—")}</td><td>${linkedUser ? `${escapeHtml(linkedUser.username)} · ${escapeHtml(linkedUser.status === "suspended" ? "متوقف" : "نشط")}` : "لا يوجد حساب دخول"}</td><td><button class="row-action" type="button" data-open-client-details="${escapeHtml(client.id)}">تفاصيل الحساب والعمولة</button> <button class="row-action" type="button" data-edit-customer="${escapeHtml(client.id)}">تعديل البيانات</button> <button class="row-action order-delete-action" type="button" data-delete-customer="${escapeHtml(client.id)}">حذف العميل</button></td></tr>`;
       })))}
       <div class="modal-backdrop" id="client-modal" hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="client-modal-title"><button class="modal-close" type="button" data-close-client aria-label="إغلاق">×</button><h2 id="client-modal-title">إضافة عميل جديد</h2><p>بيانات ملف العميل ووسائل التواصل.</p><form id="client-form" class="modal-form client-profile-form"><input type="hidden" name="clientId"><label for="client-name">اسم العميل الشخصي</label><input id="client-name" name="name" required><label for="client-brand">اسم المحل أو البراند</label><input id="client-brand" name="brandName"><label for="client-number">رقم العميل</label><input id="client-number" name="clientNumber"><label for="client-phone">رقم الهاتف</label><input id="client-phone" name="phone" type="tel"><label for="client-cash-phone">رقم كاش</label><input id="client-cash-phone" name="cashPhone" type="tel"><label for="client-instagram">حساب إنستا</label><input id="client-instagram" name="instagram"><label for="client-whatsapp">رقم واتساب</label><input id="client-whatsapp" name="whatsapp" type="tel"><label for="client-notes">ملاحظات</label><textarea id="client-notes" name="notes" rows="3"></textarea><div class="form-actions"><button class="button button-primary" type="submit">حفظ العميل</button><button class="row-action" type="button" data-close-client>إلغاء</button></div></form></section></div>
       </div>
@@ -3364,6 +3364,34 @@ function bindActions(session) {
     document.querySelector('[data-client-tab="profiles"]').click();
     activateDashboardView("clients");
     form.elements.name.focus();
+  }));
+  document.querySelectorAll("[data-delete-customer]").forEach((button) => button.addEventListener("click", async () => {
+    const client = dashboardData.clients.find((entry) => entry.id === button.dataset.deleteCustomer);
+    if (!client) {
+      window.factoryUI.toast("تعذر العثور على ملف العميل.", "error");
+      return;
+    }
+    if (!await window.factoryUI.confirmAction({
+      title: "حذف ملف العميل",
+      message: `سيتم حذف ملف ${client.name} نهائيًا إذا لم يكن مرتبطًا بحساب دخول أو طلبات أو حركات مالية أو مخزون. ستبقى السجلات المرتبطة محمية.`,
+      confirmLabel: "حذف العميل",
+      danger: true
+    })) return;
+    button.disabled = true;
+    try {
+      const { error } = await supabaseClient.rpc("delete_factory_client", {
+        requested_client_id: client.id
+      });
+      if (error?.code === "PGRST202") {
+        throw new Error("دالة حذف ملف العميل غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+      }
+      if (error) throw error;
+      await refreshDashboard(session);
+      window.factoryUI.toast("تم حذف ملف العميل.");
+    } catch (error) {
+      button.disabled = false;
+      window.factoryUI.toast(`تعذر حذف ملف العميل: ${error.message}`, "error");
+    }
   }));
   bindClientDetailActions(session);
   document.querySelector("#payment-filter-client").addEventListener("change", (event) => {
