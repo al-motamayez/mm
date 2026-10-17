@@ -2025,6 +2025,7 @@ function navigationItems(role, info) {
 }
 
 function render(session, data, accounts) {
+  document.querySelectorAll("body > #order-modal").forEach((modal) => modal.remove());
   const info = roleInfo[session.role];
   const username = escapeHtml(session.username);
   const navigation = navigationItems(session.role, info).map((item, index) =>
@@ -3242,34 +3243,37 @@ function bindActions(session) {
     updateOrderTotals();
   };
   const openOrderEditor = (order) => {
-    const orderIndex = dashboardData.models.findIndex((entry) => entry.id === order.id);
-    if (orderIndex < 0 || order.archivedAt) {
+    const currentOrder = dashboardData.models.find((entry) => entry.id === order?.id);
+    const orderIndex = currentOrder ? dashboardData.models.indexOf(currentOrder) : -1;
+    if (!currentOrder || currentOrder.archivedAt) {
       window.factoryUI.toast("هذا الطلب غير متاح للتعديل.", "error");
       return;
     }
+    if (modelPreviewObjectUrl) URL.revokeObjectURL(modelPreviewObjectUrl);
+    modelPreviewObjectUrl = "";
     orderForm.reset();
     orderForm.elements.savedOrderId.value = "";
     orderForm.elements.editIndex.value = String(orderIndex);
-    const closedOrder = LOCKED_FACTORY_ORDER_STATUSES.includes(order.status);
+    const closedOrder = LOCKED_FACTORY_ORDER_STATUSES.includes(currentOrder.status);
     orderForm.querySelector("[data-original-quantity-field]").hidden = !closedOrder;
-    orderForm.elements.originalQuantity.value = String(order.originalQuantity);
+    orderForm.elements.originalQuantity.value = String(currentOrder.originalQuantity);
     orderForm.elements.status.disabled = closedOrder;
     for (const field of ["customerId", "name", "modelNumber", "pricePerPiece", "paidAmount", "operationalExpenses", "status", "priority", "productionType", "pricingMode", "expectedDeliveryDate"]) {
-      orderForm.elements[field].value = order[field] ?? "";
+      orderForm.elements[field].value = currentOrder[field] ?? "";
     }
-    syncOrderCustomerSelection(orderForm, order.customerId);
-    orderForm.elements.stagePrices.value = JSON.stringify(order.stagePrices || {});
+    syncOrderCustomerSelection(orderForm, currentOrder.customerId);
+    orderForm.elements.stagePrices.value = JSON.stringify(currentOrder.stagePrices || {});
     orderForm.querySelectorAll('[name="workStage"]').forEach((input) => {
-      input.checked = (order.workStages || []).includes(input.value);
+      input.checked = (currentOrder.workStages || []).includes(input.value);
     });
     updateStagePricing(orderForm);
-    orderForm.elements.quantity.value = order.quantity || "";
-    orderForm.elements.deliveredPieces.value = order.deliveredPieces;
-    setSizePicker(orderForm.querySelector("[data-size-picker]"), order.sizes);
-    setColorPicker(orderForm.querySelector("[data-color-picker]"), order.colors, order.colorNames);
-    renderModelAllocation(orderForm, order.colorSizeDistribution);
-    orderForm.querySelector("[data-model-image-preview]").innerHTML = modelImageMarkup(order.modelImageUrl);
-    orderForm.querySelector("#model-price-history-note").hidden = order.deliveredPieces <= 0;
+    orderForm.elements.quantity.value = currentOrder.quantity || "";
+    orderForm.elements.deliveredPieces.value = currentOrder.deliveredPieces;
+    setSizePicker(orderForm.querySelector("[data-size-picker]"), currentOrder.sizes);
+    setColorPicker(orderForm.querySelector("[data-color-picker]"), currentOrder.colors, currentOrder.colorNames);
+    renderModelAllocation(orderForm, currentOrder.colorSizeDistribution);
+    orderForm.querySelector("[data-model-image-preview]").innerHTML = modelImageMarkup(currentOrder.modelImageUrl);
+    orderForm.querySelector("#model-price-history-note").hidden = currentOrder.deliveredPieces <= 0;
     orderForm.querySelector('[type="submit"]').textContent = "حفظ التعديلات";
     orderForm.querySelector("[data-cancel-edit]").hidden = false;
     document.querySelector("#order-modal-title").textContent = "تعديل بيانات الموديل";
