@@ -2732,8 +2732,8 @@ begin
     raise exception 'Only active admins can adjust factory delivery quantities.';
   end if;
   if requested_order_id is null or requested_delivery_id is null
-     or requested_quantity is null or requested_quantity <= 0 then
-    raise exception 'A valid order, delivery, and positive quantity are required.';
+     or requested_quantity is null or requested_quantity < 0 then
+    raise exception 'A valid order, delivery, and nonnegative quantity are required.';
   end if;
 
   select *
@@ -2757,10 +2757,16 @@ begin
     raise exception 'The delivery does not belong to this factory order.';
   end if;
 
-  update public.factory_deliveries
-  set quantity = requested_quantity
-  where id = requested_delivery_id
-    and order_id = requested_order_id;
+  if requested_quantity = 0 then
+    delete from public.factory_deliveries
+    where id = requested_delivery_id
+      and order_id = requested_order_id;
+  else
+    update public.factory_deliveries
+    set quantity = requested_quantity
+    where id = requested_delivery_id
+      and order_id = requested_order_id;
+  end if;
 
   select coalesce(sum(quantity), 0)::integer
     into updated_delivered_quantity
@@ -2768,12 +2774,19 @@ begin
   where order_id = requested_order_id;
 
   update public.orders
-  set delivered_pieces = updated_delivered_quantity
+  set delivered_pieces = updated_delivered_quantity,
+      status = case
+        when updated_delivered_quantity = 0
+          and status in ('مكتمل', 'تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق')
+          then 'جاهز للتسليم'
+        else status
+      end
   where id = requested_order_id;
 
   update public.production_stages
   set target_quantity = greatest(target_quantity, updated_delivered_quantity),
       completed_quantity = updated_delivered_quantity,
+      status = case when updated_delivered_quantity = 0 then 'قيد الانتظار' else status end,
       updated_at = now()
   where order_id = requested_order_id
     and stage_name = 'delivery';
@@ -3374,6 +3387,7 @@ set search_path = public
 as $$
 declare
   current_order public.orders%rowtype;
+  fabric_reversal record;
 begin
   if not public.is_active_factory_admin() then
     raise exception 'Only active admins can delete factory orders.';
@@ -3390,21 +3404,39 @@ begin
   if not found then
     raise exception 'Factory order not found.';
   end if;
-  if current_order.archived_at is not null
-     or current_order.status in ('مكتمل', 'تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق') then
-    raise exception 'Closed or archived factory orders cannot be deleted.';
-  end if;
-  if current_order.delivered_pieces > 0
-     or current_order.paid_amount > 0
-     or current_order.operational_expenses > 0
-     or exists (
-       select 1
-       from public.factory_deliveries
-       where order_id = requested_order_id
-     ) then
-    raise exception 'Orders with operating expenses, payment, or delivery history cannot be deleted.';
+  if current_order.archived_at is not null then
+    raise exception 'Orders in a settled financial period cannot be deleted.';
   end if;
 
+  for fabric_reversal in
+    select movement.fabric_id,
+           sum(case
+             when movement.transaction_type in ('withdrawal', 'adjustment_out') then movement.quantity
+             when movement.transaction_type in ('receipt', 'return', 'adjustment_in') then -movement.quantity
+             else 0
+           end) as quantity_delta
+    from public.factory_fabric_transactions as movement
+    where movement.order_id = requested_order_id
+    group by movement.fabric_id
+  loop
+    if fabric_reversal.quantity_delta <> 0 then
+      update public.factory_fabrics
+      set quantity_available = quantity_available + fabric_reversal.quantity_delta,
+          updated_at = now()
+      where id = fabric_reversal.fabric_id
+        and quantity_available + fabric_reversal.quantity_delta >= 0;
+      if not found then
+        raise exception 'The fabric used by this order has since been consumed; reconcile fabric stock before deleting the order.';
+      end if;
+    end if;
+  end loop;
+
+  delete from public.factory_fabric_transactions
+  where order_id = requested_order_id;
+  delete from public.factory_cash_transactions
+  where order_id = requested_order_id;
+  delete from public.factory_deliveries
+  where order_id = requested_order_id;
   delete from public.orders
   where id = requested_order_id;
 end;

@@ -1125,12 +1125,7 @@ function stat(label, value, note = "") {
 }
 
 function orderCanBeDeleted(item) {
-  return !item.archivedAt
-    && !LOCKED_FACTORY_ORDER_STATUSES.includes(item.status)
-    && Number(item.deliveredPieces) === 0
-    && Number(item.paidAmount) === 0
-    && Number(item.operationalExpenses) === 0
-    && !dashboardData.deliveries.some((delivery) => delivery.order_id === item.id);
+  return !item.archivedAt;
 }
 
 function orderCards(models, withActions = false) {
@@ -1526,7 +1521,7 @@ function modelDetailsModalView(order, showPricingBreakdown = false) {
     }).join("")
     : "";
   const deliveryHistory = order.deliveryHistory?.length
-    ? table(["#", "الكمية", "المستلم", "تاريخ التسليم", ...(canEditDeliveryQuantities ? ["تعديل الكمية"] : [])], order.deliveryHistory.map((delivery, index) => `<tr><td>${index + 1}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(delivery.quantity)} قطعة</td><td>${escapeHtml(delivery.recipient_name || "—")}</td><td>${formatDateTime(delivery.delivered_at)}</td>${canEditDeliveryQuantities ? `<td><label class="field"><span>كمية الدفعة ${index + 1}</span><input type="number" min="1" step="1" value="${delivery.quantity}" data-edit-delivery-quantity="${escapeHtml(delivery.id)}"></label><button class="row-action" type="button" data-save-delivery-quantity="${escapeHtml(delivery.id)}">حفظ الكمية</button></td>` : ""}</tr>`))
+    ? table(["#", "الكمية", "المستلم", "تاريخ التسليم", ...(canEditDeliveryQuantities ? ["تعديل التسليم"] : [])], order.deliveryHistory.map((delivery, index) => `<tr><td>${index + 1}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(delivery.quantity)} قطعة</td><td>${escapeHtml(delivery.recipient_name || "—")}</td><td>${formatDateTime(delivery.delivered_at)}</td>${canEditDeliveryQuantities ? `<td><label class="field"><span>كمية الدفعة ${index + 1} (صفر لحذفها)</span><input type="number" min="0" step="1" value="${delivery.quantity}" data-edit-delivery-quantity="${escapeHtml(delivery.id)}"></label><button class="row-action" type="button" data-save-delivery-quantity="${escapeHtml(delivery.id)}">حفظ التسليم</button></td>` : ""}</tr>`))
     : '<div class="empty-state">لا توجد دفعات تسليم مسجلة.</div>';
   return `<header class="modal-view-heading">${modelImageMarkup(order.modelImageUrl)}<div><small>تفاصيل الطلبية / الفرشة</small><h2 id="model-details-title">${escapeHtml(order.name || "موديل بدون اسم")}</h2><p>رقم الموديل: ${escapeHtml(order.modelNumber || "—")} · العميل: ${escapeHtml(order.client || "—")}</p></div>${statusTag(order.displayStatus || order.status)}</header>
     <div class="compact-detail-grid">
@@ -3306,8 +3301,8 @@ function bindActions(session) {
       const deliveryId = saveDeliveryQuantityButton.dataset.saveDeliveryQuantity;
       const input = modelDetailsModal.querySelector(`[data-edit-delivery-quantity="${CSS.escape(deliveryId)}"]`);
       const quantity = Number(input?.value);
-      if (!Number.isSafeInteger(quantity) || quantity <= 0) {
-        window.factoryUI.toast("أدخل كمية صحيحة وموجبة لدفعة التسليم.", "error");
+      if (!Number.isSafeInteger(quantity) || quantity < 0) {
+        window.factoryUI.toast("أدخل كمية صحيحة غير سالبة لدفعة التسليم.", "error");
         return;
       }
       saveDeliveryQuantityButton.disabled = true;
@@ -3322,7 +3317,9 @@ function bindActions(session) {
         }
         if (error) throw error;
         await refreshDashboard(session);
-        window.factoryUI.toast("تم تعديل كمية الدفعة وتحديث إجمالي المسلّم وحساب العميل.");
+        window.factoryUI.toast(quantity === 0
+          ? "تم حذف دفعة التسليم وإعادة احتساب إجمالي المسلّم وحساب العميل."
+          : "تم تعديل كمية الدفعة وتحديث إجمالي المسلّم وحساب العميل.");
       } catch (error) {
         saveDeliveryQuantityButton.disabled = false;
         window.factoryUI.toast(`تعذر تعديل كمية الدفعة: ${error.message}`, "error");
@@ -3993,7 +3990,7 @@ function bindActions(session) {
       }
       if (!await window.factoryUI.confirmAction({
         title: "حذف الموديل",
-        message: `هل تريد حذف الموديل ${order.name || order.modelNumber || "المحدد"}؟ لا يمكن التراجع عن هذا الإجراء. لا يمكن حذف موديل له تسليمات أو مدفوعات أو مصاريف تشغيل أو موديل مؤرشف.`,
+        message: `سيتم حذف الموديل ${order.name || order.modelNumber || "المحدد"} وتسليماته ومصاريف تشغيله المرتبطة، وإزالة أثره من حساب العميل والخزينة وإعادة القماش المستخدم للمخزون. لا يمكن التراجع عن هذا الإجراء. لا يمكن حذف موديل مؤرشف ضمن تصفية مالية.`,
         confirmLabel: "حذف الموديل",
         danger: true
       })) return;
