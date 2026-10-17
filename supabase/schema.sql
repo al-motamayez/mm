@@ -381,6 +381,7 @@ create table if not exists public.orders (
   model_name text,
   model_number text not null default '',
   sender_name text,
+  original_total_pieces integer not null default 0 check (original_total_pieces >= 0),
   total_pieces integer not null default 0 check (total_pieces >= 0),
   status text not null default 'قيد الانتظار',
   created_at timestamptz not null default now()
@@ -421,6 +422,7 @@ alter table public.orders
   add column if not exists model_name text,
   add column if not exists model_number text not null default '',
   add column if not exists sender_name text,
+  add column if not exists original_total_pieces integer,
   add column if not exists colors text not null default '',
   add column if not exists color_names jsonb not null default '{}'::jsonb,
   add column if not exists sizes text not null default '',
@@ -581,6 +583,7 @@ where target_quantity < completed_quantity;
 alter table public.orders
   drop constraint if exists orders_total_pieces_positive,
   drop constraint if exists orders_total_pieces_check,
+  drop constraint if exists orders_original_total_pieces_check,
   drop constraint if exists orders_delivered_pieces_range,
   drop constraint if exists orders_delivered_pieces_nonnegative,
   drop constraint if exists orders_amounts_range,
@@ -595,6 +598,10 @@ set model_name = coalesce(
     ),
     model_number = coalesce(nullif(trim(factory_order.model_number), ''), ''),
     total_pieces = greatest(coalesce(factory_order.total_pieces, 0), 0),
+    original_total_pieces = coalesce(
+      factory_order.original_total_pieces,
+      greatest(coalesce(factory_order.total_pieces, 0), 0)
+    ),
     price_per_piece = greatest(coalesce(factory_order.price_per_piece, 0), 0),
     paid_amount = greatest(coalesce(factory_order.paid_amount, 0), 0),
     delivered_pieces = greatest(
@@ -608,6 +615,7 @@ set model_name = coalesce(
       ), 0), 0)
     ),
     status = case trim(factory_order.status)
+      when 'تم التسليم بالكامل' then 'تم التسليم بالكامل'
       when 'مكتمل' then 'مكتمل'
       when 'تم الانتهاء' then 'مكتمل'
       when 'جاهز للتسليم' then 'جاهز للتسليم'
@@ -628,6 +636,8 @@ set model_name = coalesce(
 alter table public.orders
   alter column total_pieces set default 0,
   alter column total_pieces set not null,
+  alter column original_total_pieces set default 0,
+  alter column original_total_pieces set not null,
   alter column delivered_pieces set default 0,
   alter column delivered_pieces set not null,
   alter column price_per_piece set default 0,
@@ -640,13 +650,14 @@ alter table public.orders
   alter column status set default 'قيد الانتظار';
 alter table public.orders
   add constraint orders_total_pieces_check check (total_pieces >= 0),
+  add constraint orders_original_total_pieces_check check (original_total_pieces >= 0),
   add constraint orders_delivered_pieces_nonnegative check (delivered_pieces >= 0),
   add constraint orders_paid_amount_nonnegative check (paid_amount >= 0),
   add constraint orders_factory_status_check check (
     status in (
       'قيد الانتظار', 'معلق', 'تحت الإنشاء', 'قيد الفرش',
       'تم الفرش / جاهز للقص', 'تم القص', 'معلق - في انتظار الخياطة',
-      'في الخياطة', 'جاهز للتسليم', 'مكتمل'
+      'في الخياطة', 'جاهز للتسليم', 'مكتمل', 'تم التسليم بالكامل'
     )
   );
 
@@ -739,6 +750,7 @@ returns table (
   color_size_distribution jsonb,
   color_names jsonb,
   sizes text,
+  original_total_pieces integer,
   total_pieces integer,
   delivered_pieces integer,
   archived_at timestamptz,
@@ -776,6 +788,7 @@ begin
            factory_order.color_size_distribution,
            factory_order.color_names,
            factory_order.sizes,
+           factory_order.original_total_pieces,
            factory_order.total_pieces,
            factory_order.delivered_pieces,
            factory_order.archived_at,
@@ -888,9 +901,12 @@ begin
           where stage_name not in ('cutting', 'sewing', 'finishing', 'ironing', 'packaging')
              or price !~ '^[0-9]+([.][0-9]{1,2})?$'
         )
-        or jsonb_object_length(
-          case when jsonb_typeof(requested_stage_prices) = 'object'
-            then requested_stage_prices else '{}'::jsonb end
+        or (
+          select count(*)
+          from jsonb_object_keys(
+            case when jsonb_typeof(requested_stage_prices) = 'object'
+              then requested_stage_prices else '{}'::jsonb end
+          ) as stage_price_key(key)
         ) <> cardinality(requested_work_stages)
         or exists (
           select 1
@@ -1035,14 +1051,14 @@ begin
   if requested_order_id is null then
     insert into public.orders (
       client_id, customer_id, model_name, model_number, colors, color_names, sizes,
-      total_pieces, delivered_pieces, price_per_piece, paid_amount, expected_delivery_date, model_image_url, priority,
+      original_total_pieces, total_pieces, delivered_pieces, price_per_piece, paid_amount, expected_delivery_date, model_image_url, priority,
       production_type, work_stages, pricing_mode, stage_prices, color_size_distribution, operational_expenses, status
     )
     values (
       matched_client_id, matched_customer_id, resolved_model_name,
       coalesce(trim(requested_model_number), ''),
       coalesce(trim(requested_colors), ''), normalized_color_names, coalesce(trim(requested_sizes), ''),
-      requested_quantity, requested_delivered_pieces,
+      requested_quantity, requested_quantity, requested_delivered_pieces,
       requested_price_per_piece, requested_paid_amount, requested_expected_delivery_date, requested_model_image_url,
       trim(requested_priority), requested_production_type, requested_work_stages, requested_pricing_mode,
       requested_stage_prices, requested_color_size_distribution, requested_operational_expenses, trim(requested_status)
@@ -1118,6 +1134,15 @@ begin
         colors = coalesce(trim(requested_colors), ''),
         color_names = normalized_color_names,
         sizes = coalesce(trim(requested_sizes), ''),
+        original_total_pieces = case
+          when exists (
+            select 1 from public.production_stages
+            where order_id = requested_order_id
+              and stage_name = 'cutting'
+              and status = 'مكتمل'
+          ) then original_total_pieces
+          else requested_quantity
+        end,
         total_pieces = requested_quantity,
         delivered_pieces = requested_delivered_pieces,
         price_per_piece = requested_price_per_piece,
@@ -1627,18 +1652,16 @@ begin
   end if;
 
   perform set_config('factory.reset_in_progress', 'on', true);
-  delete from public.factory_auth_events;
-  delete from public.factory_fabric_transactions;
-  delete from public.factory_deliveries;
-  delete from public.factory_cash_transactions;
-  delete from public.factory_records;
-  delete from public.production_stages;
-  delete from public.orders;
-  delete from public.factory_fabrics;
-  delete from public.factory_clients;
-  delete from public.factory_live_signals;
-  delete from storage.objects
-  where bucket_id = 'factory-model-images';
+  delete from public.factory_auth_events where id is not null;
+  delete from public.factory_fabric_transactions where id is not null;
+  delete from public.factory_deliveries where id is not null;
+  delete from public.factory_cash_transactions where id is not null;
+  delete from public.factory_records where id is not null;
+  delete from public.production_stages where id is not null;
+  delete from public.orders where id is not null;
+  delete from public.factory_fabrics where id is not null;
+  delete from public.factory_clients where id is not null;
+  delete from public.factory_live_signals where id is not null;
   delete from public.users
   where id <> auth.uid();
   delete from auth.users
@@ -2576,6 +2599,76 @@ begin
 end;
 $$;
 
+create or replace function public.complete_factory_handover(
+  requested_order_id uuid,
+  requested_actual_delivered_qty integer,
+  requested_recipient_name text
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  current_order public.orders%rowtype;
+  additional_quantity integer;
+begin
+  if not public.is_active_factory_admin() then
+    raise exception 'Only active admins can complete factory handovers.';
+  end if;
+  if requested_order_id is null
+     or requested_actual_delivered_qty is null
+     or requested_actual_delivered_qty <= 0
+     or length(trim(coalesce(requested_recipient_name, ''))) = 0 then
+    raise exception 'A valid order, positive final delivered quantity, and recipient name are required.';
+  end if;
+
+  select *
+    into current_order
+  from public.orders
+  where id = requested_order_id
+  for update;
+  if not found or current_order.customer_id is null then
+    raise exception 'Factory order not found or has no customer.';
+  end if;
+  if current_order.archived_at is not null then
+    raise exception 'Archived factory orders cannot be completed again.';
+  end if;
+  if current_order.total_pieces <= 0 then
+    raise exception 'Record the actual cut quantity before completing the handover.';
+  end if;
+  if requested_actual_delivered_qty < current_order.delivered_pieces then
+    raise exception 'Final delivered quantity cannot be lower than quantities already recorded as delivered.';
+  end if;
+
+  additional_quantity := requested_actual_delivered_qty - current_order.delivered_pieces;
+  if additional_quantity > 0 then
+    insert into public.factory_deliveries (
+      order_id, customer_id, quantity, price_per_piece, recipient_name, expected_delivery_date
+    )
+    values (
+      current_order.id, current_order.customer_id, additional_quantity,
+      current_order.price_per_piece, trim(requested_recipient_name),
+      current_order.expected_delivery_date
+    );
+  end if;
+
+  update public.orders
+  set delivered_pieces = requested_actual_delivered_qty,
+      status = 'تم التسليم بالكامل',
+      archived_at = now()
+  where id = current_order.id;
+
+  update public.production_stages
+  set target_quantity = greatest(target_quantity, requested_actual_delivered_qty),
+      completed_quantity = requested_actual_delivered_qty,
+      status = 'مكتمل',
+      updated_at = now()
+  where order_id = current_order.id
+    and stage_name = 'delivery';
+end;
+$$;
+
 create or replace function public.calculate_factory_cutting_breakdown(
   requested_size_data jsonb,
   requested_color_ply_data jsonb
@@ -2800,7 +2893,7 @@ begin
 
   insert into public.orders (
     id, client_id, customer_id, model_name, model_number, sender_name, colors, color_names, sizes,
-    total_pieces, status, model_image_url
+    original_total_pieces, total_pieces, status, model_image_url
   )
   values (
     requested_order_id, matched_customer.user_id, matched_customer.id,
@@ -2815,6 +2908,7 @@ begin
       where length(trim(coalesce(color_entry ->> 'name', ''))) > 0
     ), '{}'::jsonb),
     normalized_sizes::text,
+    cut_total,
     cut_total,
     'تم الفرش / جاهز للقص',
     nullif(trim(coalesce(requested_model_image_url, '')), '')
@@ -3121,6 +3215,10 @@ begin
   update public.orders
   set sizes = normalized_sizes::text,
       colors = normalized_colors,
+      original_total_pieces = case
+        when original_total_pieces = 0 then cut_total
+        else original_total_pieces
+      end,
       color_names = coalesce((
         select jsonb_object_agg(upper(trim(color_entry ->> 'color')), trim(color_entry ->> 'name'))
         from jsonb_array_elements(requested_color_ply_data -> 'colors') as color_entry
@@ -3785,6 +3883,8 @@ revoke all on function public.save_factory_order(uuid, uuid, text, text, integer
 grant execute on function public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb, text, jsonb, text[], text, jsonb, numeric) to authenticated;
 revoke all on function public.record_factory_delivery(uuid, integer, text) from public, anon, authenticated;
 grant execute on function public.record_factory_delivery(uuid, integer, text) to authenticated;
+revoke all on function public.complete_factory_handover(uuid, integer, text) from public, anon, authenticated;
+grant execute on function public.complete_factory_handover(uuid, integer, text) to authenticated;
 revoke all on function public.calculate_factory_cutting_breakdown(jsonb, jsonb) from public, anon, authenticated;
 revoke all on function public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, integer, text, uuid, numeric, text) from public, anon, authenticated;
 grant execute on function public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, integer, text, uuid, numeric, text) to authenticated;
@@ -3842,6 +3942,14 @@ create policy "Factory staff upload model images"
   with check (
     bucket_id = 'factory-model-images'
     and public.has_active_factory_role(array['admin', 'cutting'])
+  );
+
+drop policy if exists "Factory admins delete model images" on storage.objects;
+create policy "Factory admins delete model images"
+  on storage.objects for delete to authenticated
+  using (
+    bucket_id = 'factory-model-images'
+    and public.has_active_factory_role(array['admin'])
   );
 
 -- Create this Auth user with email auto-confirmed before running the schema:

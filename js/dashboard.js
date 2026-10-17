@@ -310,6 +310,8 @@ async function readDashboardData(session) {
     const completedPieces = orderStages
       .filter((stage) => ["cutting", "sewing", "finishing", "ironing", "packaging"].includes(stage.stage_name))
       .reduce((maximum, stage) => Math.max(maximum, Number(stage.completed_quantity || 0)), 0);
+    const originalQuantity = Number(order.original_total_pieces ?? order.total_pieces ?? 0);
+    const deliveredPieces = Number(order.delivered_pieces || 0);
     return {
       id: order.id,
       clientId: order.client_id,
@@ -325,6 +327,7 @@ async function readDashboardData(session) {
         ? `${clientsById.get(order.customer_id).name}${clientsById.get(order.customer_id).brand_name ? ` · ${clientsById.get(order.customer_id).brand_name}` : ""}`
         : "",
       quantity: order.total_pieces,
+      originalQuantity,
       completedPieces,
       colors: order.colors || "",
       colorSizeDistribution: order.color_size_distribution || { colors: [] },
@@ -335,9 +338,10 @@ async function readDashboardData(session) {
       sizes: order.sizes || "",
       modelImageUrl: order.model_image_url || "",
       priority: order.priority || "عادي",
-      deliveredPieces: Number(order.delivered_pieces || 0),
+      deliveredPieces,
       archivedAt: order.archived_at || null,
-      remainingPieces: Number(order.total_pieces) - Number(order.delivered_pieces || 0),
+      remainingPieces: Math.max(Number(order.total_pieces) - Number(order.delivered_pieces || 0), 0),
+      quantityDifference: deliveredPieces - originalQuantity,
       pricePerPiece: Number(order.price_per_piece || 0),
       totalAmount: Number(order.total_amount || 0),
       expectedAmount: Number(order.expected_total_amount ?? (Math.max(Number(order.total_pieces || 0) - Number(order.delivered_pieces || 0), 0) * Number(order.price_per_piece || 0))),
@@ -962,6 +966,36 @@ async function uploadModelImage(orderId, file) {
   return supabaseClient.storage.from("factory-model-images").getPublicUrl(path).data.publicUrl;
 }
 
+async function deleteFactoryModelImages() {
+  const bucket = supabaseClient.storage.from("factory-model-images");
+  const paths = [];
+  const listDirectory = async (directory) => {
+    const entries = [];
+    for (let offset = 0; ; offset += 1000) {
+      const { data, error } = await bucket.list(directory, {
+        limit: 1000,
+        offset,
+        sortBy: { column: "name", order: "asc" }
+      });
+      if (error) throw new Error(`تعذر استعراض مجلد الصور ${directory || "الرئيسي"}: ${error.message}`);
+      entries.push(...data);
+      if (data.length < 1000) break;
+    }
+
+    for (const entry of entries) {
+      const path = directory ? `${directory}/${entry.name}` : entry.name;
+      if (!entry.id) await listDirectory(path);
+      else paths.push(path);
+    }
+  };
+
+  await listDirectory("");
+  for (let offset = 0; offset < paths.length; offset += 100) {
+    const { error } = await bucket.remove(paths.slice(offset, offset + 100));
+    if (error) throw new Error(`تعذر حذف صور الموديلات من التخزين: ${error.message}`);
+  }
+}
+
 function modelImageMarkup(url, label = "صورة الموديل") {
   return url ? `<img class="model-thumbnail" src="${escapeHtml(url)}" alt="${escapeHtml(label)}" loading="lazy">` : "";
 }
@@ -1002,7 +1036,7 @@ function statusClass(value) {
   if (String(value).startsWith("قيد الفرش")
     || ["قيد المراجعة", "قيد التنفيذ", "قيد الإنتاج", "قيد الانتظار", "معلق", "تحت الإنشاء", "تم الفرش / جاهز للقص", "معلق - في انتظار الخياطة", "جار العمل"].includes(value)) return "warning";
   if (["جديدة", "جاهز للتسليم", "تم القص", "في الخياطة"].includes(value)) return "info";
-  if (value === "جاهز للتسليم" || value === "مكتمل") return "";
+  if (value === "جاهز للتسليم" || value === "مكتمل" || value === "تم التسليم بالكامل") return "";
   return "muted";
 }
 
@@ -1101,17 +1135,17 @@ function orderCards(models, withActions = false) {
       ${modelImageMarkup(item.modelImageUrl)}
       <div class="order-compact-name"><strong>${escapeHtml(item.name || item.modelNumber || "موديل بدون اسم")}</strong><small>رقم الموديل: ${escapeHtml(item.modelNumber || "—")} · ${escapeHtml(productionTypeLabel(item.productionType))}</small></div>
       <span class="order-compact-client">${escapeHtml(item.client || "غير مربوط بعميل")}</span>
-      <span class="order-compact-quantity">${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.quantity)} قطعة</span>
+      <span class="order-compact-quantity">${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.quantity)} قطعة${item.status === "تم التسليم بالكامل" ? `<small>الأصلي: ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.originalQuantity)} · المسلّم: ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.deliveredPieces)} · ${item.quantityDifference > 0 ? `زيادة ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.quantityDifference)}` : item.quantityDifference < 0 ? `نقص ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(Math.abs(item.quantityDifference))}` : "مطابق"}</small>` : ""}</span>
       <span class="order-compact-price">${money(item.pricePerPiece)} / قطعة</span>
       ${statusTag(item.displayStatus || item.status)}
       <button class="row-action" type="button" data-open-model-id="${escapeHtml(item.id)}">تفاصيل الطلبية</button>
-      ${withActions ? `<div class="order-card-actions"><button class="row-action" type="button" data-edit-kind="models" data-index="${index}">تعديل الطلبية</button>${item.customerId ? `<button class="row-action" type="button" data-action="record-delivery" data-index="${index}">تسجيل تسليم</button>` : '<span class="order-delete-protected">عيّن العميل قبل تسجيل أي تسليم</span>'}${item.status === "مكتمل" ? '<span class="status">مغلق / مؤرشف</span>' : `<button class="row-action order-close-action" type="button" data-action="close-order" data-index="${index}">اكتمل / إغلاق الطلب</button>`}${orderCanBeDeleted(item) ? `<button class="row-action order-delete-action" type="button" data-action="delete-order" data-order-id="${escapeHtml(item.id)}">حذف الموديل</button>` : '<span class="order-delete-protected">محمي بسجل مالي / تسليم</span>'}</div>` : ""}
+      ${withActions ? `<div class="order-card-actions"><button class="row-action" type="button" data-edit-kind="models" data-index="${index}">تعديل الطلبية</button>${item.customerId ? `${item.archivedAt || item.status === "تم التسليم بالكامل" ? "" : `<button class="row-action" type="button" data-action="record-delivery" data-index="${index}">تسجيل تسليم</button><button class="row-action order-close-action" type="button" data-action="complete-handover" data-index="${index}"${item.quantity ? "" : " disabled"}>تسوية التسليم وإغلاق الطلب</button>`}` : '<span class="order-delete-protected">عيّن العميل قبل تسجيل أي تسليم</span>'}${item.archivedAt || item.status === "تم التسليم بالكامل" ? '<span class="status">مغلق / مؤرشف</span>' : ""}${orderCanBeDeleted(item) ? `<button class="row-action order-delete-action" type="button" data-action="delete-order" data-order-id="${escapeHtml(item.id)}">حذف الموديل</button>` : '<span class="order-delete-protected">محمي بسجل مالي / تسليم</span>'}</div>` : ""}
     </article>`;
   }).join("")}</div>`;
 }
 
 function orderProgress(status) {
-  const stages = ["قيد الانتظار", "قيد الفرش", "تم الفرش / جاهز للقص", "تم القص", "معلق - في انتظار الخياطة", "في الخياطة", "جاهز للتسليم", "مكتمل"];
+  const stages = ["قيد الانتظار", "قيد الفرش", "تم الفرش / جاهز للقص", "تم القص", "معلق - في انتظار الخياطة", "في الخياطة", "جاهز للتسليم", "مكتمل", "تم التسليم بالكامل"];
   const activeStatus = status === "معلق" || status === "تحت الإنشاء" ? "قيد الانتظار" : status;
   const activeIndex = Math.max(0, stages.indexOf(activeStatus));
   const steps = stages.map((stage, index) => `<span class="order-progress-step${index <= activeIndex ? " complete" : ""}${index === activeIndex ? " current" : ""}">${stage}</span>`).join("");
@@ -1128,8 +1162,9 @@ function clientOrderCards(orders) {
     <header class="order-card-heading">${modelImageMarkup(item.modelImageUrl)}<div><p class="order-card-label">الموديل ${item.modelNumber ? `· رقم ${escapeHtml(item.modelNumber)}` : ""}</p><h3>${escapeHtml(item.name || item.modelNumber || "موديل بدون اسم")}</h3></div>${statusTag(item.displayStatus || item.status)}</header>
     <dl class="order-card-details">
       <div><dt>الألوان</dt><dd>${colorSummaryMarkup(item.colors, item.colorNames, item.colorPlyData)}</dd></div><div><dt>المقاسات / العدد لكل مقاس</dt><dd>${escapeHtml(sizeSummary(item.sizes))}</dd></div>
-      <div><dt>العدد الفعلي بعد القص</dt><dd>${item.quantity ? new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.quantity) : "بانتظار الحصر"}</dd></div><div><dt>الكمية المنجزة</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.completedPieces)}</dd></div>
+      <div><dt>العدد المطلوب الأصلي</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.originalQuantity)}</dd></div><div><dt>العدد الفعلي بعد القص</dt><dd>${item.quantity ? new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.quantity) : "بانتظار الحصر"}</dd></div><div><dt>الكمية المنجزة</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.completedPieces)}</dd></div>
       <div><dt>الكمية المسلّمة</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.deliveredPieces)}</dd></div><div><dt>المتبقي</dt><dd>${item.quantity ? new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.remainingPieces) : "بانتظار الحصر بعد القص"}</dd></div>
+      ${item.status === "تم التسليم بالكامل" ? `<div><dt>فرق التسليم عن العدد المطلوب الأصلي</dt><dd>${item.quantityDifference > 0 ? `زيادة ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.quantityDifference)} قطعة` : item.quantityDifference < 0 ? `نقص ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(Math.abs(item.quantityDifference))} قطعة` : "مطابق للعدد المطلوب"}</dd></div>` : ""}
       ${item.senderName ? `<div><dt>تم الإرسال بواسطة</dt><dd>${escapeHtml(item.senderName)}</dd></div>` : ""}
       <div><dt>سعر القطعة</dt><dd>${money(item.pricePerPiece)}</dd></div><div><dt>المتوقع للكمية غير المسلّمة</dt><dd>${money(item.expectedAmount)}</dd></div><div><dt>إجمالي قيمة المسلّم</dt><dd>${money(item.totalAmount)}</dd></div>
       <div><dt>التسليم المتوقع</dt><dd>${formatDateOnly(item.expectedDeliveryDate)}</dd></div>
@@ -1714,7 +1749,7 @@ function adminView(data, accounts) {
         </div></section>
         <div class="form-actions"><button class="button button-primary" type="submit">حفظ الطلبية</button><button class="row-action" type="button" data-cancel-edit hidden>إلغاء التعديل</button><button class="row-action" type="button" data-close-order>إغلاق</button></div>
       </form></section></div>
-      <div class="modal-backdrop" id="delivery-modal" hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="delivery-modal-title"><button class="modal-close" type="button" data-close-delivery aria-label="إغلاق">×</button><h2 id="delivery-modal-title">تسجيل تسليم جديد</h2><p>أدخل كمية هذه الدفعة واسم مستلمها؛ ستُضاف إلى إجمالي ما تم تسليمه حتى الآن.</p><form id="delivery-form" class="modal-form"><input type="hidden" name="orderId"><label for="delivery-quantity">كمية التسليم</label><input id="delivery-quantity" name="quantity" type="number" min="1" step="1" required><label for="delivery-recipient">اسم المستلم</label><input id="delivery-recipient" name="recipientName" required><div class="form-actions"><button class="button button-primary" type="submit">تسجيل التسليم</button><button class="row-action" type="button" data-close-delivery>إلغاء</button></div></form></section></div>
+      <div class="modal-backdrop" id="delivery-modal" hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="delivery-modal-title"><button class="modal-close" type="button" data-close-delivery aria-label="إغلاق">×</button><h2 id="delivery-modal-title">تسجيل تسليم جديد</h2><p id="delivery-modal-description">أدخل كمية هذه الدفعة واسم مستلمها؛ ستُضاف إلى إجمالي ما تم تسليمه حتى الآن.</p><form id="delivery-form" class="modal-form"><input type="hidden" name="orderId"><input type="hidden" name="finalize" value=""><label for="delivery-quantity" id="delivery-quantity-label">كمية التسليم</label><input id="delivery-quantity" name="quantity" type="number" min="1" step="1" required><label for="delivery-recipient">اسم المستلم</label><input id="delivery-recipient" name="recipientName" required><div class="form-actions"><button class="button button-primary" type="submit">تسجيل التسليم</button><button class="row-action" type="button" data-close-delivery>إلغاء</button></div></form></section></div>
     </section>
     <section id="finance" class="dashboard-section">
       ${panel("تسجيل دفعة مالية", `<div class="panel-body"><form id="payment-form" class="form-grid payment-form"><input type="hidden" name="editIndex" value=""><div class="field"><label for="payment-client">العميل</label><select id="payment-client" name="customerId" required><option value="">اختر العميل</option>${paymentClientOptions}</select></div><div class="field"><label for="payment-amount">المبلغ المدفوع (ج.م)</label><input id="payment-amount" name="amount" type="number" min="0.01" step="0.01" required></div><div class="field"><label for="payment-date">تاريخ الدفعة</label><input id="payment-date" name="date" type="date" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10)}" required></div><div class="field"><label for="payment-method">طريقة الدفع</label><select id="payment-method" name="method"><option>تحويل بنكي</option><option>نقدي</option><option>محفظة إلكترونية</option></select></div><div class="field"><label for="payment-reference">رقم الطلبية / مرجع</label><input id="payment-reference" name="reference" autocomplete="off"></div><div class="field"><label for="payment-notes">ملاحظات</label><input id="payment-notes" name="notes"></div><div class="form-actions"><button class="button button-primary" type="submit">تسجيل الدفعة</button><button class="row-action" type="button" data-cancel-edit hidden>إلغاء التعديل</button></div></form></div>`, "تُربط الدفعة بملف العميل المحدد")}
@@ -1792,7 +1827,7 @@ function cuttingView(data) {
 function cuttingDashboardView(data) {
   const active = data.cutting.filter((item) => ["قيد الانتظار", "معلق", "تحت الإنشاء", "قيد الفرش", "تم الفرش / جاهز للقص"].includes(item.orderStatus));
   const activeTotal = active.reduce((sum, item) => sum + Number(item.total), 0);
-  const completed = data.cutting.filter((item) => ["تم القص", "معلق - في انتظار الخياطة", "في الخياطة", "مكتمل"].includes(item.orderStatus));
+  const completed = data.cutting.filter((item) => ["تم القص", "معلق - في انتظار الخياطة", "في الخياطة", "مكتمل", "تم التسليم بالكامل"].includes(item.orderStatus));
   return `<div class="stats-grid">${stat("طلبات الإدارة", active.length, "بانتظار استكمال القص")}${stat("العدد المطلوب لطلبات الإدارة", new Intl.NumberFormat("ar-EG-u-nu-latn").format(activeTotal), "قطعة")}${stat("عمليات قص مكتملة", completed.length, "مسجلة على أوامر الإنتاج")}${stat("أصناف القماش المتاحة", data.fabrics.length, "متابعة مباشرة للمخزون")}</div>${panel("ملخص العمل الحالي", `<div class="empty-state">استخدم «طلبات الإدارة» لمراجعة الأوامر وتسجيل بيانات الفرشة والقص، أو «قصة جديدة» لإنشاء قصة مباشرة.</div>`)}`;
 }
 
@@ -2889,6 +2924,7 @@ function bindActions(session) {
       if (!confirmed) return;
       resetFactoryButton.disabled = true;
       let resetApplied = false;
+      let modelImagesCleared = false;
       try {
         const { error } = await supabaseClient.rpc("reset_factory_data");
         if (error?.code === "PGRST202") {
@@ -2896,12 +2932,16 @@ function bindActions(session) {
         }
         if (error) throw error;
         resetApplied = true;
+        await deleteFactoryModelImages();
+        modelImagesCleared = true;
         await refreshDashboard(session);
         window.factoryUI.toast("تم مسح بيانات النظام وحسابات المستخدمين الأخرى. بقي حساب الأدمن الحالي.");
       } catch (error) {
         window.factoryUI.toast(
           resetApplied
-            ? `تمت إعادة الضبط، لكن تعذر تحديث الشاشة: ${error.message}`
+            ? modelImagesCleared
+              ? `تمت إعادة الضبط، لكن تعذر تحديث الشاشة: ${error.message}`
+              : `تم مسح بيانات النظام، لكن تعذر حذف صور الموديلات: ${error.message}`
             : `تعذر إعادة ضبط المصنع: ${error.message}`,
           "error"
         );
@@ -3390,9 +3430,17 @@ function bindActions(session) {
   });
   const deliveryModal = document.querySelector("#delivery-modal");
   const deliveryForm = document.querySelector("#delivery-form");
+  const deliveryModalTitle = document.querySelector("#delivery-modal-title");
+  const deliveryModalDescription = document.querySelector("#delivery-modal-description");
+  const deliveryQuantityLabel = document.querySelector("#delivery-quantity-label");
+  const deliverySubmitButton = deliveryForm.querySelector('[type="submit"]');
   const closeDeliveryModal = () => {
     deliveryModal.hidden = true;
     deliveryForm.reset();
+    deliveryModalTitle.textContent = "تسجيل تسليم جديد";
+    deliveryModalDescription.textContent = "أدخل كمية هذه الدفعة واسم مستلمها؛ ستُضاف إلى إجمالي ما تم تسليمه حتى الآن.";
+    deliveryQuantityLabel.textContent = "كمية التسليم";
+    deliverySubmitButton.textContent = "تسجيل التسليم";
   };
   document.querySelectorAll("[data-close-delivery]").forEach((button) => button.addEventListener("click", closeDeliveryModal));
   deliveryModal.addEventListener("click", (event) => {
@@ -3402,33 +3450,55 @@ function bindActions(session) {
     event.preventDefault();
     const order = dashboardData.models.find((item) => item.id === deliveryForm.elements.orderId.value);
     const quantity = Number(deliveryForm.elements.quantity.value);
+    const finalize = deliveryForm.elements.finalize.value === "true";
     if (!order || !Number.isSafeInteger(quantity) || quantity <= 0) {
-      window.factoryUI.toast("اختر طلبية وأدخل كمية تسليم صحيحة.", "error");
+      window.factoryUI.toast(finalize ? "أدخل إجمالي الكمية الفعلية المسلّمة بشكل صحيح." : "اختر طلبية وأدخل كمية تسليم صحيحة.", "error");
       return;
     }
     if (!order.quantity) {
       window.factoryUI.toast("سجّل العدد الفعلي بعد الفرش والقص قبل إدخال التسليمات.", "error");
       return;
     }
-    const submitButton = deliveryForm.querySelector('[type="submit"]');
+    if (finalize && quantity < order.deliveredPieces) {
+      window.factoryUI.toast("لا يمكن أن يكون الإجمالي النهائي أقل من الكمية المسجلة في التسليمات السابقة.", "error");
+      return;
+    }
+    if (finalize && !await window.factoryUI.confirmAction({
+      title: "تأكيد إنهاء التسليم",
+      message: `سيُعتمد إجمالي ${quantity} قطعة لهذا الموديل، ويُغلق ويُؤرشف نهائياً. العدد المطلوب الأصلي ${order.originalQuantity} قطعة؛ فرق التسليم: ${quantity - order.originalQuantity > 0 ? `زيادة ${quantity - order.originalQuantity}` : quantity - order.originalQuantity < 0 ? `نقص ${Math.abs(quantity - order.originalQuantity)}` : "مطابق"}. لا يمكن تسجيل تسليمات أخرى بعد الإغلاق.`,
+      confirmLabel: "إنهاء التسليم وإغلاق الطلب"
+    })) return;
+    const submitButton = deliverySubmitButton;
     submitButton.disabled = true;
     let deliverySaved = false;
     try {
-      const { error } = await supabaseClient.rpc("record_factory_delivery", {
-        requested_order_id: order.id,
-        requested_quantity: quantity,
-        requested_recipient_name: String(deliveryForm.elements.recipientName.value).trim()
-      });
-      if (error?.code === "PGRST202") throw new Error("دالة تسجيل التسليم غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+      const { error } = finalize
+        ? await supabaseClient.rpc("complete_factory_handover", {
+          requested_order_id: order.id,
+          requested_actual_delivered_qty: quantity,
+          requested_recipient_name: String(deliveryForm.elements.recipientName.value).trim()
+        })
+        : await supabaseClient.rpc("record_factory_delivery", {
+          requested_order_id: order.id,
+          requested_quantity: quantity,
+          requested_recipient_name: String(deliveryForm.elements.recipientName.value).trim()
+        });
+      if (error?.code === "PGRST202") {
+        throw new Error(finalize
+          ? "دالة إنهاء التسليم غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor."
+          : "دالة تسجيل التسليم غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+      }
       if (error) throw error;
       deliverySaved = true;
       closeDeliveryModal();
       await refreshDashboard(session);
-      window.factoryUI.toast("تم تسجيل التسليم وإضافته إلى إجمالي الكمية المسلّمة.");
+      window.factoryUI.toast(finalize
+        ? "تم إنهاء التسليم وأرشفة الطلبية وتحديث الحساب بكمية التسليم الفعلية."
+        : "تم تسجيل التسليم وإضافته إلى إجمالي الكمية المسلّمة.");
     } catch (error) {
       window.factoryUI.toast(deliverySaved
-        ? `تم تسجيل التسليم، لكن تعذر تحديث البيانات المعروضة: ${error.message}`
-        : `تعذر تسجيل التسليم: ${error.message}`, "error");
+        ? `تم ${finalize ? "إنهاء التسليم" : "تسجيل التسليم"}، لكن تعذر تحديث البيانات المعروضة: ${error.message}`
+        : `تعذر ${finalize ? "إنهاء التسليم" : "تسجيل التسليم"}: ${error.message}`, "error");
     } finally {
       submitButton.disabled = false;
     }
@@ -3748,7 +3818,7 @@ function bindActions(session) {
       }
       return;
     }
-    if (button.dataset.action === "record-delivery" || button.dataset.action === "close-order") {
+    if (button.dataset.action === "record-delivery" || button.dataset.action === "complete-handover") {
       const order = dashboardData.models[Number(button.dataset.index)];
       if (!order) {
         window.factoryUI.toast("تعذر العثور على الطلبية. حدّث الصفحة وحاول مجددًا.", "error");
@@ -3756,25 +3826,26 @@ function bindActions(session) {
       }
       if (button.dataset.action === "record-delivery") {
         deliveryForm.elements.orderId.value = order.id;
+        deliveryForm.elements.finalize.value = "";
         deliveryForm.elements.quantity.value = "";
+        deliveryModalTitle.textContent = "تسجيل تسليم جديد";
+        deliveryModalDescription.textContent = "أدخل كمية هذه الدفعة واسم مستلمها؛ ستُضاف إلى إجمالي ما تم تسليمه حتى الآن.";
+        deliveryQuantityLabel.textContent = "كمية التسليم";
+        deliverySubmitButton.textContent = "تسجيل التسليم";
         deliveryModal.hidden = false;
         deliveryForm.elements.quantity.focus();
         return;
       }
-      if (!await window.factoryUI.confirmAction({
-        title: "إغلاق وأرشفة الطلبية",
-        message: `هل انتهى العمل على ${order.name || order.modelNumber || "الطلبية"}؟ سيتم إغلاقها بغض النظر عن فرق الكميات.`,
-        confirmLabel: "اكتمل / إغلاق الطلب"
-      })) return;
-      button.disabled = true;
-      try {
-        await persistFactoryOrder(order, { status: "مكتمل" });
-        await refreshDashboard(session);
-        window.factoryUI.toast("تم إغلاق الطلبية وأرشفتها.");
-      } catch (error) {
-        button.disabled = false;
-        window.factoryUI.toast(`تعذر إغلاق الطلبية: ${error.message}`, "error");
-      }
+      deliveryForm.elements.orderId.value = order.id;
+      deliveryForm.elements.finalize.value = "true";
+      deliveryForm.elements.quantity.value = order.deliveredPieces || "";
+      deliveryForm.elements.recipientName.value = "";
+      deliveryModalTitle.textContent = "إنهاء التسليم وتسوية الكمية";
+      deliveryModalDescription.textContent = `أدخل إجمالي ما تم تسليمه منذ بداية الطلبية، وليس كمية الدفعة الأخيرة. العدد المطلوب الأصلي: ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.originalQuantity)} قطعة؛ الكمية المسجلة حاليًا: ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.deliveredPieces)} قطعة.`;
+      deliveryQuantityLabel.textContent = "إجمالي الكمية الفعلية المسلّمة";
+      deliverySubmitButton.textContent = "إنهاء التسليم وإغلاق الطلب";
+      deliveryModal.hidden = false;
+      deliveryForm.elements.quantity.focus();
       return;
     }
     if (button.dataset.action === "activate-account") {
