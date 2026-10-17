@@ -268,24 +268,12 @@ loginForm.addEventListener("submit", async (event) => {
       password
     });
     if (error) {
-      let account;
-      try {
-        const accountUsername = validEmail && username.toLocaleLowerCase() === ADMIN_AUTH_EMAIL
-          ? ADMIN_USERNAME
-          : validEmail
-            ? username.split("@")[0]
-            : username;
-        account = await findAccountByUsername(accountUsername);
-      } catch (profileError) {
-        console.error("تعذر التحقق من وجود سجل الحساب في users بعد فشل المصادقة.", profileError);
-        showMessage("تعذر التحقق من سجل الحساب في قاعدة البيانات. تحقق من اتصال Supabase وصلاحيات قراءة جدول users.");
+      if (error.status >= 500 || /failed to fetch|network|fetch error/i.test(error.message)) {
+        console.error("تعذر الاتصال بخدمة Supabase Auth.", error);
+        showMessage("تعذر الاتصال بخدمة تسجيل الدخول. تحقق من اتصال الإنترنت وإعدادات Supabase ثم حاول مجددًا.");
         return;
       }
-      if (account) {
-        showMessage("تعذر تسجيل الدخول عبر Supabase Auth. تأكد أن حساب Auth للأدمن يستخدم البريد mohamed01007033454@gmail.com، وأن كلمة المرور هي كلمة مروره الحالية في Supabase Auth (وليست كلمة محفوظة في users). إذا نسيتها، أعد تعيينها من لوحة Supabase، وتأكد أن users.id يطابق معرّف حساب Auth.");
-      } else {
-        showMessage("اسم المستخدم أو كلمة المرور غير صحيحة.");
-      }
+      showMessage("اسم المستخدم أو كلمة المرور غير صحيحة. تأكد من بيانات الدخول، وأن حسابك مفعّل.");
       return;
     }
     if (!data.user) {
