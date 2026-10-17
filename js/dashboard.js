@@ -1374,13 +1374,32 @@ const LOCKED_FACTORY_ORDER_STATUSES = ["مكتمل", "تم التسليم", "ت�
 
 function adminDashboardView(data) {
   const activeOrders = data.models.filter((order) => !order.archivedAt);
+  const drawerIncome = sumMoney([
+    ...data.payments.map((payment) => payment.amount),
+    ...data.models.map((order) => order.paidAmount),
+    ...data.cashTransactions.filter((entry) => entry.direction === "income").map((entry) => entry.amount)
+  ]);
+  const drawerExpenses = sumMoney(data.cashTransactions
+    .filter((entry) => entry.direction === "expense")
+    .map((entry) => entry.amount));
+  const drawerBalance = subtractMoney(drawerIncome, drawerExpenses);
+  const clientSummaries = data.clients.map((client) => clientAccountSummary(client, data));
+  const customerReceivables = sumMoney(clientSummaries.map((summary) =>
+    Math.max(0, sumMoney([
+      summary.openingBalance,
+      summary.deliveredTotal,
+      -summary.orderPaid,
+      -summary.paymentsTotal
+    ]))
+  ));
+  const upcomingReceivables = sumMoney(clientSummaries.map((summary) => summary.expectedTotal));
   const groups = [
     ["شغال حالياً", activeOrders.length],
     ["قيد الانتظار", activeOrders.filter((order) => order.status === "قيد الانتظار").length],
     ["في الفرش", activeOrders.filter((order) => order.status === "قيد الفرش").length],
     ["في الخياطة", activeOrders.filter((order) => order.status === "في الخياطة").length]
   ];
-  return `<div class="stats-grid">${groups.map(([label, value]) => stat(label, value, "حالة مسجلة للموديل")).join("")}</div>
+  return `<div class="stats-grid">${stat("النقدية في الدرج", money(drawerBalance))}${stat("مديونيات العملاء", money(customerReceivables))}${stat("بضاعة تحت التسليم", money(upcomingReceivables))}${groups.map(([label, value]) => stat(label, value)).join("")}</div>
     ${panel("آخر الموديلات وحالتها", activeOrders.length
       ? table(["الموديل","العميل","العدد","سعر القطعة","الحالة"], activeOrders.slice(0, 12).map((order) => `<tr><td>${escapeHtml(order.name)}${order.modelNumber ? ` · ${escapeHtml(order.modelNumber)}` : ""}</td><td>${escapeHtml(order.client || "—")}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity)}</td><td>${money(order.pricePerPiece)}</td><td>${statusTag(order.displayStatus || order.status)}</td></tr>`))
       : '<div class="empty-state">لا توجد موديلات حالية.</div>')}`;
