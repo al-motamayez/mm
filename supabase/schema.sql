@@ -2328,10 +2328,10 @@ begin
   if resolved_fabric.stock_scope <> 'incoming' then
     raise exception 'Cutting may only use fabric registered as incoming for cutting.';
   end if;
-  if resolved_fabric.unit <> 'توب' then
-    raise exception 'Fabric withdrawn from cutting stock must be measured in توب.';
+  if resolved_fabric.unit not in ('متر', 'توب') then
+    raise exception 'The selected stock item has an unsupported measurement unit.';
   end if;
-  if requested_quantity <> trunc(requested_quantity) then
+  if resolved_fabric.unit = 'توب' and requested_quantity <> trunc(requested_quantity) then
     raise exception 'Fabric withdrawn from stock must use a whole number of توب.';
   end if;
 
@@ -2532,20 +2532,25 @@ declare
   plys_sum numeric := 0;
   calculated_total numeric;
 begin
-  if coalesce(jsonb_typeof(requested_color_ply_data), '') <> 'object'
+  if coalesce(jsonb_typeof(requested_size_data), '') <> 'object'
+     or coalesce(jsonb_typeof(requested_color_ply_data), '') <> 'object'
      or coalesce(jsonb_typeof(requested_color_ply_data -> 'sizes'), '') <> 'array'
      or coalesce(jsonb_typeof(requested_color_ply_data -> 'colors'), '') <> 'array' then
-    raise exception 'Cutting color, ply, and size selections are required.';
+    raise exception 'Cutting progress must contain valid size and color arrays.';
   end if;
 
   size_type := requested_color_ply_data ->> 'type';
-  if coalesce(size_type, '') not in ('men', 'women', 'children') then
+  if jsonb_array_length(requested_color_ply_data -> 'sizes') > 0
+     and coalesce(size_type, '') not in ('men', 'women', 'children') then
     raise exception 'Select a supported size category.';
   end if;
 
   for size_name in
     select jsonb_array_elements_text(requested_color_ply_data -> 'sizes')
   loop
+    if coalesce(size_type, '') not in ('men', 'women', 'children') then
+      raise exception 'Select a supported size category before selecting sizes.';
+    end if;
     if (size_type in ('men', 'women') and size_name not in ('S', 'M', 'L', 'XL', '2XL', '3XL', '4XL'))
        or (size_type = 'children' and size_name not in ('2', '4', '6', '8', '10', '12', '14', '16'))
        or size_name = any(selected_sizes) then
@@ -2553,10 +2558,6 @@ begin
     end if;
     selected_sizes := array_append(selected_sizes, size_name);
   end loop;
-  if cardinality(selected_sizes) = 0 then
-    raise exception 'Select at least one size.';
-  end if;
-
   for color_entry in
     select value from jsonb_array_elements(requested_color_ply_data -> 'colors')
   loop
@@ -2579,19 +2580,20 @@ begin
     end if;
     selected_colors := array_append(selected_colors, color_name);
   end loop;
-  if cardinality(selected_colors) = 0 then
-    raise exception 'Add at least one color with its ply count.';
-  end if;
-
-  calculated_total := plys_sum * cardinality(selected_sizes);
-  if calculated_total < 1 or calculated_total > 2147483647 then
+  calculated_total := case
+    when cardinality(selected_colors) = 0 or cardinality(selected_sizes) = 0 then 0
+    else plys_sum * cardinality(selected_sizes)
+  end;
+  if calculated_total < 0 or calculated_total > 2147483647 then
     raise exception 'The calculated cutting quantity exceeds the supported range.';
   end if;
   foreach size_name in array selected_sizes loop
     expected_counts := expected_counts || jsonb_build_object(size_name, plys_sum::integer::text);
   end loop;
   normalized_sizes := jsonb_build_object('type', size_type, 'counts', expected_counts);
-  if requested_size_data is distinct from normalized_sizes then
+  if cardinality(selected_colors) > 0
+     and cardinality(selected_sizes) > 0
+     and requested_size_data is distinct from normalized_sizes then
     raise exception 'The supplied size quantities do not match the selected sizes and color ply counts.';
   end if;
   normalized_colors := array_to_string(selected_colors, ', ');
@@ -2608,7 +2610,7 @@ drop function if exists public.submit_factory_cutting(uuid, uuid, text, text, js
 drop function if exists public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, integer, text, uuid, numeric, text);
 drop function if exists public.read_factory_cutting_clients();
 create function public.read_factory_cutting_clients()
-returns table (id uuid, name text)
+returns table (id uuid, name text, brand_name text)
 language plpgsql
 stable
 security definer
@@ -2620,7 +2622,7 @@ begin
   end if;
 
   return query
-    select customer.id, customer.name
+    select customer.id, customer.name, customer.brand_name
     from public.factory_clients as customer
     order by customer.name;
 end;
@@ -2654,6 +2656,7 @@ declare
   cut_total integer;
   total_plys integer;
   resolved_fabric_name text;
+  resolved_fabric_unit text;
 begin
   if not public.has_active_factory_role(array['cutting']) then
     raise exception 'Only active cutting supervisors can submit new cutting orders.';
@@ -2664,17 +2667,35 @@ begin
          and length(trim(coalesce(requested_model_number, ''))) = 0)
      or requested_size_data is null
      or coalesce(jsonb_typeof(requested_size_data), '') <> 'object'
+     or requested_color_ply_data is null
+     or coalesce(jsonb_typeof(requested_color_ply_data), '') <> 'object'
      or length(trim(coalesce(requested_fabric, ''))) = 0
-     or requested_bolt_count is null or requested_bolt_count < 1 then
-    raise exception 'A valid model, size and color ply selections, fabric, and bolt count are required.';
+     or requested_bolt_count is null or requested_bolt_count < 0
+     or requested_fabric_quantity is null or requested_fabric_quantity <= 0 then
+    raise exception 'A valid model, fabric, and positive fabric quantity are required.';
   end if;
   if requested_fabric_id is null
-     and coalesce(nullif(trim(requested_external_fabric_unit), ''), 'متر') <> 'متر' then
-    raise exception 'External fabric quantity must be measured in meters.';
+     and coalesce(nullif(trim(requested_external_fabric_unit), ''), '') not in ('متر', 'توب') then
+    raise exception 'Choose متر or توب for the external fabric quantity.';
   end if;
-  if requested_fabric_id is not null
-     and requested_bolt_count::numeric <> requested_fabric_quantity then
-    raise exception 'The cutting bolt count must match the number withdrawn from stock.';
+  if requested_fabric_id is null
+     and ((requested_external_fabric_unit = 'توب'
+           and (requested_fabric_quantity <> trunc(requested_fabric_quantity)
+             or requested_bolt_count::numeric <> requested_fabric_quantity))
+       or (requested_external_fabric_unit = 'متر' and requested_bolt_count <> 0)) then
+    raise exception 'External cutting quantity and its selected unit do not match.';
+  end if;
+  if requested_fabric_id is not null then
+    select unit into resolved_fabric_unit
+    from public.factory_fabrics where id = requested_fabric_id
+    for update;
+    if not found or resolved_fabric_unit not in ('متر', 'توب')
+       or (resolved_fabric_unit = 'توب'
+           and (requested_fabric_quantity <> trunc(requested_fabric_quantity)
+             or requested_bolt_count::numeric <> requested_fabric_quantity))
+       or (resolved_fabric_unit = 'متر' and requested_bolt_count <> 0) then
+      raise exception 'The cutting quantity must match the stock item measurement unit.';
+    end if;
   end if;
 
   select *
@@ -2711,7 +2732,7 @@ begin
              nullif(trim(coalesce(requested_model_number, '')), '')),
     coalesce(trim(requested_model_number), ''),
     submitted_by_name,
-    normalized_colors,
+    coalesce(normalized_colors, ''),
     coalesce((
       select jsonb_object_agg(upper(trim(color_entry ->> 'color')), trim(color_entry ->> 'name'))
       from jsonb_array_elements(requested_color_ply_data -> 'colors') as color_entry
@@ -2773,22 +2794,39 @@ declare
   calculated_total integer;
   total_plys integer;
   resolved_fabric_name text;
+  resolved_fabric_unit text;
 begin
   if not public.has_active_factory_role(array['cutting']) then
     raise exception 'Only active cutting supervisors can update cutting progress.';
   end if;
   if requested_order_id is null
      or length(trim(coalesce(requested_fabric, ''))) = 0
-     or requested_bolt_count is null or requested_bolt_count < 1 then
-    raise exception 'A valid order, fabric, and positive bolt count are required.';
+     or requested_bolt_count is null or requested_bolt_count < 0
+     or requested_fabric_quantity is null or requested_fabric_quantity <= 0 then
+    raise exception 'A valid order, fabric, and positive fabric quantity are required.';
   end if;
   if requested_fabric_id is null
-     and coalesce(nullif(trim(requested_external_fabric_unit), ''), 'متر') <> 'متر' then
-    raise exception 'External fabric quantity must be measured in meters.';
+     and coalesce(nullif(trim(requested_external_fabric_unit), ''), '') not in ('متر', 'توب') then
+    raise exception 'Choose متر or توب for the external fabric quantity.';
   end if;
-  if requested_fabric_id is not null
-     and requested_bolt_count::numeric <> requested_fabric_quantity then
-    raise exception 'The cutting bolt count must match the number withdrawn from stock.';
+  if requested_fabric_id is null
+     and ((requested_external_fabric_unit = 'توب'
+           and (requested_fabric_quantity <> trunc(requested_fabric_quantity)
+             or requested_bolt_count::numeric <> requested_fabric_quantity))
+       or (requested_external_fabric_unit = 'متر' and requested_bolt_count <> 0)) then
+    raise exception 'External cutting quantity and its selected unit do not match.';
+  end if;
+  if requested_fabric_id is not null then
+    select unit into resolved_fabric_unit
+    from public.factory_fabrics where id = requested_fabric_id
+    for update;
+    if not found or resolved_fabric_unit not in ('متر', 'توب')
+       or (resolved_fabric_unit = 'توب'
+           and (requested_fabric_quantity <> trunc(requested_fabric_quantity)
+             or requested_bolt_count::numeric <> requested_fabric_quantity))
+       or (resolved_fabric_unit = 'متر' and requested_bolt_count <> 0) then
+      raise exception 'The cutting quantity must match the stock item measurement unit.';
+    end if;
   end if;
 
   select *
@@ -2810,7 +2848,7 @@ begin
   );
 
   update public.orders
-  set colors = normalized_colors,
+  set colors = coalesce(normalized_colors, ''),
       color_names = coalesce((
         select jsonb_object_agg(upper(trim(color_entry ->> 'color')), trim(color_entry ->> 'name'))
         from jsonb_array_elements(requested_color_ply_data -> 'colors') as color_entry
@@ -2851,6 +2889,7 @@ as $$
 declare
   current_order public.orders%rowtype;
   current_layer_count integer;
+  current_cutting_data jsonb;
 begin
   if not public.has_active_factory_role(array['cutting']) then
     raise exception 'Only active cutting supervisors can mark a bed ready for cutting.';
@@ -2868,14 +2907,22 @@ begin
     raise exception 'The active factory order was not found.';
   end if;
 
-  select layer_count
-    into current_layer_count
+  select layer_count, color_ply_data
+    into current_layer_count, current_cutting_data
   from public.production_stages
   where order_id = requested_order_id
     and stage_name = 'cutting'
   for update;
   if not found or current_layer_count < 1 then
-    raise exception 'Save at least one positive color ply before marking the bed ready.';
+    raise exception 'Select at least one size and save a positive color ply before marking the bed ready.';
+  end if;
+  if coalesce(jsonb_typeof(current_cutting_data -> 'sizes'), '') <> 'array'
+     or coalesce(jsonb_typeof(current_cutting_data -> 'colors'), '') <> 'array' then
+    raise exception 'Select at least one size and save a positive color ply before marking the bed ready.';
+  end if;
+  if jsonb_array_length(current_cutting_data -> 'sizes') = 0
+     or jsonb_array_length(current_cutting_data -> 'colors') = 0 then
+    raise exception 'Select at least one size and save a positive color ply before marking the bed ready.';
   end if;
 
   update public.production_stages
@@ -2916,6 +2963,7 @@ declare
   cut_total integer;
   total_plys integer;
   resolved_fabric_name text;
+  resolved_fabric_unit text;
 begin
   if not public.has_active_factory_role(array['cutting']) then
     raise exception 'Only active cutting supervisors can finish cutting.';
@@ -2923,16 +2971,42 @@ begin
   if requested_order_id is null or requested_size_data is null
      or coalesce(jsonb_typeof(requested_size_data), '') <> 'object'
      or length(trim(coalesce(requested_fabric, ''))) = 0
-     or requested_bolt_count is null or requested_bolt_count < 1 then
-    raise exception 'A valid order, size and color ply selections, fabric, and bolt count are required.';
+     or requested_bolt_count is null or requested_bolt_count < 0
+     or requested_fabric_quantity is null or requested_fabric_quantity <= 0 then
+    raise exception 'A valid order, fabric, and positive fabric quantity are required.';
   end if;
   if requested_fabric_id is null
-     and coalesce(nullif(trim(requested_external_fabric_unit), ''), 'متر') <> 'متر' then
-    raise exception 'External fabric quantity must be measured in meters.';
+     and coalesce(nullif(trim(requested_external_fabric_unit), ''), '') not in ('متر', 'توب') then
+    raise exception 'Choose متر or توب for the external fabric quantity.';
   end if;
-  if requested_fabric_id is not null
-     and requested_bolt_count::numeric <> requested_fabric_quantity then
-    raise exception 'The cutting bolt count must match the number withdrawn from stock.';
+  if requested_fabric_id is null
+     and ((requested_external_fabric_unit = 'توب'
+           and (requested_fabric_quantity <> trunc(requested_fabric_quantity)
+             or requested_bolt_count::numeric <> requested_fabric_quantity))
+       or (requested_external_fabric_unit = 'متر' and requested_bolt_count <> 0)) then
+    raise exception 'External cutting quantity and its selected unit do not match.';
+  end if;
+  if requested_fabric_id is not null then
+    select unit into resolved_fabric_unit
+    from public.factory_fabrics where id = requested_fabric_id
+    for update;
+    if not found or resolved_fabric_unit not in ('متر', 'توب')
+       or (resolved_fabric_unit = 'توب'
+           and (requested_fabric_quantity <> trunc(requested_fabric_quantity)
+             or requested_bolt_count::numeric <> requested_fabric_quantity))
+       or (resolved_fabric_unit = 'متر' and requested_bolt_count <> 0) then
+      raise exception 'The cutting quantity must match the stock item measurement unit.';
+    end if;
+  end if;
+  if coalesce(jsonb_typeof(requested_color_ply_data), '') <> 'object'
+     or coalesce(jsonb_typeof(requested_color_ply_data -> 'colors'), '') <> 'array'
+     or coalesce(jsonb_typeof(requested_color_ply_data -> 'sizes'), '') <> 'array'
+     or coalesce(requested_color_ply_data ->> 'type', '') not in ('men', 'women', 'children') then
+    raise exception 'Select sizes and add at least one color with a positive ply count before finishing.';
+  end if;
+  if jsonb_array_length(requested_color_ply_data -> 'colors') = 0
+     or jsonb_array_length(requested_color_ply_data -> 'sizes') = 0 then
+    raise exception 'Select sizes and add at least one color with a positive ply count before finishing.';
   end if;
 
   select breakdown.normalized_sizes, breakdown.normalized_colors,
