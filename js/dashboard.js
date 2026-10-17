@@ -3434,6 +3434,15 @@ function bindActions(session) {
   const deliveryModalDescription = document.querySelector("#delivery-modal-description");
   const deliveryQuantityLabel = document.querySelector("#delivery-quantity-label");
   const deliverySubmitButton = deliveryForm.querySelector('[type="submit"]');
+  const deliveryRecipientInput = deliveryForm.elements.recipientName;
+  const updateDeliveryRecipientRequirement = () => {
+    const order = dashboardData.models.find((item) => item.id === deliveryForm.elements.orderId.value);
+    const isFinalHandover = deliveryForm.elements.finalize.value === "true";
+    const quantity = Number(deliveryForm.elements.quantity.value);
+    deliveryRecipientInput.required = !isFinalHandover
+      || !order
+      || quantity > order.deliveredPieces;
+  };
   const closeDeliveryModal = () => {
     deliveryModal.hidden = true;
     deliveryForm.reset();
@@ -3446,6 +3455,7 @@ function bindActions(session) {
   deliveryModal.addEventListener("click", (event) => {
     if (event.target === deliveryModal) closeDeliveryModal();
   });
+  deliveryForm.elements.quantity.addEventListener("input", updateDeliveryRecipientRequirement);
   deliveryForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const order = dashboardData.models.find((item) => item.id === deliveryForm.elements.orderId.value);
@@ -3461,6 +3471,11 @@ function bindActions(session) {
     }
     if (finalize && quantity < order.deliveredPieces) {
       window.factoryUI.toast("لا يمكن أن يكون الإجمالي النهائي أقل من الكمية المسجلة في التسليمات السابقة.", "error");
+      return;
+    }
+    if ((!finalize || quantity > order.deliveredPieces) && !String(deliveryRecipientInput.value).trim()) {
+      window.factoryUI.toast("أدخل اسم المستلم للتسليم الإضافي.", "error");
+      deliveryRecipientInput.focus();
       return;
     }
     if (finalize && !await window.factoryUI.confirmAction({
@@ -3828,6 +3843,7 @@ function bindActions(session) {
         deliveryForm.elements.orderId.value = order.id;
         deliveryForm.elements.finalize.value = "";
         deliveryForm.elements.quantity.value = "";
+        deliveryRecipientInput.required = true;
         deliveryModalTitle.textContent = "تسجيل تسليم جديد";
         deliveryModalDescription.textContent = "أدخل كمية هذه الدفعة واسم مستلمها؛ ستُضاف إلى إجمالي ما تم تسليمه حتى الآن.";
         deliveryQuantityLabel.textContent = "كمية التسليم";
@@ -3839,12 +3855,13 @@ function bindActions(session) {
       deliveryForm.elements.orderId.value = order.id;
       deliveryForm.elements.finalize.value = "true";
       deliveryForm.elements.quantity.value = order.deliveredPieces || "";
-      deliveryForm.elements.recipientName.value = "";
+      deliveryRecipientInput.value = "";
       deliveryModalTitle.textContent = "إنهاء التسليم وتسوية الكمية";
       deliveryModalDescription.textContent = `أدخل إجمالي ما تم تسليمه منذ بداية الطلبية، وليس كمية الدفعة الأخيرة. العدد المطلوب الأصلي: ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.originalQuantity)} قطعة؛ الكمية المسجلة حاليًا: ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.deliveredPieces)} قطعة.`;
       deliveryQuantityLabel.textContent = "إجمالي الكمية الفعلية المسلّمة";
       deliverySubmitButton.textContent = "إنهاء التسليم وإغلاق الطلب";
       deliveryModal.hidden = false;
+      updateDeliveryRecipientRequirement();
       deliveryForm.elements.quantity.focus();
       return;
     }

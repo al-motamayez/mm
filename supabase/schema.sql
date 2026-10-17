@@ -2618,9 +2618,8 @@ begin
   end if;
   if requested_order_id is null
      or requested_actual_delivered_qty is null
-     or requested_actual_delivered_qty <= 0
-     or length(trim(coalesce(requested_recipient_name, ''))) = 0 then
-    raise exception 'A valid order, positive final delivered quantity, and recipient name are required.';
+     or requested_actual_delivered_qty <= 0 then
+    raise exception 'A valid order and positive final delivered quantity are required.';
   end if;
 
   select *
@@ -2643,6 +2642,10 @@ begin
 
   additional_quantity := requested_actual_delivered_qty - current_order.delivered_pieces;
   if additional_quantity > 0 then
+    if length(trim(coalesce(requested_recipient_name, ''))) = 0 then
+      raise exception 'A recipient name is required when recording an additional delivery.';
+    end if;
+
     insert into public.factory_deliveries (
       order_id, customer_id, quantity, price_per_piece, recipient_name, expected_delivery_date
     )
