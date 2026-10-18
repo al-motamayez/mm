@@ -1800,7 +1800,7 @@ function adminView(data, accounts) {
         ${panel("إدارة الموديلات والطلبيات", orderCards(activeOrders, true))}
       </div>
       <div data-orders-tab-panel="status"${activeOrdersTab === "status" ? "" : " hidden"}>${modelStatusReviewView(data)}</div>
-      <div class="modal-backdrop" id="order-modal" hidden><section class="modal-card order-modal-card" role="dialog" aria-modal="true" aria-labelledby="order-modal-title"><button class="modal-close" type="button" data-close-order aria-label="إغلاق">×</button><h2 id="order-modal-title">إضافة موديل / طلبية</h2><p>يمكن ترك العدد فارغًا حتى انتهاء الفرش والقص، ثم إدخال العدد الفعلي عند تعديل الطلب.</p>      <form id="model-form" class="order-form modal-form"><input type="hidden" name="editIndex" value=""><input type="hidden" name="savedOrderId" value=""><input type="hidden" name="productionType" value="full_cutting"><div class="field initial-delivery-field" data-initial-delivery-field hidden><label for="model-delivered-pieces">العدد المسلّم</label><input id="model-delivered-pieces" name="deliveredPieces" type="number" min="1" step="1"><small>يُسجل كدفعة تسليم تاريخية ويُحتسب ضمن حساب العميل.</small></div>
+      <div class="modal-backdrop" id="order-modal" hidden><section class="modal-card order-modal-card" role="dialog" aria-modal="true" aria-labelledby="order-modal-title"><button class="modal-close" type="button" data-close-order aria-label="إغلاق">×</button><h2 id="order-modal-title">إضافة موديل / طلبية</h2><p>يمكن ترك العدد فارغًا حتى انتهاء الفرش والقص، ثم إدخال العدد الفعلي عند تعديل الطلب.</p>      <form id="model-form" class="order-form modal-form"><input type="hidden" name="editIndex" value=""><input type="hidden" name="savedOrderId" value=""><input type="hidden" name="productionType" value="full_cutting">
         <section class="form-section"><h3>المعلومات الأساسية <span>إجباري</span></h3><div class="form-section-grid">
           <input type="hidden" name="customerId">
           <div class="field model-customer-field"><label for="model-client">اختيار اسم العميل</label><select id="model-client" name="customerSelection"><option value="">اختر اسم العميل</option>${clientOptions}</select><small>اختر العميل أو البراند؛ اختيار أحدهما يلغي الآخر.</small></div>
@@ -1816,9 +1816,10 @@ function adminView(data, accounts) {
           ${sizePickerMarkup("", "model-sizes")}
           <div class="model-allocation field"><label>توزيع العدد على الألوان والمقاسات</label><div data-model-allocation-grid><p class="muted">أدخل العدد الكلي واختر الألوان والمقاسات لعرض التوزيع.</p></div><input type="hidden" name="colorSizeDistribution" value='{"colors":[]}'></div>
           <label class="field model-image-field"><span>صورة الموديل (اختياري)</span><input type="file" name="modelImage" accept="image/jpeg,image/png,image/webp"><small>JPG أو PNG أو WEBP بحد أقصى 5 ميجابايت.</small><div data-model-image-preview></div></label>
-          <div class="field"><label for="model-expected-delivery">تاريخ التسليم المتوقع (اختياري)</label><input id="model-expected-delivery" name="expectedDeliveryDate" type="date"></div>
+          <div class="field" data-expected-delivery-field><label for="model-expected-delivery">تاريخ التسليم المتوقع (اختياري)</label><input id="model-expected-delivery" name="expectedDeliveryDate" type="date"></div>
           <div class="field"><label for="model-status">حالة الطلب</label><select id="model-status" name="status"><option>قيد الانتظار</option><option>معلق</option><option>تحت الإنشاء</option><option>قيد الفرش</option><option>تم الفرش / جاهز للقص</option><option>تم القص</option><option>معلق - في انتظار الخياطة</option><option>في الخياطة</option><option>جاهز للتسليم</option><option>تم التسليم</option></select></div>
-          <div class="field"><label for="model-priority">أولوية التنفيذ</label><select id="model-priority" name="priority"><option>عادي</option><option>مرتفع</option><option>عاجل</option></select></div>
+          <div class="field" data-initial-delivery-field hidden><label for="model-delivered-pieces">العدد المسلّم</label><input id="model-delivered-pieces" name="deliveredPieces" type="number" min="1" step="1"><small>يُسجل كدفعة تسليم تاريخية ويُحتسب ضمن حساب العميل.</small></div>
+          <div class="field" data-model-priority-field><label for="model-priority">أولوية التنفيذ</label><select id="model-priority" name="priority"><option>عادي</option><option>مرتفع</option><option>عاجل</option></select></div>
         </div></section>
         <section class="form-section"><h3>التفاصيل المالية <span>اختياري</span></h3><div class="form-section-grid">
           <div class="field"><label for="model-pricing-mode">طريقة التسعير</label><select id="model-pricing-mode" name="pricingMode"><option value="total">سعر إجمالي للقطعة</option><option value="stages">تسعير كل قسم للقطعة</option></select></div>
@@ -3571,6 +3572,14 @@ function bindActions(session) {
     form.elements[config.fields[0]].focus();
   }));
   const orderForm = document.querySelector("#model-form");
+  const updateOrderConditionalFields = () => {
+    const isDelivered = orderForm.elements.status.value === "تم التسليم";
+    const isEditing = Boolean(orderForm.elements.editIndex.value);
+    orderForm.querySelector("[data-initial-delivery-field]").hidden = !isDelivered || isEditing;
+    orderForm.querySelector("[data-expected-delivery-field]").hidden = isDelivered;
+    orderForm.querySelector("[data-model-priority-field]").hidden = isDelivered;
+    if (!isEditing && !isDelivered) orderForm.elements.deliveredPieces.value = "";
+  };
   bindPickers(orderForm);
   orderForm.elements.customerSelection.addEventListener("change", () => {
     syncOrderCustomerSelection(orderForm, orderForm.elements.customerSelection.value, "customerSelection");
@@ -3588,9 +3597,7 @@ function bindActions(session) {
       updateStagePricing(orderForm);
       updateOrderTotals();
     } else if (event.target.matches('[name="status"]')) {
-      const creatingInitialDelivery = !orderForm.elements.editIndex.value && event.target.value === "تم التسليم";
-      orderForm.querySelector("[data-initial-delivery-field]").hidden = !creatingInitialDelivery;
-      if (!orderForm.elements.editIndex.value && !creatingInitialDelivery) orderForm.elements.deliveredPieces.value = "";
+      updateOrderConditionalFields();
     }
   });
   orderForm.addEventListener("input", (event) => {
@@ -3614,7 +3621,7 @@ function bindActions(session) {
     orderForm.elements.editIndex.value = "";
     orderForm.elements.status.disabled = false;
     orderForm.querySelector("[data-original-quantity-field]").hidden = true;
-    orderForm.querySelector("[data-initial-delivery-field]").hidden = true;
+    updateOrderConditionalFields();
     updateStagePricing(orderForm);
     orderForm.querySelector("#model-price-history-note").hidden = true;
     if (modelPreviewObjectUrl) URL.revokeObjectURL(modelPreviewObjectUrl);
@@ -3652,7 +3659,7 @@ function bindActions(session) {
     updateStagePricing(orderForm);
     orderForm.elements.quantity.value = currentOrder.quantity || "";
     orderForm.elements.deliveredPieces.value = currentOrder.deliveredPieces;
-    orderForm.querySelector("[data-initial-delivery-field]").hidden = true;
+    updateOrderConditionalFields();
     setSizePicker(orderForm.querySelector("[data-size-picker]"), currentOrder.sizes);
     setColorPicker(orderForm.querySelector("[data-color-picker]"), currentOrder.colors, currentOrder.colorNames);
     renderModelAllocation(orderForm, currentOrder.colorSizeDistribution);
@@ -3773,6 +3780,7 @@ function bindActions(session) {
   }
   document.querySelector("[data-open-order-modal]").addEventListener("click", () => {
     closeOrderModal();
+    updateOrderConditionalFields();
     orderModal.hidden = false;
     orderForm.elements.customerSelection.focus();
   });
@@ -4126,7 +4134,7 @@ function bindActions(session) {
     if (newOrderButton) {
       orderForm.reset();
       orderForm.elements.editIndex.value = "";
-      orderForm.querySelector("[data-initial-delivery-field]").hidden = true;
+      updateOrderConditionalFields();
       syncOrderCustomerSelection(orderForm, newOrderButton.dataset.openOrderForClient);
       updateStagePricing(orderForm);
       orderForm.querySelector("#model-price-history-note").hidden = true;
