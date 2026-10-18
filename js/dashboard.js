@@ -1140,7 +1140,7 @@ function stat(label, value, note = "", details = "") {
   if (!details) {
     return `<article class="stat-card"><span>${label}</span><strong>${value}</strong>${note ? `<small>${note}</small>` : ""}</article>`;
   }
-  return `<details class="stat-card stat-card-popover"><summary class="stat-card-summary"><span>${label}</span><strong>${value}</strong>${note ? `<small>${note}</small>` : ""}<small class="stat-card-hint">مرر أو اضغط لعرض التفاصيل</small></summary><div class="stat-popover">${details}</div></details>`;
+  return `<article class="stat-card stat-card-popover"><div class="stat-card-summary"><span>${label}</span><strong>${value}</strong>${note ? `<small>${note}</small>` : ""}<small class="stat-card-hint">مرر لعرض التفاصيل</small></div><div class="stat-popover">${details}</div></article>`;
 }
 
 function statDetailList(items, emptyMessage = "لا توجد تفاصيل مسجلة.") {
