@@ -11,6 +11,7 @@ let realtimeRefreshTimer = null;
 let realtimeRefreshRunning = false;
 let realtimeNotifications = [];
 let notificationStorageAccount = "";
+let notificationStorageRole = "";
 let onlineUserCount = 0;
 let onlineUsers = [];
 let activeFinanceTab = "payments";
@@ -1405,6 +1406,8 @@ const LOCKED_FACTORY_ORDER_STATUSES = ["مكتمل", "تم التسليم", "ت�
 
 function adminDashboardView(data) {
   const activeOrders = data.models.filter((order) => !order.archivedAt);
+  const deliveredOrders = activeOrders.filter((order) => LOCKED_FACTORY_ORDER_STATUSES.includes(order.status));
+  const operatingOrders = activeOrders.filter((order) => !LOCKED_FACTORY_ORDER_STATUSES.includes(order.status));
   const drawerIncome = sumMoney([
     ...data.payments.map((payment) => payment.amount),
     ...data.models.map((order) => order.paidAmount),
@@ -1426,12 +1429,11 @@ function adminDashboardView(data) {
   ));
   const upcomingReceivables = sumMoney(clientSummaries.map((summary) => summary.expectedTotal));
   const groups = [
-    ["شغال حالياً", activeOrders.length],
-    ["قيد الانتظار", activeOrders.filter((order) => order.status === "قيد الانتظار").length],
-    ["في الفرش", activeOrders.filter((order) => order.status === "قيد الفرش").length],
-    ["في الخياطة", activeOrders.filter((order) => order.status === "في الخياطة").length]
+    ["قيد الانتظار", operatingOrders.filter((order) => order.status === "قيد الانتظار").length],
+    ["في الفرش", operatingOrders.filter((order) => order.status === "قيد الفرش").length],
+    ["في الخياطة", operatingOrders.filter((order) => order.status === "في الخياطة").length]
   ];
-  return `<div class="stats-grid">${stat("النقدية في الدرج", money(drawerBalance))}${stat("مديونيات العملاء", money(customerReceivables))}${stat("بضاعة تحت التسليم", money(upcomingReceivables))}${groups.map(([label, value]) => stat(label, value)).join("")}</div>
+  return `<div class="stats-grid">${stat("النقدية في الدرج", money(drawerBalance))}${stat("مديونيات العملاء", money(customerReceivables))}${stat("بضاعة تحت التسليم", money(upcomingReceivables))}${stat("شغل حالياً", operatingOrders.length, "طلبات قيد التشغيل")}${stat("تم التسليم", deliveredOrders.length, "طلبات تم تسليمها")}${groups.map(([label, value]) => stat(label, value)).join("")}</div>
     ${panel("آخر الموديلات وحالتها", activeOrders.length
       ? table(["الموديل","العميل","العدد","سعر القطعة","الحالة"], activeOrders.slice(0, 12).map((order) => `<tr><td>${escapeHtml(order.name)}${order.modelNumber ? ` · ${escapeHtml(order.modelNumber)}` : ""}</td><td>${escapeHtml(order.client || "—")}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity)}</td><td>${money(order.pricePerPiece)}</td><td>${statusTag(order.displayStatus || order.status)}</td></tr>`))
       : '<div class="empty-state">لا توجد موديلات حالية.</div>')}`;
@@ -2253,8 +2255,12 @@ function notificationStorageKey(accountId) {
 }
 
 function initializeRealtimeNotifications(session) {
-  if (notificationStorageAccount === session.accountId) return;
+  if (notificationStorageAccount === session.accountId && notificationStorageRole === session.role) {
+    filterRealtimeNotifications(session);
+    return;
+  }
   notificationStorageAccount = session.accountId;
+  notificationStorageRole = session.role;
   try {
     const saved = JSON.parse(localStorage.getItem(notificationStorageKey(session.accountId)) || "[]");
     realtimeNotifications = Array.isArray(saved)
@@ -2268,9 +2274,33 @@ function initializeRealtimeNotifications(session) {
         }))
         .slice(0, 40)
       : [];
+    filterRealtimeNotifications(session);
   } catch (error) {
     realtimeNotifications = [];
     console.warn("تعذر تحميل الإشعارات المحفوظة محلياً.", error);
+  }
+}
+
+function notificationSourceAllowed(notification, session) {
+  if (session.role === "admin") return true;
+  const publicOrderSources = ["الطلبات ومراحل الإنتاج", "التسليمات"];
+  return publicOrderSources.includes(notification.source)
+    && Boolean(notification.orderId)
+    && Boolean(dashboardData?.models.some((order) => order.id === notification.orderId));
+}
+
+function filterRealtimeNotifications(session) {
+  const filtered = realtimeNotifications.filter((notification) => notificationSourceAllowed(notification, session));
+  if (session.role !== "admin") {
+    filtered.forEach((notification) => {
+      notification.personName = "";
+      notification.details = (notification.details || []).filter((detail) => ["حالة الطلب", "الكمية"].includes(detail.label));
+      notification.message = notification.clientMessage || `تم تحديث طلبك: ${notification.modelName || "طلبية"}`;
+    });
+  }
+  if (filtered.length !== realtimeNotifications.length) {
+    realtimeNotifications = filtered;
+    persistRealtimeNotifications();
   }
 }
 
@@ -2302,7 +2332,7 @@ function showNotificationDetails(notification) {
   document.querySelector("[data-notification-details-content]").innerHTML = `
     <h2 id="notification-details-title">${escapeHtml(notification.message)}</h2>
     <p>وقت التحديث: ${formatDateTime(notification.createdAt)}</p>
-    <dl class="notification-detail-list">${details.map((detail) => `<div><dt>${escapeHtml(detail.label)}</dt><dd>${escapeHtml(detail.value)}</dd></div>`).join("") || "<div><dt>التفاصيل</dt><dd>لا توجد معلومات إضافية لهذا التحديث.</dd></div>"}</dl>`;
+    <dl class="notification-detail-list">${details.map((detail) => `<div><dt>${escapeHtml(detail.label)}</dt><dd>${escapeHtml(detail.value)}</dd></div>`).join("") || "<div><dt>التفاصيل</dt><dd>تم تسجيل التحديث.</dd></div>"}</dl>`;
   const openModelButton = document.querySelector("[data-open-notification-model]");
   const relatedOrder = dashboardData.models.find((order) => order.id === notification.orderId);
   openModelButton.hidden = !relatedOrder;
@@ -2320,98 +2350,99 @@ function recordRealtimeNotification(source, payload = {}) {
   const eventType = payload.eventType || payload.event || "";
   const action = { INSERT: "إضافة", UPDATE: "تعديل", DELETE: "حذف" }[eventType] || "تحديث";
   const row = payload.new || payload.old || {};
-  let recordData = row.data || row.payload || {};
-  if (typeof recordData === "string") {
-    try { recordData = JSON.parse(recordData); } catch { recordData = {}; }
-  }
-  if (!recordData || typeof recordData !== "object" || Array.isArray(recordData)) recordData = {};
-  const orderId = row.order_id || row.model_id || recordData.order_id || recordData.orderId || recordData.model_id || recordData.modelId || "";
+  const orderId = row.order_id || row.model_id || "";
   const order = dashboardData?.models.find((item) => item.id === orderId);
-  const client = dashboardData?.clients.find((item) => item.id === (row.customer_id || recordData.customer_id || order?.customerId));
-  const actorId = row.created_by || row.user_id || row.owner_id || recordData.createdBy || recordData.userId || recordData.ownerId || "";
-  const actor = dashboardData?.users.find((user) => user.id === actorId);
-  const modelName = order?.name || row.model_name || row.modelName || recordData.model_name || recordData.modelName
-    || row.model_number || recordData.modelNumber || (orderId ? "موديل مرتبط" : "");
-  const personName = row.full_name || row.username || row.recipient_name || row.worker_name || row.customer_name || row.person_name || row.name
-    || recordData.fullName || recordData.username || recordData.recipientName || recordData.workerName || recordData.customerName || recordData.personName || recordData.name
-    || actor?.name || actor?.username || client?.name || "غير محدد في سجل التحديث";
-  const recordId = row.id || "";
-  let messageSource = source;
+  const modelName = order?.name || order?.modelNumber || "الطلبية";
+  let eventLabel = source;
   if (source === "التسليمات") {
-    messageSource = eventType === "DELETE" ? "حذف تسليم موديل" : eventType === "UPDATE" ? "تعديل تسليم موديل" : "تسليم موديل";
-  } else if (source === "الحركة النقدية") {
-    const transaction = payload.new || payload.old || {};
-    messageSource = `${transaction.direction === "income" ? "إيراد خزينة" : "مصروف خزينة"}${transaction.category ? ` · ${transaction.category}` : ""}`;
-  } else if (source === "السجلات") {
-    const record = payload.new || payload.old || {};
-    const collectionLabels = { payments: "دفعة مالية", advances: "سلفة عامل", payroll: "صرف راتب", leaves: "طلب انصراف", tasks: "مهمة", settlements: "تصفية حساب" };
-    messageSource = collectionLabels[record.collection] || "سجل النظام";
-  } else if (source === "تسجيلات الدخول والحسابات") {
-    const authEvent = payload.new || payload.old || {};
-    messageSource = authEvent.event_type === "login" ? "تسجيل دخول مستخدم" : "إنشاء حساب مستخدم";
-  } else if (source === "الحسابات") {
-    messageSource = "حساب مستخدم";
+    eventLabel = eventType === "DELETE" ? "حذف تسليم" : eventType === "UPDATE" ? "تعديل تسليم" : "تسجيل تسليم";
+  } else if (source === "الطلبات ومراحل الإنتاج") {
+    eventLabel = row.signal_type === "stage" ? "تحديث مرحلة تشغيل" : "تحديث طلبية";
+  } else {
+    const adminLabels = {
+      "السجلات": "سجل النظام",
+      "الحركة النقدية": "حركة نقدية",
+      "تسجيلات الدخول والحسابات": "نشاط حساب",
+      "الحسابات": "حساب مستخدم",
+      "ملفات العملاء": "ملف عميل",
+      "مخزون القماش": "مخزون القماش",
+      "حركات القماش": "حركة قماش",
+      "حالة الحساب": "حالة حساب"
+    };
+    eventLabel = adminLabels[source] || "تحديث إداري";
   }
-  const details = [
-    { label: "الإجراء", value: action },
-    { label: "نوع الحدث", value: messageSource },
-    ...(modelName ? [{ label: "الموديل", value: modelName }] : []),
-    { label: "الشخص أو الطرف المعني", value: personName },
-    ...(Number.isFinite(Number(row.quantity ?? recordData.quantity)) && (row.quantity ?? recordData.quantity) !== undefined
-      ? [{ label: "الكمية", value: `${row.quantity ?? recordData.quantity} قطعة` }]
-      : [])
-  ];
-  const commitKey = payload.commit_timestamp || "";
-  const existingCommit = commitKey
-    ? realtimeNotifications.find((notification) => notification.commitKey === commitKey)
+  const isAdmin = notificationStorageRole === "admin";
+  const isOrderNotification = ["الطلبات ومراحل الإنتاج", "التسليمات"].includes(source)
+    && Boolean(orderId)
+    && (isAdmin || Boolean(order));
+  if (!isAdmin && !isOrderNotification) return;
+  const clientMessage = source === "التسليمات"
+    ? `تم تسجيل تسليم لطلبك: ${modelName}`
+    : `تم تحديث طلبك: ${modelName}`;
+  let initialMessage = isAdmin
+    ? `${action}: ${eventLabel}${orderId ? ` — ${modelName}` : ""}`
+    : clientMessage;
+  const beforeOrder = order ? {
+    status: order.status,
+    quantity: Number(order.quantity || 0),
+    originalQuantity: Number(order.originalQuantity || 0),
+    pricePerPiece: Number(order.pricePerPiece || 0),
+    deliveredPieces: Number(order.deliveredPieces || 0),
+    expectedDeliveryDate: order.expectedDeliveryDate || "",
+    priority: order.priority || "",
+    workStages: [...(order.workStages || [])]
+  } : null;
+  const beforeDelivery = source === "التسليمات"
+    ? order?.deliveryHistory?.find((delivery) => delivery.id === row.id)
     : null;
-  if (existingCommit) {
-    if (!Array.isArray(existingCommit.sources)) existingCommit.sources = [];
-    let changed = false;
-    if (!existingCommit.sources.includes(messageSource)) {
-      existingCommit.sources.push(messageSource);
-      existingCommit.message = `تحديثات: ${existingCommit.sources.join("، ")}`;
-      existingCommit.action = "تحديث";
-      existingCommit.eventLabel = existingCommit.message;
-      changed = true;
-    }
-    existingCommit.details = [...(existingCommit.details || [])];
-    details.forEach((detail) => {
-      if (!existingCommit.details.some((saved) => saved.label === detail.label && saved.value === detail.value)) {
-        existingCommit.details.push(detail);
-        changed = true;
+  const details = [];
+  const deliveryQuantity = Number(row.quantity || 0);
+  if (source === "التسليمات" && isAdmin && eventType === "INSERT") {
+    const amount = Number(row.amount ?? deliveryQuantity * Number(row.price_per_piece || 0));
+    initialMessage = `تم تسجيل تسليم: ${modelName} - العدد: ${deliveryQuantity} - القيمة: ${money(amount)}`;
+    details.push(
+      { label: "الكمية المسلّمة", value: `${deliveryQuantity} قطعة` },
+      { label: "قيمة الدفعة", value: money(amount) }
+    );
+  } else if (source === "التسليمات" && isAdmin && eventType === "UPDATE") {
+    const oldRow = payload.old || {};
+    for (const [key, label] of [["quantity", "كمية التسليم"], ["price_per_piece", "سعر القطعة"]]) {
+      if (oldRow[key] !== undefined && row[key] !== undefined && Number(oldRow[key]) !== Number(row[key])) {
+        const format = key === "quantity" ? (value) => `${Number(value)} قطعة` : (value) => money(value);
+        details.push({ label, value: `من ${format(oldRow[key])} إلى ${format(row[key])}` });
       }
-    });
-    if (!existingCommit.orderId && orderId) {
-      existingCommit.orderId = orderId;
-      changed = true;
     }
-    if (!existingCommit.modelName && modelName) {
-      existingCommit.modelName = modelName;
-      changed = true;
-    }
-    if (!existingCommit.personName && personName) {
-      existingCommit.personName = personName;
-      changed = true;
-    }
-    if (changed) {
-      persistRealtimeNotifications();
-      refreshNotificationDropdown();
-    }
-    return;
   }
-  const fingerprint = `${messageSource}:${eventType}:${commitKey || recordId || crypto.randomUUID()}`;
+  if (isAdmin && !["الطلبات ومراحل الإنتاج", "التسليمات"].includes(source)) {
+    const labels = { INSERT: "تم تسجيل", UPDATE: "تم تحديث", DELETE: "تم حذف" };
+    details.push({ label: "الإجراء", value: `${labels[eventType] || "تم تحديث"} ${eventLabel}` });
+  }
+  if (isAdmin && source === "الطلبات ومراحل الإنتاج" && row.signal_type === "order") {
+    initialMessage = `${order ? "تم تعديل طلبية" : "تم تحديث طلبية"}: ${modelName}`;
+  }
+  const commitKey = payload.commit_timestamp || "";
+  const fingerprint = `${source}:${eventType}:${row.id || orderId || crypto.randomUUID()}:${commitKey}`;
   if (realtimeNotifications.some((notification) => notification.id === fingerprint)) return;
   realtimeNotifications.unshift({
     id: fingerprint,
-    message: `${action}: ${messageSource}${modelName ? ` — ${modelName}` : ""}`,
+    message: initialMessage,
+    clientMessage,
     action,
-    eventLabel: messageSource,
+    eventLabel,
+    source,
     orderId,
     modelName,
-    personName,
+    quantity: deliveryQuantity,
     details,
-    sources: [messageSource],
+    sources: [eventLabel],
+    beforeOrder,
+    beforeDelivery: beforeDelivery ? {
+      quantity: Number(beforeDelivery.quantity || 0),
+      pricePerPiece: Number(beforeDelivery.price_per_piece || 0)
+    } : null,
+    deliveryId: source === "التسليمات" ? row.id || "" : "",
+    eventType,
+    signalType: row.signal_type || "",
     commitKey,
     createdAt: payload.commit_timestamp || new Date().toISOString(),
     read: false
@@ -2530,49 +2561,111 @@ async function refreshFromRealtime(session, source) {
   }
 }
 
-function enrichRealtimeNotifications() {
-  let changed = false;
+function enrichRealtimeNotifications(session) {
   for (const notification of realtimeNotifications) {
+    if (notification.enriched) continue;
     const order = dashboardData.models.find((item) => item.id === notification.orderId);
-    if (!order) continue;
-    const modelName = order.name || order.modelNumber || "موديل بدون اسم";
-    const personName = order.client || "عميل الطلبية";
-    if (!notification.modelName || notification.modelName === "موديل مرتبط") {
-      notification.modelName = modelName;
-      changed = true;
-    }
-    if (!notification.personName || notification.personName === "غير محدد في سجل التحديث") {
-      notification.personName = personName;
-      changed = true;
+    if (order) {
+      notification.modelName = order.name || order.modelNumber || "طلبية";
+      notification.clientMessage = notification.source === "التسليمات"
+        ? `تم تسجيل تسليم لطلبك: ${notification.modelName}`
+        : `تم تحديث طلبك: ${notification.modelName}`;
     }
     notification.details = Array.isArray(notification.details) ? notification.details : [];
-    for (const [label, value] of [["الموديل", notification.modelName], ["الشخص أو الطرف المعني", notification.personName]]) {
-      const detail = notification.details.find((item) => item.label === label);
-      if (detail && detail.value !== value) {
-        detail.value = value;
-        changed = true;
-      } else if (!detail) {
-        notification.details.push({ label, value });
-        changed = true;
+    if (session.role === "admin" && notification.source === "التسليمات" && order && notification.eventType !== "INSERT") {
+      const oldDelivery = notification.beforeDelivery;
+      const updatedDelivery = order.deliveryHistory?.find((delivery) => delivery.id === notification.deliveryId);
+      if (notification.eventType === "DELETE" && oldDelivery) {
+        notification.details = [{ label: "الدفعة المحذوفة", value: `${oldDelivery.quantity} قطعة` }];
+      } else if (oldDelivery && updatedDelivery) {
+        const changes = [];
+        if (oldDelivery.quantity !== Number(updatedDelivery.quantity)) {
+          changes.push({ label: "كمية التسليم", value: `من ${oldDelivery.quantity} قطعة إلى ${Number(updatedDelivery.quantity)} قطعة` });
+        }
+        if (oldDelivery.pricePerPiece !== Number(updatedDelivery.price_per_piece)) {
+          changes.push({ label: "سعر القطعة", value: `من ${money(oldDelivery.pricePerPiece)} إلى ${money(updatedDelivery.price_per_piece)}` });
+        }
+        notification.details = changes;
       }
     }
-    const eventLabel = notification.sources?.length > 1
-      ? `تحديثات: ${notification.sources.join("، ")}`
-      : notification.eventLabel || notification.sources?.[0] || "تحديث";
-    const nextMessage = `${notification.action || "تحديث"}: ${eventLabel} — ${notification.modelName}`;
-    if (notification.message !== nextMessage) {
-      notification.message = nextMessage;
-      changed = true;
+    if (session.role === "admin" && notification.source === "الطلبات ومراحل الإنتاج" && order) {
+      if (notification.signalType === "order") {
+        if (!notification.beforeOrder) {
+          notification.action = "إضافة";
+          notification.eventLabel = "طلبية";
+          notification.details = [
+            { label: "العدد", value: `${Number(order.quantity || 0)} قطعة` },
+            { label: "سعر القطعة", value: money(order.pricePerPiece) }
+          ];
+        } else {
+          const current = {
+            status: order.status,
+            quantity: Number(order.quantity || 0),
+            originalQuantity: Number(order.originalQuantity || 0),
+            pricePerPiece: Number(order.pricePerPiece || 0),
+            deliveredPieces: Number(order.deliveredPieces || 0),
+            expectedDeliveryDate: order.expectedDeliveryDate || "",
+            priority: order.priority || "",
+            workStages: [...(order.workStages || [])]
+          };
+          const fields = [
+            ["status", "حالة الطلب", (value) => value],
+            ["quantity", "العدد المطلوب", (value) => `${value} قطعة`],
+            ["originalQuantity", "العدد الأصلي", (value) => `${value} قطعة`],
+            ["pricePerPiece", "سعر القطعة", (value) => money(value)],
+            ["deliveredPieces", "العدد المسلّم", (value) => `${value} قطعة`],
+            ["expectedDeliveryDate", "تاريخ التسليم المتوقع", (value) => value || "غير محدد"],
+            ["priority", "الأولوية", (value) => value || "عادي"],
+            ["workStages", "الأقسام المطلوبة", (value) => workStageLabels(value).join("، ") || "—"]
+          ];
+          const changes = fields.flatMap(([key, label, format]) =>
+            JSON.stringify(notification.beforeOrder[key]) !== JSON.stringify(current[key])
+              ? [{ label, value: `من ${format(notification.beforeOrder[key])} إلى ${format(current[key])}` }]
+              : []
+          );
+          if (changes.length) {
+            notification.action = "تعديل";
+            notification.eventLabel = "طلبية";
+            notification.details = changes;
+          } else {
+            notification.details = [];
+          }
+        }
+      } else {
+        notification.details = [{ label: "التحديث", value: "تم تحديث مرحلة تشغيل الطلبية." }];
+      }
     }
+    if (session.role !== "admin") {
+      notification.details = notification.details.filter((detail) => ["حالة الطلب", "الكمية المسلّمة"].includes(detail.label));
+      notification.message = notification.clientMessage || `تم تحديث طلبك: ${notification.modelName || "طلبية"}`;
+    } else {
+      const verb = { INSERT: "إضافة", UPDATE: "تعديل", DELETE: "حذف" }[notification.eventType] || "تحديث";
+      if (notification.source === "التسليمات") {
+        notification.message = notification.eventType === "INSERT"
+          ? `تم تسجيل تسليم: ${notification.modelName} - العدد: ${notification.quantity} - القيمة: ${notification.details.find((detail) => detail.label === "قيمة الدفعة")?.value || money(0)}`
+          : `تم ${verb} تسليم: ${notification.modelName}`;
+      } else if (notification.source === "الطلبات ومراحل الإنتاج" && notification.signalType === "order") {
+        notification.message = `${notification.action === "إضافة" ? "تم إضافة طلبية" : "تم تعديل طلبية"}: ${notification.modelName}`;
+        if (notification.action === "إضافة" && order) {
+          notification.message += ` - العدد: ${Number(order.quantity || 0)} - السعر: ${money(order.pricePerPiece)}`;
+        }
+      } else if (notification.orderId) {
+        notification.message = `تم تحديث ${notification.eventLabel || "الطلبية"}: ${notification.modelName}`;
+      } else {
+        notification.message = `تم ${verb} ${notification.eventLabel || "سجل النظام"}`;
+      }
+    }
+    notification.enriched = true;
   }
-  if (changed) persistRealtimeNotifications();
+  filterRealtimeNotifications(session);
+  persistRealtimeNotifications();
 }
 
 async function refreshDashboard(session) {
   const data = await readDashboardData(session);
   dashboardData = data;
   const accounts = await readAccounts(session);
-  enrichRealtimeNotifications();
+  enrichRealtimeNotifications(session);
   render(session, data, accounts);
 }
 
