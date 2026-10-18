@@ -45,6 +45,11 @@ function showMessage(text, isError = true) {
   message.hidden = !text;
 }
 
+function showGenericFailure(messageText) {
+  console.error(messageText);
+  showMessage("تعذر إتمام الطلب الآن. حاول مرة أخرى لاحقًا.");
+}
+
 function showAuthMode(mode) {
   loginPanel.hidden = mode !== "login";
   signupPanel.hidden = mode !== "signup";
@@ -181,7 +186,7 @@ async function routeAuthenticatedUser(user) {
     const { error: signOutError } = await supabaseClient.auth.signOut();
     if (signOutError) throw signOutError;
     showAuthMode("login");
-    showMessage(account ? "حسابك معلق إلى أن يفعّله الأدمن ويحدد دورك." : "بيانات حسابك غير موجودة في جدول users. تواصل مع الإدارة.");
+    showMessage(account ? "حسابك بانتظار التفعيل من الإدارة." : "تعذر الوصول إلى الحساب. تواصل مع الإدارة.");
     return;
   }
 
@@ -212,7 +217,7 @@ document.querySelector("#request-password-reset").addEventListener("click", asyn
     showMessage("إذا كان البريد مرتبطًا بحساب، فسيصلك رابط إعادة تعيين كلمة المرور. افتح الرابط من هذا الجهاز.", false);
   } catch (error) {
     console.error("تعذر إرسال رابط إعادة تعيين كلمة المرور.", error);
-    showMessage(`تعذر إرسال رابط إعادة التعيين: ${error.message}`);
+    showMessage("تعذر إرسال رابط إعادة التعيين الآن. تحقق من البيانات وحاول لاحقًا.");
   } finally {
     button.disabled = false;
   }
@@ -251,7 +256,7 @@ document.querySelector("#password-recovery-form").addEventListener("submit", asy
     showMessage("تم تغيير كلمة المرور. سجّل الدخول بالبريد وكلمة المرور الجديدة.", false);
   } catch (error) {
     console.error("تعذر تغيير كلمة المرور من رابط الاستعادة.", error);
-    showMessage(`تعذر تغيير كلمة المرور: ${error.message}`);
+    showMessage("تعذر تغيير كلمة المرور الآن. تأكد من صلاحية الرابط وحاول مجددًا.");
   } finally {
     button.disabled = false;
   }
@@ -291,7 +296,7 @@ signupForm.addEventListener("submit", async (event) => {
     if (error) throw error;
     if (!data.user) throw new Error("لم يُنشأ الحساب. حاول مرة أخرى.");
     if (!data.session) {
-      showMessage("أنشأ Supabase Auth الحساب لكنه لم يُصدر جلسة؛ لا يمكن للمتصفح إضافة صف آمن إلى users حتى يكتمل تأكيد الحساب. أكّد الحساب أولاً ثم أعد المحاولة لاستكمال الطلب.");
+      showMessage("تعذر إكمال إنشاء الحساب. حاول مرة أخرى لاحقًا أو تواصل مع الإدارة.");
       return;
     }
     try {
@@ -318,11 +323,8 @@ signupForm.addEventListener("submit", async (event) => {
     showAuthMode("login");
     showMessage("تم إرسال طلب الحساب إلى الأدمن للمراجعة والتفعيل.", false);
   } catch (error) {
-    if (error.status >= 500 || /database error saving new user/i.test(error.message)) {
-      showMessage("تعذر إنشاء الحساب لأن قاعدة البيانات لم تُنشئ ملف المستخدم. شغّل supabase/schema.sql بعد ترحيل جدول users القديم وإزالة عمود كلمة المرور النصية.");
-    } else {
-      showMessage(`تعذر إنشاء الحساب: ${error.message}`);
-    }
+    console.error("تعذر إنشاء طلب الحساب.", error);
+    showMessage("تعذر إنشاء الحساب الآن. تحقق من البيانات وحاول مرة أخرى.");
   } finally {
     signupButton.disabled = false;
   }
@@ -347,27 +349,12 @@ loginForm.addEventListener("submit", async (event) => {
       password
     });
     if (error) {
-      if (error.status >= 500 || /failed to fetch|network|fetch error/i.test(error.message)) {
-        console.error("تعذر الاتصال بخدمة Supabase Auth.", error);
-        showMessage("تعذر الاتصال بخدمة تسجيل الدخول. تحقق من اتصال الإنترنت وإعدادات Supabase ثم حاول مجددًا.");
-        return;
-      }
-      if (error.code === "email_not_confirmed") {
-        showMessage("البريد غير مؤكّد في Supabase Auth. أكّد البريد من رسالة التفعيل أو من لوحة Supabase ثم حاول مجددًا.");
-      } else if (error.code === "user_banned") {
-        showMessage("تم إيقاف حساب المصادقة. راجع إعدادات المستخدم في Supabase Auth.");
-      } else if (error.code === "over_request_rate_limit" || error.code === "too_many_requests") {
-        showMessage("محاولات كثيرة خلال وقت قصير. انتظر قليلاً ثم حاول مجددًا.");
-      } else if (error.code === "invalid_credentials") {
-        showMessage("رفض Supabase Auth بيانات الدخول. إذا كان البريد صحيحًا، اضغط «نسيت كلمة المرور؟» لإعادة تعيين كلمة مرور Auth؛ بيانات جدول users لا تكفي لتسجيل الدخول.");
-      } else {
-        console.error("رفض Supabase Auth محاولة تسجيل الدخول.", error);
-        showMessage(`تعذر تسجيل الدخول عبر Supabase Auth${error.code ? ` (${error.code})` : ""}. تحقق من البريد وكلمة المرور وحالة الحساب في لوحة Supabase.`);
-      }
+      console.error("رفضت خدمة المصادقة محاولة تسجيل الدخول.", error);
+      showMessage("اسم المستخدم أو كلمة المرور غير صحيحة.");
       return;
     }
     if (!data.user) {
-      showMessage("تعذر التحقق من بيانات الحساب.");
+      showMessage("اسم المستخدم أو كلمة المرور غير صحيحة.");
       return;
     }
     try {
@@ -379,7 +366,8 @@ loginForm.addEventListener("submit", async (event) => {
     }
     await routeAuthenticatedUser(data.user);
   } catch (profileError) {
-    showMessage(`تعذر إتمام تسجيل الدخول: ${profileError.message}`);
+    showGenericFailure("تعذر إكمال تسجيل الدخول.");
+    console.error("تعذر إكمال تسجيل الدخول أو تحميل صلاحيات الحساب.", profileError);
   }
 });
 
@@ -405,7 +393,7 @@ async function initializeAuth() {
   if (!response.ok) throw new Error(`تعذر قراءة إعدادات المصادقة (${response.status}).`);
   const settings = await response.json();
   if (!settings.mailer_autoconfirm) {
-    signupDisabledReason = "إنشاء الحساب باسم المستخدم فقط يتطلب تعطيل Confirm email من Supabase Auth؛ لا يمكن إرسال رمز التأكيد إلى اسم مستخدم.";
+    signupDisabledReason = "إنشاء الحساب غير متاح مؤقتًا. تواصل مع الإدارة للمساعدة.";
     showMessage(signupDisabledReason);
     return;
   }
@@ -413,6 +401,7 @@ async function initializeAuth() {
 }
 
 initializeAuth().catch((error) => {
-  signupDisabledReason = `تعذر تهيئة الاتصال بـ Supabase: ${error.message}`;
+  console.error("تعذر تهيئة صفحة المصادقة.", error);
+  signupDisabledReason = "تعذر إتمام الطلب الآن. حاول مرة أخرى لاحقًا.";
   showMessage(signupDisabledReason);
 });

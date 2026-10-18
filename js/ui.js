@@ -8,6 +8,10 @@
   let activeDialog = null;
 
   function toast(message, type = "success") {
+    if (type === "error" && document.body.dataset.dashboardRole !== "admin"
+      && /\b(?:postgres(?:ql)?|sqlstate|pgrst\d*|supabase|database|constraint|relation|column|permission denied|unauthorized|forbidden|failed to fetch|network error|http\s*\d{3}|status\s*\d{3}|api error)\b/i.test(message)) {
+      message = "تعذر تنفيذ العملية الآن. حاول مرة أخرى لاحقًا.";
+    }
     const item = document.createElement("div");
     item.className = `toast toast-${type}`;
     item.setAttribute("role", type === "error" ? "alert" : "status");
@@ -96,9 +100,8 @@
 
   window.addEventListener("unhandledrejection", (event) => {
     const error = event.reason;
-    const detail = error instanceof Error ? error.message : String(error);
     console.error("An unhandled application operation failed.", error);
-    toast(`تعذر إتمام العملية: ${detail}`, "error");
+    toast("تعذر إتمام العملية الآن. حاول مرة أخرى لاحقًا.", "error");
   });
 
   window.factoryUI = { toast, confirmAction };

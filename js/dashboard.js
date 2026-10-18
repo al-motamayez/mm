@@ -117,6 +117,14 @@ function emptyDashboardData() {
   };
 }
 
+function reportDashboardFailure(session, publicMessage, error) {
+  console.error(publicMessage, error);
+  const message = session.role === "admin"
+    ? `${publicMessage}: ${error?.message || error}`
+    : `${publicMessage}. حاول مرة أخرى لاحقًا أو تواصل مع الإدارة.`;
+  window.factoryUI.toast(message, "error");
+}
+
 async function readFlexibleRecords(collection) {
   const { data, error } = await supabaseClient
     .from("factory_records")
@@ -2512,8 +2520,7 @@ function subscribeToFactoryUpdates(session) {
           });
           if (trackStatus !== "ok") throw new Error(`Supabase Presence returned ${trackStatus}.`);
         } catch (trackError) {
-          console.error("تعذر تسجيل حالة الاتصال الحالية.", trackError);
-          window.factoryUI.toast(`تعذر تسجيل حالة الاتصال: ${trackError.message || trackError}`, "error");
+          reportDashboardFailure(session, "تعذر تسجيل حالة الاتصال", trackError);
         }
       } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
         console.error("تعذر إنشاء قناة حالة الاتصال.", error || status);
@@ -2527,8 +2534,7 @@ async function revalidateSessionAfterAccountChange(session) {
       const currentSession = await readSession();
       if (currentSession) scheduleRealtimeRefresh(session, "حالة الحساب");
     } catch (error) {
-      console.error("تعذر التحقق من الجلسة بعد تحديث الحساب.", error);
-      window.factoryUI.toast(`تعذر التحقق من صلاحية الجلسة بعد تحديث الحساب: ${error.message}`, "error");
+      reportDashboardFailure(session, "تعذر التحقق من صلاحية الجلسة بعد تحديث الحساب", error);
     }
 }
 
@@ -2554,8 +2560,7 @@ async function refreshFromRealtime(session, source) {
   try {
     await refreshDashboard(session);
   } catch (error) {
-    console.error("تعذر تحديث بيانات المصنع عبر Realtime.", error);
-    window.factoryUI.toast(`وصل تحديث جديد لكن تعذر تحميل البيانات: ${error.message}`, "error");
+    reportDashboardFailure(session, "وصل تحديث جديد لكن تعذر تحميل البيانات", error);
   } finally {
     realtimeRefreshRunning = false;
   }
@@ -2846,7 +2851,7 @@ function bindCuttingActions(session) {
       window.factoryUI.toast(`تم حفظ ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(totalPlys)} راقات واعتماد الفرشة جاهزة للقص.`);
     } catch (error) {
       if (progressSaved) await refreshDashboard(session);
-      window.factoryUI.toast(`${progressSaved ? "تم حفظ الراقات لكن تعذر اعتماد جاهزية الفرشة. " : ""}تعذر تحديث الفرش: ${error.message}`, "error");
+      reportDashboardFailure(session, progressSaved ? "تم حفظ الراقات لكن تعذر اعتماد جاهزية الفرشة" : "تعذر تحديث الفرش", error);
     } finally {
       button.disabled = false;
     }
@@ -2881,7 +2886,7 @@ function bindCuttingActions(session) {
       window.factoryUI.toast(`تم تسجيل ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(data)} قطعة واعتماد حالة «تم القص».`);
     } catch (error) {
       button.disabled = false;
-      window.factoryUI.toast(`${imageUploaded ? "تم رفع الصورة لكن لم يُسجل إنهاء القص. " : ""}تعذر إنهاء القص: ${error.message}`, "error");
+      reportDashboardFailure(session, imageUploaded ? "تم رفع الصورة لكن لم يُسجل إنهاء القص" : "تعذر إنهاء القص", error);
     }
   }));
   const submitForm = document.querySelector("#cutting-submit-form");
@@ -2952,7 +2957,7 @@ function bindCuttingActions(session) {
       window.factoryUI.toast(`تم تسجيل ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(data)} قطعة وأصبحت القصة جاهزة للقص.`);
     } catch (error) {
       button.disabled = false;
-      window.factoryUI.toast(`${imageUploaded && !storySaved ? "رُفعت الصورة لكن لم تُسجل القصة. " : ""}تعذر حفظ القصة: ${error.message}`, "error");
+      reportDashboardFailure(session, imageUploaded && !storySaved ? "رُفعت الصورة لكن لم تُسجل القصة" : "تعذر حفظ القصة", error);
     }
     });
   }
@@ -3007,7 +3012,7 @@ function bindClientDetailActions(session) {
       window.factoryUI.toast("تم تسجيل المصروف وربطه بحساب العميل وسجل الخزينة.");
     } catch (error) {
       button.disabled = false;
-      window.factoryUI.toast(`تعذر تسجيل حركة العميل: ${error.message}`, "error");
+      reportDashboardFailure(session, "تعذر تسجيل حركة العميل", error);
     }
   }));
   document.querySelectorAll(".client-note-form").forEach((form) => form.addEventListener("submit", async (event) => {
@@ -3028,9 +3033,9 @@ function bindClientDetailActions(session) {
       window.factoryUI.toast("تم حفظ ملاحظة العميل.");
     } catch (error) {
       button.disabled = false;
-      window.factoryUI.toast(noteSaved
-        ? `تم حفظ الملاحظة، لكن تعذر تحديث الصفحة: ${error.message}`
-        : `تعذر حفظ ملاحظة العميل: ${error.message}`, "error");
+      reportDashboardFailure(session, noteSaved
+        ? "تم حفظ الملاحظة، لكن تعذر تحديث الصفحة"
+        : "تعذر حفظ ملاحظة العميل", error);
     }
   }));
   document.querySelectorAll("[data-return-clients]").forEach((button) => button.addEventListener("click", () => {
@@ -3070,9 +3075,9 @@ function bindClientDetailActions(session) {
         : `تمت التصفية وترحيل ${money(Math.abs(balance))} كرصيد دائن للعميل.`);
     } catch (error) {
       button.disabled = false;
-      window.factoryUI.toast(settlementSaved
-        ? `تمت التصفية، لكن تعذر تحديث البيانات المعروضة: ${error.message}`
-        : `تعذر تصفية حساب العميل: ${error.message}`, "error");
+      reportDashboardFailure(session, settlementSaved
+        ? "تمت التصفية، لكن تعذر تحديث البيانات المعروضة"
+        : "تعذر تصفية حساب العميل", error);
     }
   }));
 }
@@ -3135,9 +3140,9 @@ function bindIncomingFabricActions(session) {
       await refreshDashboard(session);
       window.factoryUI.toast("تم تسجيل أصناف القماش الداخل وتحديث سجل القص.");
     } catch (error) {
-      window.factoryUI.toast(registered
-        ? `تم تسجيل القماش، لكن تعذر تحديث الشاشة: ${error.message}`
-        : `تعذر تسجيل القماش الداخل: ${error.message}`, "error");
+      reportDashboardFailure(session, registered
+        ? "تم تسجيل القماش، لكن تعذر تحديث الشاشة"
+        : "تعذر تسجيل القماش الداخل", error);
     } finally {
       button.disabled = false;
     }
@@ -3163,7 +3168,7 @@ function bindIncomingFabricActions(session) {
       window.factoryUI.toast(select.value ? "تم ربط القماش بالعميل." : "تم وضع القماش ضمن الوارد غير المحدد.");
     } catch (error) {
       button.disabled = false;
-      window.factoryUI.toast(`تعذر تعيين العميل للقماش: ${error.message}`, "error");
+      reportDashboardFailure(session, "تعذر تعيين العميل للقماش", error);
     }
   }));
 }
@@ -3269,9 +3274,9 @@ function bindFabricAdminActions(session) {
       await refreshDashboard(session);
       window.factoryUI.toast("تم حفظ بيانات صنف القماش.");
     } catch (error) {
-      window.factoryUI.toast(saved
-        ? `تم حفظ صنف القماش، لكن تعذر تحديث الشاشة: ${error.message}`
-        : `تعذر حفظ صنف القماش: ${error.message}`, "error");
+      reportDashboardFailure(session, saved
+        ? "تم حفظ صنف القماش، لكن تعذر تحديث الشاشة"
+        : "تعذر حفظ صنف القماش", error);
     } finally {
       button.disabled = false;
     }
@@ -3302,9 +3307,9 @@ function bindFabricAdminActions(session) {
       await refreshDashboard(session);
       window.factoryUI.toast("تم تسجيل كميات القماش الداخل وتحديث الأرصدة.");
     } catch (error) {
-      window.factoryUI.toast(recorded
-        ? `تم تسجيل القماش الداخل، لكن تعذر تحديث الشاشة: ${error.message}`
-        : `تعذر تسجيل القماش الداخل: ${error.message}`, "error");
+      reportDashboardFailure(session, recorded
+        ? "تم تسجيل القماش الداخل، لكن تعذر تحديث الشاشة"
+        : "تعذر تسجيل القماش الداخل", error);
     } finally {
       button.disabled = false;
     }
@@ -3332,9 +3337,9 @@ function bindFabricAdminActions(session) {
       await refreshDashboard(session);
       window.factoryUI.toast("تمت تسوية رصيد القماش وتسجيل الحركة.");
     } catch (error) {
-      window.factoryUI.toast(adjusted
-        ? `تم تسجيل التسوية، لكن تعذر تحديث الشاشة: ${error.message}`
-        : `تعذرت تسوية المخزون: ${error.message}`, "error");
+      reportDashboardFailure(session, adjusted
+        ? "تم تسجيل التسوية، لكن تعذر تحديث الشاشة"
+        : "تعذرت تسوية المخزون", error);
     } finally {
       button.disabled = false;
     }
@@ -3379,7 +3384,7 @@ function bindFabricAdminActions(session) {
       window.factoryUI.toast("تم حذف صنف القماش غير المستخدم.");
     } catch (error) {
       button.disabled = false;
-      window.factoryUI.toast(`تعذر حذف الصنف: ${error.message}`, "error");
+      reportDashboardFailure(session, "تعذر حذف الصنف", error);
     }
   }));
   document.querySelectorAll("[data-delete-fabric-transaction]").forEach((button) => button.addEventListener("click", async () => {
@@ -3405,7 +3410,7 @@ function bindFabricAdminActions(session) {
       window.factoryUI.toast("تم حذف حركة القماش وعكس أثرها على الرصيد.");
     } catch (error) {
       button.disabled = false;
-      window.factoryUI.toast(`تعذر حذف حركة القماش: ${error.message}`, "error");
+      reportDashboardFailure(session, "تعذر حذف حركة القماش", error);
     }
   }));
 }
@@ -3414,7 +3419,7 @@ function bindActions(session) {
   document.querySelector("#logout").addEventListener("click", async () => {
     const { error } = await supabaseClient.auth.signOut();
     if (error) {
-      window.factoryUI.toast(`تعذر تسجيل الخروج: ${error.message}`, "error");
+      reportDashboardFailure(session, "تعذر تسجيل الخروج", error);
       return;
     }
     window.location.replace("../index.html");
@@ -3477,14 +3482,11 @@ function bindActions(session) {
         await refreshDashboard(session);
         window.factoryUI.toast("تم مسح بيانات النظام وحسابات المستخدمين الأخرى. بقي حساب الأدمن الحالي.");
       } catch (error) {
-        window.factoryUI.toast(
-          resetApplied
-            ? modelImagesCleared
-              ? `تمت إعادة الضبط، لكن تعذر تحديث الشاشة: ${error.message}`
-              : `تم مسح بيانات النظام، لكن تعذر حذف صور الموديلات: ${error.message}`
-            : `تعذر إعادة ضبط المصنع: ${error.message}`,
-          "error"
-        );
+        reportDashboardFailure(session, resetApplied
+          ? modelImagesCleared
+            ? "تمت إعادة الضبط، لكن تعذر تحديث الشاشة"
+            : "تم مسح بيانات النظام، لكن تعذر حذف صور الموديلات"
+          : "تعذر إعادة ضبط المصنع", error);
       } finally {
         resetFactoryButton.disabled = false;
       }
@@ -3532,9 +3534,9 @@ function bindActions(session) {
       await refreshDashboard(session);
       window.factoryUI.toast(transactionId ? "تم تعديل الحركة النقدية وتحديث السجل." : "تم تسجيل الحركة النقدية وتحديث رصيد السجل.");
     } catch (error) {
-      window.factoryUI.toast(saved
-        ? `تم تسجيل الحركة، لكن تعذر تحديث الشاشة: ${error.message}`
-        : `تعذر تسجيل الحركة النقدية: ${error.message}`, "error");
+      reportDashboardFailure(session, saved
+        ? "تم تسجيل الحركة، لكن تعذر تحديث الشاشة"
+        : "تعذر تسجيل الحركة النقدية", error);
     } finally {
       button.disabled = false;
     }
@@ -3586,7 +3588,7 @@ function bindActions(session) {
       window.factoryUI.toast("تم حذف الحركة النقدية وتحديث سجل الخزينة.");
     } catch (error) {
       button.disabled = false;
-      window.factoryUI.toast(`تعذر حذف الحركة النقدية: ${error.message}`, "error");
+      reportDashboardFailure(session, "تعذر حذف الحركة النقدية", error);
     }
   }));
   document.querySelectorAll("#clients [data-quick-client-payment]").forEach((button) => {
@@ -3629,7 +3631,7 @@ function bindActions(session) {
       window.factoryUI.toast(`تم تحديث حالة «${order.name}» يدوياً.`);
     } catch (error) {
       button.disabled = false;
-      window.factoryUI.toast(`تعذر تحديث حالة الموديل: ${error.message}`, "error");
+      reportDashboardFailure(session, "تعذر تحديث حالة الموديل", error);
     }
   }));
   const orderModal = document.querySelector("#order-modal");
@@ -3810,7 +3812,7 @@ function bindActions(session) {
           : "تم تعديل كمية الدفعة وتحديث إجمالي المسلّم وحساب العميل.");
       } catch (error) {
         saveDeliveryQuantityButton.disabled = false;
-        window.factoryUI.toast(`تعذر تعديل كمية الدفعة: ${error.message}`, "error");
+        reportDashboardFailure(session, "تعذر تعديل كمية الدفعة", error);
       }
       return;
     }
@@ -3953,7 +3955,7 @@ function bindActions(session) {
       clientModal.hidden = true;
       window.factoryUI.toast(clientId ? "تم تحديث بيانات العميل بنجاح." : "تمت إضافة العميل بنجاح.");
     } catch (error) {
-      window.factoryUI.toast(`تعذر حفظ ملف العميل: ${error.message}`, "error");
+      reportDashboardFailure(session, "تعذر حفظ ملف العميل", error);
     } finally {
       submitButton.disabled = false;
     }
@@ -4007,7 +4009,7 @@ function bindActions(session) {
       window.factoryUI.toast("تم حذف ملف العميل.");
     } catch (error) {
       button.disabled = false;
-      window.factoryUI.toast(`تعذر حذف ملف العميل: ${error.message}`, "error");
+      reportDashboardFailure(session, "تعذر حذف ملف العميل", error);
     }
   }));
   bindClientDetailActions(session);
@@ -4187,9 +4189,9 @@ function bindActions(session) {
         ? "تم إنهاء التسليم وتسوية حساب الطلب."
         : "تم تسجيل التسليم وإضافته إلى إجمالي الكمية المسلّمة.");
     } catch (error) {
-      window.factoryUI.toast(deliverySaved
-        ? `تم ${finalize ? "إنهاء التسليم" : "تسجيل التسليم"}، لكن تعذر تحديث البيانات المعروضة: ${error.message}`
-        : `تعذر ${finalize ? "إنهاء التسليم" : "تسجيل التسليم"}: ${error.message}`, "error");
+      reportDashboardFailure(session, deliverySaved
+        ? `تم ${finalize ? "إنهاء التسليم" : "تسجيل التسليم"}، لكن تعذر تحديث البيانات المعروضة`
+        : `تعذر ${finalize ? "إنهاء التسليم" : "تسجيل التسليم"}`, error);
     } finally {
       deliverySubmissionPending = false;
       submitButton.disabled = false;
@@ -4399,10 +4401,15 @@ function bindActions(session) {
         try {
           await refreshDashboard(session);
         } catch (dashboardRefreshError) {
-          refreshError = ` كما تعذر تحديث العرض: ${dashboardRefreshError.message}`;
+          console.error("تعذر تحديث العرض بعد حفظ الطلبية.", dashboardRefreshError);
+          refreshError = session.role === "admin"
+            ? ` كما تعذر تحديث العرض: ${dashboardRefreshError.message}`
+            : " كما تعذر تحديث العرض.";
         }
       }
-      window.factoryUI.toast(`${savedOrderId ? "تم حفظ الطلبية لكن تعذر إكمال الصورة أو تحديث البيانات: " : "تعذر حفظ أمر التشغيل أونلاين: "}${error.message}${refreshError}`, "error");
+      reportDashboardFailure(session,
+        savedOrderId ? `تم حفظ الطلبية لكن تعذر إكمال الصورة أو تحديث البيانات${refreshError}` : "تعذر حفظ أمر التشغيل",
+        error);
     } finally {
       submitButton.disabled = false;
     }
@@ -4461,12 +4468,14 @@ function bindActions(session) {
         try {
           await refreshDashboard(session);
         } catch (dashboardRefreshError) {
-          refreshError = ` وتعذر تحديث العرض: ${dashboardRefreshError.message}`;
+          console.error("تعذر تحديث العرض بعد حفظ الدفعة.", dashboardRefreshError);
+          if (session.role === "admin") refreshError = ` وتعذر تحديث العرض: ${dashboardRefreshError.message}`;
+          else refreshError = " وتعذر تحديث العرض.";
         }
       }
-      window.factoryUI.toast(paymentSaved
-        ? `تم حفظ الدفعة، لكن تعذر تحديث البيانات المعروضة: ${error.message}${refreshError}`
-        : `تعذر حفظ الدفعة أونلاين: ${error.message}`, "error");
+      reportDashboardFailure(session, paymentSaved
+        ? `تم حفظ الدفعة، لكن تعذر تحديث البيانات المعروضة${refreshError}`
+        : "تعذر حفظ الدفعة", error);
     } finally {
       submitButton.disabled = false;
     }
@@ -4494,7 +4503,7 @@ function bindActions(session) {
       window.factoryUI.toast("تم حذف الدفعة وإعادة احتساب رصيد العميل.");
     } catch (error) {
       button.disabled = false;
-      window.factoryUI.toast(`تعذر حذف الدفعة: ${error.message}`, "error");
+      reportDashboardFailure(session, "تعذر حذف الدفعة", error);
     }
   }));
   document.querySelectorAll("[data-action]").forEach((button) => button.addEventListener("click", async () => {
@@ -4523,7 +4532,7 @@ function bindActions(session) {
         window.factoryUI.toast("تم حذف الموديل.");
       } catch (error) {
         button.disabled = false;
-        window.factoryUI.toast(`تعذر حذف الموديل: ${error.message}`, "error");
+        reportDashboardFailure(session, "تعذر حذف الموديل", error);
       }
       return;
     }
@@ -4581,7 +4590,7 @@ function bindActions(session) {
         .maybeSingle();
       if (error) {
         button.disabled = false;
-        window.factoryUI.toast(`تعذر تفعيل الحساب: ${error.message}`, "error");
+        reportDashboardFailure(session, "تعذر تفعيل الحساب", error);
         return;
       }
       if (!data) {
@@ -4590,7 +4599,7 @@ function bindActions(session) {
         return;
       }
       window.factoryUI.toast("تم تفعيل الحساب بنجاح.");
-      refreshDashboard(session).catch((error) => window.factoryUI.toast(`تعذر تحديث اللوحة: ${error.message}`, "error"));
+      refreshDashboard(session).catch((error) => reportDashboardFailure(session, "تعذر تحديث اللوحة", error));
       return;
     }
     if (button.dataset.action === "toggle-user-status") {
@@ -4623,7 +4632,7 @@ function bindActions(session) {
         .maybeSingle();
       if (error) {
         button.disabled = false;
-        window.factoryUI.toast(`تعذر تغيير حالة الحساب: ${error.message}`, "error");
+        reportDashboardFailure(session, "تعذر تغيير حالة الحساب", error);
         return;
       }
       if (!data) {
@@ -4632,7 +4641,7 @@ function bindActions(session) {
         return;
       }
       window.factoryUI.toast(suspending ? "تم إيقاف الحساب بنجاح." : "تمت إعادة تفعيل الحساب بنجاح.");
-      refreshDashboard(session).catch((refreshError) => window.factoryUI.toast(`تغيرت حالة الحساب، لكن تعذر تحديث اللوحة: ${refreshError.message}`, "error"));
+      refreshDashboard(session).catch((refreshError) => reportDashboardFailure(session, "تغيرت حالة الحساب، لكن تعذر تحديث اللوحة", refreshError));
       return;
     }
     if (button.dataset.action === "delete-user") {
@@ -4656,11 +4665,11 @@ function bindActions(session) {
         if (error) throw error;
       } catch (error) {
         button.disabled = false;
-        window.factoryUI.toast(`تعذر حذف الحساب: ${error.message}`, "error");
+        reportDashboardFailure(session, "تعذر حذف الحساب", error);
         return;
       }
       window.factoryUI.toast("تم حذف الحساب بنجاح.");
-      refreshDashboard(session).catch((refreshError) => window.factoryUI.toast(`حُذف الحساب، لكن تعذر تحديث اللوحة: ${refreshError.message}`, "error"));
+      refreshDashboard(session).catch((refreshError) => reportDashboardFailure(session, "حُذف الحساب، لكن تعذر تحديث اللوحة", refreshError));
       return;
     }
     const index = Number(button.dataset.index);
@@ -4685,7 +4694,7 @@ function bindActions(session) {
         await refreshDashboard(session);
         window.factoryUI.toast(approved ? "تم اعتماد طلب الانصراف." : "تم رفض طلب الانصراف.");
       } catch (error) {
-        window.factoryUI.toast(`تعذر تحديث طلب الانصراف أونلاين: ${error.message}`, "error");
+        reportDashboardFailure(session, "تعذر تحديث طلب الانصراف", error);
       }
     }
   }));
@@ -4703,7 +4712,11 @@ async function initializeDashboard() {
 }
 
 initializeDashboard().catch((error) => {
-  document.querySelector("#app").innerHTML = `<main class="main-content"><div class="notice">تعذر تحميل بيانات المصنع: ${escapeHtml(error.message)}.</div></main>`;
-  window.factoryUI.toast(`تعذر تحميل بيانات المصنع: ${error.message}`, "error");
   console.error("تعذر تحميل بيانات لوحة المصنع.", error);
+  const adminError = document.body.dataset.dashboardRole === "admin";
+  const message = adminError
+    ? `تعذر تحميل لوحة الإدارة: ${escapeHtml(error.message)}.`
+    : "تعذر تحميل البيانات الآن. أعد المحاولة لاحقًا أو تواصل مع الإدارة.";
+  document.querySelector("#app").innerHTML = `<main class="main-content"><div class="notice">${message}</div></main>`;
+  window.factoryUI.toast(adminError ? `تعذر تحميل لوحة الإدارة: ${error.message}` : "تعذر تحميل البيانات الآن. أعد المحاولة لاحقًا.", "error");
 });
