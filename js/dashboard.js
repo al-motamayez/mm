@@ -1469,9 +1469,9 @@ function adminDashboardView(data) {
     ["في الفرش", operatingOrders.filter((order) => order.status === "قيد الفرش").length],
     ["في الخياطة", operatingOrders.filter((order) => order.status === "في الخياطة").length]
   ];
-  return `<div class="stats-grid">${stat("النقدية في الدرج", money(drawerBalance), "", statDetailList(cashDetails))}${stat("مديونيات العملاء", money(customerReceivables), "", statDetailList(clientDebts.map(({ client, amount }) => ({
+  return `<div class="stats-grid">${stat("النقدية في الدرج", money(drawerBalance), "", statDetailList(cashDetails))}${stat("مديونيات العملاء", money(customerReceivables), "", statDetailList(clientDebts.map(({ client, account, amount }) => ({
     label: `${client.name || "عميل بدون اسم"}${client.brand_name ? ` · ${client.brand_name}` : ""}`,
-    note: `${client.account.orders.length} طلبية`,
+    note: `${account.orders.length} طلبية`,
     value: money(amount)
   })), "لا توجد مديونيات مستحقة على العملاء."))}${stat("بضاعة تحت التسليم", money(upcomingReceivables), "", statDetailList(clientSummaries.flatMap((summary) => summary.orders
     .filter((order) => order.expectedAmount > 0)
