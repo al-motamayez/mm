@@ -1136,8 +1136,17 @@ function panel(title, content, subtitle = "", id = "") {
   return `<section class="panel"${id ? ` id="${id}"` : ""}><div class="panel-heading"><div><h2>${title}</h2>${subtitle ? `<p>${subtitle}</p>` : ""}</div></div>${content}</section>`;
 }
 
-function stat(label, value, note = "") {
-  return `<article class="stat-card"><span>${label}</span><strong>${value}</strong>${note ? `<small>${note}</small>` : ""}</article>`;
+function stat(label, value, note = "", details = "") {
+  if (!details) {
+    return `<article class="stat-card"><span>${label}</span><strong>${value}</strong>${note ? `<small>${note}</small>` : ""}</article>`;
+  }
+  return `<details class="stat-card stat-card-popover"><summary class="stat-card-summary"><span>${label}</span><strong>${value}</strong>${note ? `<small>${note}</small>` : ""}<small class="stat-card-hint">مرر أو اضغط لعرض التفاصيل</small></summary><div class="stat-popover">${details}</div></details>`;
+}
+
+function statDetailList(items, emptyMessage = "لا توجد تفاصيل مسجلة.") {
+  return items.length
+    ? `<ul class="stat-detail-list">${items.map((item) => `<li><span><strong>${escapeHtml(item.label)}</strong>${item.note ? `<small>${escapeHtml(item.note)}</small>` : ""}</span><b>${escapeHtml(item.value)}</b></li>`).join("")}</ul>`
+    : `<p class="stat-detail-empty">${escapeHtml(emptyMessage)}</p>`;
 }
 
 function orderCanBeDeleted(item) {
@@ -1426,22 +1435,49 @@ function adminDashboardView(data) {
     ...workerCashOutflows(data).map((entry) => entry.amount)
   ]);
   const drawerBalance = subtractMoney(drawerIncome, drawerExpenses);
-  const clientSummaries = data.clients.map((client) => clientAccountSummary(client, data));
-  const customerReceivables = sumMoney(clientSummaries.map((summary) =>
-    Math.max(0, sumMoney([
+  const clientSummaries = data.clients.map((client) => ({
+    client,
+    ...clientAccountSummary(client, data)
+  }));
+  const clientDebts = clientSummaries.map((summary) => ({
+    client: summary.client,
+    account: summary,
+    amount: Math.max(0, sumMoney([
       summary.openingBalance,
       summary.deliveredTotal,
       -summary.orderPaid,
       -summary.paymentsTotal
     ]))
-  ));
+  })).filter((entry) => entry.amount > 0).sort((left, right) => right.amount - left.amount);
+  const customerReceivables = sumMoney(clientDebts.map((entry) => entry.amount));
   const upcomingReceivables = sumMoney(clientSummaries.map((summary) => summary.expectedTotal));
+  const orderDetail = (order, quantity, amount) => ({
+    label: `${order.name}${order.client ? ` · ${order.client}` : ""}`,
+    note: `${new Intl.NumberFormat("ar-EG-u-nu-latn").format(quantity)} قطعة · ${order.displayStatus || order.status || "الحالة غير محددة"} · الأقسام: ${workStageLabels(order.workStages).join("، ") || "غير محددة"}`,
+    value: money(amount)
+  });
+  const cashDetails = [
+    { label: "دفعات العملاء", note: `${data.payments.length} دفعة`, value: money(sumMoney(data.payments.map((payment) => payment.amount))) },
+    { label: "مدفوعات على الطلبات", note: `${activeOrders.length} موديل`, value: money(sumMoney(data.models.map((order) => order.paidAmount))) },
+    { label: "إيرادات أخرى", note: `${data.cashTransactions.filter((entry) => entry.direction === "income").length} حركة`, value: money(sumMoney(data.cashTransactions.filter((entry) => entry.direction === "income").map((entry) => entry.amount))) },
+    { label: "مصروفات ومسحوبات", note: `${data.cashTransactions.filter((entry) => entry.direction === "expense").length + workerCashOutflows(data).length} حركة`, value: money(drawerExpenses) }
+  ];
+  const activeOrderDetails = operatingOrders.map((order) => orderDetail(order, order.remainingPieces ?? order.quantity, order.expectedAmount));
+  const deliveredOrderDetails = deliveredOrders.map((order) => orderDetail(order, order.deliveredPieces, order.totalAmount));
   const groups = [
     ["قيد الانتظار", operatingOrders.filter((order) => order.status === "قيد الانتظار").length],
     ["في الفرش", operatingOrders.filter((order) => order.status === "قيد الفرش").length],
     ["في الخياطة", operatingOrders.filter((order) => order.status === "في الخياطة").length]
   ];
-  return `<div class="stats-grid">${stat("النقدية في الدرج", money(drawerBalance))}${stat("مديونيات العملاء", money(customerReceivables))}${stat("بضاعة تحت التسليم", money(upcomingReceivables))}${stat("شغل حالياً", operatingOrders.length, "طلبات قيد التشغيل")}${stat("تم التسليم", deliveredOrders.length, "طلبات تم تسليمها")}${groups.map(([label, value]) => stat(label, value)).join("")}</div>
+  return `<div class="stats-grid">${stat("النقدية في الدرج", money(drawerBalance), "", statDetailList(cashDetails))}${stat("مديونيات العملاء", money(customerReceivables), "", statDetailList(clientDebts.map(({ client, amount }) => ({
+    label: `${client.name || "عميل بدون اسم"}${client.brand_name ? ` · ${client.brand_name}` : ""}`,
+    note: `${client.account.orders.length} طلبية`,
+    value: money(amount)
+  })), "لا توجد مديونيات مستحقة على العملاء."))}${stat("بضاعة تحت التسليم", money(upcomingReceivables), "", statDetailList(clientSummaries.flatMap((summary) => summary.orders
+    .filter((order) => order.expectedAmount > 0)
+    .map((order) => orderDetail(order, order.remainingPieces ?? order.quantity, order.expectedAmount))), "لا توجد بضاعة متبقية للتسليم."))}${stat("شغل حالياً", operatingOrders.length, "طلبات قيد التشغيل", statDetailList(activeOrderDetails, "لا توجد طلبات قيد التشغيل."))}${stat("تم التسليم", deliveredOrders.length, "طلبات تم تسليمها", statDetailList(deliveredOrderDetails, "لا توجد طلبات تم تسليمها."))}${groups.map(([label, value]) => stat(label, value, "", statDetailList(operatingOrders
+    .filter((order) => order.status === label)
+    .map((order) => orderDetail(order, order.remainingPieces ?? order.quantity, order.expectedAmount)), `لا توجد موديلات في مرحلة ${label}.`))).join("")}</div>
     ${panel("آخر الموديلات وحالتها", activeOrders.length
       ? table(["الموديل","العميل","العدد","سعر القطعة","الحالة"], activeOrders.slice(0, 12).map((order) => `<tr><td>${escapeHtml(order.name)}${order.modelNumber ? ` · ${escapeHtml(order.modelNumber)}` : ""}</td><td>${escapeHtml(order.client || "—")}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity)}</td><td>${money(order.pricePerPiece)}</td><td>${statusTag(order.displayStatus || order.status)}</td></tr>`))
       : '<div class="empty-state">لا توجد موديلات حالية.</div>')}`;

@@ -147,6 +147,22 @@ input:focus, select:focus { border-color: #5e9b83; box-shadow: 0 0 0 3px #5e9b83
 .stat-card span { color: var(--muted); font-size: 12px; }
 .stat-card strong { display: block; margin-top: 4px; font-size: 22px; }
 .stat-card small { display: block; margin-top: 4px; color: #8b9891; font-size: 11px; }
+.stat-card-popover { position: relative; z-index: 1; padding: 0; }
+.stat-card-popover:hover, .stat-card-popover:focus-within, .stat-card-popover[open] { z-index: 20; }
+.stat-card-summary { display: block; padding: 12px 15px; cursor: pointer; list-style: none; }
+.stat-card-summary::-webkit-details-marker { display: none; }
+.stat-card-hint { opacity: 0; transition: opacity .15s ease; }
+.stat-card-popover:hover .stat-card-hint, .stat-card-popover:focus-within .stat-card-hint, .stat-card-popover[open] .stat-card-hint { opacity: 1; }
+.stat-popover { position: absolute; top: calc(100% - 1px); right: 0; z-index: 30; width: min(360px, calc(100vw - 32px)); max-height: min(360px, 60vh); overflow: auto; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff; box-shadow: 0 14px 34px #10251f24; opacity: 0; visibility: hidden; transform: translateY(5px); transition: opacity .15s ease, transform .15s ease, visibility .15s ease; }
+.stat-card-popover:hover .stat-popover, .stat-card-popover:focus-within .stat-popover, .stat-card-popover[open] .stat-popover { opacity: 1; visibility: visible; transform: translateY(0); }
+.stat-detail-list { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.stat-detail-list li { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 8px 2px; border-bottom: 1px solid #edf0ed; }
+.stat-detail-list li:last-child { border-bottom: 0; }
+.stat-detail-list li > span { min-width: 0; }
+.stat-detail-list strong { display: block; color: #263a32; font-size: 13px; }
+.stat-detail-list small { display: block; margin-top: 3px; color: #65736d; font-size: 11px; line-height: 1.5; }
+.stat-detail-list b { flex: 0 0 auto; color: #1b513c; font-size: 12px; }
+.stat-detail-empty { margin: 0; padding: 8px 2px; color: #65736d; font-size: 12px; }
 .panel { width: 100%; min-width: 0; margin-bottom: 12px; overflow: hidden; }
 .panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 15px; border-bottom: 1px solid var(--line); }
 .panel-heading h2 { margin: 0; font-size: 15px; }
