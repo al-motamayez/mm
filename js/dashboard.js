@@ -54,13 +54,13 @@ async function readSession() {
   const { data: { session: authSession }, error: sessionError } = await supabaseClient.auth.getSession();
   if (sessionError) throw sessionError;
   if (!authSession) {
-    window.location.replace("../login.html");
+    window.location.replace("../index.html");
     return null;
   }
   const { data: { user }, error: authError } = await supabaseClient.auth.getUser();
   if (authError) throw authError;
   if (!user) {
-    window.location.replace("../login.html");
+    window.location.replace("../index.html");
     return null;
   }
   const authEmail = user.email?.toLocaleLowerCase();
@@ -72,7 +72,7 @@ async function readSession() {
   if (!account || account.status !== "active" || !rolePages[account.role]) {
     const { error: signOutError } = await supabaseClient.auth.signOut();
     if (signOutError) throw signOutError;
-    window.location.replace("../login.html");
+    window.location.replace("../index.html");
     return null;
   }
   const currentPage = window.location.pathname.split("/").pop();
@@ -2087,7 +2087,7 @@ function render(session, data, accounts) {
   document.querySelector("#app").innerHTML = `
     <div class="app-shell${collapsedClass}">
       <button class="sidebar-backdrop" type="button" data-sidebar-close aria-label="إغلاق القائمة الجانبية"></button>
-      <aside class="sidebar" id="sidebar"><a class="brand" href="../login.html"><img class="brand-logo" src="../assets/al-motamayez-logo.png" alt="AL-MOTAMAYEZ logo"><span class="brand-copy"><strong>AL-MOTAMAYEZ</strong></span></a><nav aria-label="القائمة الرئيسية"><p class="side-label">القائمة الرئيسية</p>${navigation}</nav><div class="sidebar-bottom"><div class="profile-chip"><span class="avatar">${username.slice(0, 1)}</span><div class="profile-details"><strong>${username}</strong><span>${escapeHtml(session.roleName)}</span></div></div><button class="logout-button" id="logout" type="button">↪ تسجيل الخروج</button></div></aside>
+      <aside class="sidebar" id="sidebar"><a class="brand" href="../index.html"><img class="brand-logo" src="../assets/al-motamayez-logo.png" alt="AL-MOTAMAYEZ logo"><span class="brand-copy"><strong>AL-MOTAMAYEZ</strong></span></a><nav aria-label="القائمة الرئيسية"><p class="side-label">القائمة الرئيسية</p>${navigation}</nav><div class="sidebar-bottom"><div class="profile-chip"><span class="avatar">${username.slice(0, 1)}</span><div class="profile-details"><strong>${username}</strong><span>${escapeHtml(session.roleName)}</span></div></div><button class="logout-button" id="logout" type="button">↪ تسجيل الخروج</button></div></aside>
       <main class="main-content"><header class="topbar"><div class="topbar-leading"><button class="sidebar-toggle" type="button" data-sidebar-toggle aria-controls="sidebar" aria-expanded="true" aria-label="طي القائمة الجانبية"><span aria-hidden="true">☰</span></button><div class="topbar-title"><h1>${info.title}</h1><p>${info.description}</p></div></div><div class="header-brand"><button class="online-indicator${onlineUserCount ? " online" : ""}" data-online-indicator type="button" title="عرض الحسابات المتصلة"><span class="online-indicator-dot"></span><span>متصلون الآن: <strong data-online-count>${onlineUserCount}</strong></span></button><div class="notification-control"><button class="live-notification-button" type="button" data-live-notifications aria-label="الإشعارات" aria-expanded="false"><span aria-hidden="true">🔔</span><span class="live-notification-badge" data-live-badge aria-live="polite" hidden></span></button><section class="notification-dropdown" data-notification-dropdown hidden aria-label="الإشعارات"><header><strong>آخر التحديثات</strong><button type="button" class="notification-mark-read" data-mark-notifications-read>تعليم الكل كمقروء</button></header><div class="notification-list" data-notification-list>${notificationListMarkup()}</div></section></div><img class="header-logo" src="../assets/al-motamayez-logo.png" alt="AL-MOTAMAYEZ logo"><div class="brand-copy"><strong>AL-MOTAMAYEZ</strong></div><span class="date-label">${new Intl.DateTimeFormat("ar-EG-u-nu-latn", { dateStyle: "full" }).format(new Date())}</span></div></header>
     ${content}
       <footer class="page-footer">AL-MOTAMAYEZ</footer></main>
@@ -3417,7 +3417,7 @@ function bindActions(session) {
       window.factoryUI.toast(`تعذر تسجيل الخروج: ${error.message}`, "error");
       return;
     }
-    window.location.replace("../login.html");
+    window.location.replace("../index.html");
   });
 
   bindFabricEntryRows();
@@ -4693,7 +4693,7 @@ function bindActions(session) {
 
 async function initializeDashboard() {
   supabaseClient.auth.onAuthStateChange((event) => {
-    if (event === "SIGNED_OUT") window.location.replace("../login.html");
+    if (event === "SIGNED_OUT") window.location.replace("../index.html");
   });
   const session = await readSession();
   if (session) {
