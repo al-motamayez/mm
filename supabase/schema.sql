@@ -875,7 +875,13 @@ begin
     or requested_delivered_pieces is null
     or requested_delivered_pieces < 0
     or (requested_quantity = 0 and requested_delivered_pieces > 0)
-    or (requested_order_id is null and requested_delivered_pieces <> 0)
+    or (
+      requested_order_id is null
+      and (
+        (requested_delivered_pieces > 0 and requested_status is distinct from 'تم التسليم')
+        or (requested_status = 'تم التسليم' and requested_delivered_pieces = 0)
+      )
+    )
     or requested_price_per_piece is null
     or requested_price_per_piece < 0
     or requested_price_per_piece > 9999999999.99
@@ -1071,6 +1077,21 @@ begin
       requested_stage_prices, requested_color_size_distribution, requested_operational_expenses, trim(requested_status)
     )
     returning id into saved_order_id;
+    if requested_delivered_pieces > 0 then
+      insert into public.factory_deliveries (
+        order_id, customer_id, quantity, price_per_piece,
+        expected_delivery_date, delivered_at, legacy_import
+      )
+      values (
+        saved_order_id, matched_customer_id, requested_delivered_pieces,
+        requested_price_per_piece, requested_expected_delivery_date, now(), true
+      );
+      update public.production_stages
+      set target_quantity = greatest(target_quantity, requested_delivered_pieces),
+          completed_quantity = requested_delivered_pieces
+      where order_id = saved_order_id
+        and stage_name = 'delivery';
+    end if;
     update public.production_stages
     set fabric = nullif(trim(requested_fabric), ''),
         line_name = nullif(trim(requested_line_name), '')

@@ -12,6 +12,7 @@ let realtimeRefreshRunning = false;
 let realtimeNotifications = [];
 let notificationStorageAccount = "";
 let onlineUserCount = 0;
+let onlineUsers = [];
 let activeFinanceTab = "payments";
 const rolePages = {
   admin: "admin.html",
@@ -1059,10 +1060,6 @@ function statusTag(value) {
   return `<span class="status ${statusClass(value)}">${escapeHtml(value)}</span>`;
 }
 
-function productionTypeLabel(value) {
-  return value === "ready_sewing" ? "مقصوص جاهز - خياطة مباشرة / أمبلاج" : "شغل كامل بدءاً من القص";
-}
-
 function workStageLabels(stages) {
   const selected = new Set(Array.isArray(stages) ? stages : []);
   return WORK_STAGES.filter(([key]) => selected.has(key)).map(([, label]) => label);
@@ -1144,7 +1141,7 @@ function orderCards(models, withActions = false) {
     const index = dashboardData.models.findIndex((order) => order.id === item.id);
     return `<article class="order-card order-compact-row">
       ${modelImageMarkup(item.modelImageUrl)}
-      <div class="order-compact-name"><strong>${escapeHtml(item.name || item.modelNumber || "موديل بدون اسم")}</strong><small>رقم الموديل: ${escapeHtml(item.modelNumber || "—")} · ${escapeHtml(productionTypeLabel(item.productionType))}</small></div>
+      <div class="order-compact-name"><strong>${escapeHtml(item.name || item.modelNumber || "موديل بدون اسم")}</strong><small>رقم الموديل: ${escapeHtml(item.modelNumber || "—")} · الأقسام: ${escapeHtml(workStageLabels(item.workStages).join("، ") || "—")}</small></div>
       <span class="order-compact-client">${escapeHtml(item.client || "غير مربوط بعميل")}</span>
       <span class="order-compact-quantity">${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.quantity)} قطعة${["تم التسليم", "تم التسليم بالكامل", "تم التسليم والإغلاق"].includes(item.status) ? `<small>الأصلي: ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.originalQuantity)} · المسلّم: ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.deliveredPieces)} · ${item.quantityDifference > 0 ? `زيادة ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.quantityDifference)}` : item.quantityDifference < 0 ? `نقص ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(Math.abs(item.quantityDifference))}` : "مطابق"}</small>` : ""}</span>
       <span class="order-compact-price">${money(item.pricePerPiece)} / قطعة</span>
@@ -1576,7 +1573,6 @@ function modelDetailsModalView(order, showPricingBreakdown = false) {
       <div><span>الألوان</span><strong>${colorSummaryMarkup(order.colors, order.colorNames, order.colorPlyData)}</strong></div>
       <div><span>المقاسات</span><strong>${escapeHtml(sizeSummary(order.sizes))}</strong></div>
       <div><span>القماش / الفرشة</span><strong>${escapeHtml(order.fabric || "—")} · ${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(order.fabricQuantity)} ${escapeHtml(order.fabricUnit || "متر")} · ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.layerCount)} راقات</strong></div>
-      <div><span>طبيعة شغل الموديل</span><strong>${escapeHtml(productionTypeLabel(order.productionType))}</strong></div>
       <div><span>أقسام الشغل</span><strong>${escapeHtml(workStageLabels(order.workStages).join(" · ") || "—")}</strong></div>
       <div><span>طريقة التسعير</span><strong>${order.pricingMode === "stages" ? "سعر مستقل لكل قسم" : "سعر إجمالي للقطعة"}</strong></div>
       ${pricingDetails}
@@ -1804,7 +1800,7 @@ function adminView(data, accounts) {
         ${panel("إدارة الموديلات والطلبيات", orderCards(activeOrders, true))}
       </div>
       <div data-orders-tab-panel="status"${activeOrdersTab === "status" ? "" : " hidden"}>${modelStatusReviewView(data)}</div>
-      <div class="modal-backdrop" id="order-modal" hidden><section class="modal-card order-modal-card" role="dialog" aria-modal="true" aria-labelledby="order-modal-title"><button class="modal-close" type="button" data-close-order aria-label="إغلاق">×</button><h2 id="order-modal-title">إضافة موديل / طلبية</h2><p>يمكن ترك العدد فارغًا حتى انتهاء الفرش والقص، ثم إدخال العدد الفعلي عند تعديل الطلب.</p>      <form id="model-form" class="order-form modal-form"><input type="hidden" name="editIndex" value=""><input type="hidden" name="savedOrderId" value=""><input type="hidden" name="deliveredPieces" value="0">
+      <div class="modal-backdrop" id="order-modal" hidden><section class="modal-card order-modal-card" role="dialog" aria-modal="true" aria-labelledby="order-modal-title"><button class="modal-close" type="button" data-close-order aria-label="إغلاق">×</button><h2 id="order-modal-title">إضافة موديل / طلبية</h2><p>يمكن ترك العدد فارغًا حتى انتهاء الفرش والقص، ثم إدخال العدد الفعلي عند تعديل الطلب.</p>      <form id="model-form" class="order-form modal-form"><input type="hidden" name="editIndex" value=""><input type="hidden" name="savedOrderId" value=""><input type="hidden" name="productionType" value="full_cutting"><div class="field initial-delivery-field" data-initial-delivery-field hidden><label for="model-delivered-pieces">العدد المسلّم</label><input id="model-delivered-pieces" name="deliveredPieces" type="number" min="1" step="1"><small>يُسجل كدفعة تسليم تاريخية ويُحتسب ضمن حساب العميل.</small></div>
         <section class="form-section"><h3>المعلومات الأساسية <span>إجباري</span></h3><div class="form-section-grid">
           <input type="hidden" name="customerId">
           <div class="field model-customer-field"><label for="model-client">اختيار اسم العميل</label><select id="model-client" name="customerSelection"><option value="">اختر اسم العميل</option>${clientOptions}</select><small>اختر العميل أو البراند؛ اختيار أحدهما يلغي الآخر.</small></div>
@@ -1815,7 +1811,6 @@ function adminView(data, accounts) {
           <div class="field" data-original-quantity-field hidden><label for="model-original-quantity">العدد المطلوب الأصلي</label><input id="model-original-quantity" name="originalQuantity" type="number" min="0" step="1"></div>
         </div></section>
         <section class="form-section"><h3>التفاصيل التشغيلية <span>اختياري</span></h3><div class="form-section-grid">
-          <div class="field"><label for="model-production-type">طبيعة شغل الموديل</label><select id="model-production-type" name="productionType" required><option value="full_cutting">شغل كامل بدءاً من القص</option><option value="ready_sewing">شغل مقصوص جاهز - خياطة مباشرة / أمبلاج</option></select></div>
           <fieldset class="field work-stage-picker"><legend>الأقسام المطلوبة</legend><div class="work-stage-options">${WORK_STAGES.map(([key, label]) => `<label><input type="checkbox" name="workStage" value="${key}" ${["cutting", "sewing", "finishing"].includes(key) ? "checked" : ""}><span>${label}</span></label>`).join("")}</div></fieldset>
           ${colorPickerMarkup("", "model-colors")}
           ${sizePickerMarkup("", "model-sizes")}
@@ -1880,7 +1875,9 @@ function adminView(data, accounts) {
         ${panel("إعادة ضبط النظام", `<div class="panel-body"><p>مسح جميع بيانات المصنع وحسابات المستخدمين الأخرى نهائياً، مع الإبقاء على حساب الأدمن الحالي فقط.</p><button class="button button-danger" type="button" data-reset-factory>مسح البيانات وإعادة النظام للبداية</button></div>`)}
     </section>
     <div class="modal-backdrop" id="client-account-modal" hidden><section class="modal-card compact-view-modal" role="dialog" aria-modal="true" aria-labelledby="client-account-modal-title"><button class="modal-close" type="button" data-close-client-view aria-label="إغلاق">×</button><div id="client-account-modal-content"></div></section></div>
-    <div class="modal-backdrop" id="model-details-modal" hidden><section class="modal-card compact-view-modal" role="dialog" aria-modal="true" aria-labelledby="model-details-title"><button class="modal-close" type="button" data-close-model-view aria-label="إغلاق">×</button><div id="model-details-modal-content"></div><div class="form-actions"><button class="button button-secondary" type="button" data-print-model-details>طباعة الموديل</button><button class="button button-secondary" type="button" data-edit-model-from-details>تعديل الطلبية</button><button class="row-action order-delete-action" type="button" data-action="delete-order">حذف الطلبية</button><button class="row-action" type="button" data-close-model-view>إغلاق</button></div></section></div>`;
+    <div class="modal-backdrop" id="model-details-modal" hidden><section class="modal-card compact-view-modal" role="dialog" aria-modal="true" aria-labelledby="model-details-title"><button class="modal-close" type="button" data-close-model-view aria-label="إغلاق">×</button><div id="model-details-modal-content"></div><div class="form-actions"><button class="button button-secondary" type="button" data-print-model-details>طباعة الموديل</button><button class="button button-secondary" type="button" data-edit-model-from-details>تعديل الطلبية</button><button class="row-action order-delete-action" type="button" data-action="delete-order">حذف الطلبية</button><button class="row-action" type="button" data-close-model-view>إغلاق</button></div></section></div>
+    <div class="modal-backdrop" data-notification-details-modal hidden><section class="modal-card compact-view-modal" role="dialog" aria-modal="true" aria-labelledby="notification-details-title"><button class="modal-close" type="button" data-close-notification-details aria-label="إغلاق">×</button><div data-notification-details-content></div><div class="form-actions"><button class="button button-primary" type="button" data-open-notification-model hidden>فتح الموديل</button><button class="row-action" type="button" data-close-notification-details>إغلاق</button></div></section></div>
+    <div class="modal-backdrop" data-online-users-modal hidden><section class="modal-card compact-view-modal" role="dialog" aria-modal="true" aria-labelledby="online-users-title"><button class="modal-close" type="button" data-close-online-users aria-label="إغلاق">×</button><h2 id="online-users-title">المتصلون الآن</h2><div class="online-users-list" data-online-users-list></div><div class="form-actions"><button class="row-action" type="button" data-close-online-users>إغلاق</button></div></section></div>`;
 }
 
 function cuttingView(data) {
@@ -2088,7 +2085,7 @@ function render(session, data, accounts) {
     <div class="app-shell${collapsedClass}">
       <button class="sidebar-backdrop" type="button" data-sidebar-close aria-label="إغلاق القائمة الجانبية"></button>
       <aside class="sidebar" id="sidebar"><a class="brand" href="../login.html"><img class="brand-logo" src="../assets/al-motamayez-logo.png" alt="AL-MOTAMAYEZ logo"><span class="brand-copy"><strong>AL-MOTAMAYEZ</strong></span></a><nav aria-label="القائمة الرئيسية"><p class="side-label">القائمة الرئيسية</p>${navigation}</nav><div class="sidebar-bottom"><div class="profile-chip"><span class="avatar">${username.slice(0, 1)}</span><div class="profile-details"><strong>${username}</strong><span>${escapeHtml(session.roleName)}</span></div></div><button class="logout-button" id="logout" type="button">↪ تسجيل الخروج</button></div></aside>
-      <main class="main-content"><header class="topbar"><div class="topbar-leading"><button class="sidebar-toggle" type="button" data-sidebar-toggle aria-controls="sidebar" aria-expanded="true" aria-label="طي القائمة الجانبية"><span aria-hidden="true">☰</span></button><div class="topbar-title"><h1>${info.title}</h1><p>${info.description}</p></div></div><div class="header-brand"><span class="online-indicator${onlineUserCount ? " online" : ""}" data-online-indicator role="status" title="حالة اتصال المستخدمين"><span class="online-indicator-dot"></span><span>متصلون الآن: <strong data-online-count>${onlineUserCount}</strong></span></span><div class="notification-control"><button class="live-notification-button" type="button" data-live-notifications aria-label="الإشعارات" aria-expanded="false"><span aria-hidden="true">🔔</span><span class="live-notification-badge" data-live-badge aria-live="polite" hidden></span></button><section class="notification-dropdown" data-notification-dropdown hidden aria-label="الإشعارات"><header><strong>آخر التحديثات</strong><button type="button" class="notification-mark-read" data-mark-notifications-read>تعليم الكل كمقروء</button></header><div class="notification-list" data-notification-list>${notificationListMarkup()}</div></section></div><img class="header-logo" src="../assets/al-motamayez-logo.png" alt="AL-MOTAMAYEZ logo"><div class="brand-copy"><strong>AL-MOTAMAYEZ</strong></div><span class="date-label">${new Intl.DateTimeFormat("ar-EG-u-nu-latn", { dateStyle: "full" }).format(new Date())}</span></div></header>
+      <main class="main-content"><header class="topbar"><div class="topbar-leading"><button class="sidebar-toggle" type="button" data-sidebar-toggle aria-controls="sidebar" aria-expanded="true" aria-label="طي القائمة الجانبية"><span aria-hidden="true">☰</span></button><div class="topbar-title"><h1>${info.title}</h1><p>${info.description}</p></div></div><div class="header-brand"><button class="online-indicator${onlineUserCount ? " online" : ""}" data-online-indicator type="button" title="عرض الحسابات المتصلة"><span class="online-indicator-dot"></span><span>متصلون الآن: <strong data-online-count>${onlineUserCount}</strong></span></button><div class="notification-control"><button class="live-notification-button" type="button" data-live-notifications aria-label="الإشعارات" aria-expanded="false"><span aria-hidden="true">🔔</span><span class="live-notification-badge" data-live-badge aria-live="polite" hidden></span></button><section class="notification-dropdown" data-notification-dropdown hidden aria-label="الإشعارات"><header><strong>آخر التحديثات</strong><button type="button" class="notification-mark-read" data-mark-notifications-read>تعليم الكل كمقروء</button></header><div class="notification-list" data-notification-list>${notificationListMarkup()}</div></section></div><img class="header-logo" src="../assets/al-motamayez-logo.png" alt="AL-MOTAMAYEZ logo"><div class="brand-copy"><strong>AL-MOTAMAYEZ</strong></div><span class="date-label">${new Intl.DateTimeFormat("ar-EG-u-nu-latn", { dateStyle: "full" }).format(new Date())}</span></div></header>
     ${content}
       <footer class="page-footer">AL-MOTAMAYEZ</footer></main>
     </div>`;
@@ -2171,7 +2168,42 @@ function bindSidebar() {
       notification.read = true;
       persistRealtimeNotifications();
       refreshNotificationDropdown();
+      notificationDropdown.hidden = true;
+      notificationButton.setAttribute("aria-expanded", "false");
+      showNotificationDetails(notification);
     }
+  });
+  document.querySelector("[data-online-indicator]").addEventListener("click", () => {
+    renderOnlineUsersList();
+    document.querySelector("[data-online-users-modal]").hidden = false;
+  });
+  document.querySelector("[data-open-notification-model]").addEventListener("click", (event) => {
+    const order = dashboardData.models.find((item) => item.id === event.currentTarget.dataset.orderId);
+    if (!order) {
+      window.factoryUI.toast("لم يعد الموديل المرتبط بهذا الإشعار متاحاً لحسابك.", "error");
+      return;
+    }
+    document.querySelector("[data-notification-details-modal]").hidden = true;
+    const modelDetailsModal = document.querySelector("#model-details-modal");
+    modelDetailsModal.dataset.orderId = order.id;
+    modelDetailsModal.querySelector("#model-details-modal-content").innerHTML = modelDetailsModalView(order, session.role === "admin");
+    modelDetailsModal.querySelector("[data-edit-model-from-details]").hidden = session.role !== "admin" || Boolean(order.archivedAt);
+    const deleteButton = modelDetailsModal.querySelector("[data-action='delete-order']");
+    deleteButton.dataset.orderId = order.id;
+    deleteButton.hidden = session.role !== "admin" || !orderCanBeDeleted(order);
+    modelDetailsModal.hidden = false;
+  });
+  document.querySelectorAll("[data-close-notification-details]").forEach((button) => button.addEventListener("click", () => {
+    document.querySelector("[data-notification-details-modal]").hidden = true;
+  }));
+  document.querySelector("[data-notification-details-modal]").addEventListener("click", (event) => {
+    if (event.target === event.currentTarget) event.currentTarget.hidden = true;
+  });
+  document.querySelectorAll("[data-close-online-users]").forEach((button) => button.addEventListener("click", () => {
+    document.querySelector("[data-online-users-modal]").hidden = true;
+  }));
+  document.querySelector("[data-online-users-modal]").addEventListener("click", (event) => {
+    if (event.target === event.currentTarget) event.currentTarget.hidden = true;
   });
   document.querySelectorAll("[data-sidebar-link]").forEach((link) => link.addEventListener("click", (event) => {
     event.preventDefault();
@@ -2194,9 +2226,25 @@ function updateRealtimeBadge() {
 function updateOnlineIndicator() {
   const indicator = document.querySelector("[data-online-indicator]");
   if (!indicator) return;
+  onlineUserCount = onlineUsers.length;
   indicator.classList.toggle("online", onlineUserCount > 0);
   const count = indicator.querySelector("[data-online-count]");
   if (count) count.textContent = String(onlineUserCount);
+  if (!document.querySelector("[data-online-users-modal]")?.hidden) renderOnlineUsersList();
+}
+
+function renderOnlineUsersList() {
+  const list = document.querySelector("[data-online-users-list]");
+  if (!list) return;
+  if (!onlineUsers.length) {
+    list.innerHTML = '<p class="notification-empty">لا توجد حسابات متصلة حالياً.</p>';
+    return;
+  }
+  list.innerHTML = onlineUsers.map((user) => {
+    const knownRole = roleNames[user.role];
+    const name = user.fullName || user.username || (knownRole ? "حساب بدون اسم" : "حساب غير مسجل");
+    return `<article class="online-user-entry"><span class="online-user-dot"></span><div><strong>${escapeHtml(name)}</strong><small>${escapeHtml(knownRole || "حساب غير مسجل")}</small></div></article>`;
+  }).join("");
 }
 
 function notificationStorageKey(accountId) {
@@ -2210,7 +2258,13 @@ function initializeRealtimeNotifications(session) {
     const saved = JSON.parse(localStorage.getItem(notificationStorageKey(session.accountId)) || "[]");
     realtimeNotifications = Array.isArray(saved)
       ? saved.filter((item) => item && typeof item.id === "string" && typeof item.message === "string")
-        .map((item) => ({ ...item, sources: Array.isArray(item.sources) ? item.sources : [] }))
+        .map((item) => ({
+          ...item,
+          sources: Array.isArray(item.sources) ? item.sources : [],
+          details: Array.isArray(item.details)
+            ? item.details.filter((detail) => detail && typeof detail.label === "string" && typeof detail.value === "string")
+            : []
+        }))
         .slice(0, 40)
       : [];
   } catch (error) {
@@ -2230,11 +2284,29 @@ function persistRealtimeNotifications() {
 
 function notificationListMarkup() {
   if (!realtimeNotifications.length) return '<p class="notification-empty">لا توجد تحديثات حديثة.</p>';
-  return realtimeNotifications.slice(0, 20).map((notification) => `
+  return realtimeNotifications.slice(0, 20).map((notification) => {
+    const summary = [notification.modelName, notification.personName === "غير محدد في سجل التحديث" ? "" : notification.personName].filter(Boolean).join(" · ");
+    return `
     <button class="notification-entry${notification.read ? " read" : " unread"}" type="button" data-notification-id="${escapeHtml(notification.id)}">
       <span class="notification-entry-message">${escapeHtml(notification.message)}</span>
+      ${summary ? `<small>${escapeHtml(summary)}</small>` : ""}
       <time>${formatDateTime(notification.createdAt)}</time>
-    </button>`).join("");
+    </button>`;
+  }).join("");
+}
+
+function showNotificationDetails(notification) {
+  const detailsModal = document.querySelector("[data-notification-details-modal]");
+  const details = notification.details || [];
+  document.querySelector("[data-notification-details-content]").innerHTML = `
+    <h2 id="notification-details-title">${escapeHtml(notification.message)}</h2>
+    <p>وقت التحديث: ${formatDateTime(notification.createdAt)}</p>
+    <dl class="notification-detail-list">${details.map((detail) => `<div><dt>${escapeHtml(detail.label)}</dt><dd>${escapeHtml(detail.value)}</dd></div>`).join("") || "<div><dt>التفاصيل</dt><dd>لا توجد معلومات إضافية لهذا التحديث.</dd></div>"}</dl>`;
+  const openModelButton = document.querySelector("[data-open-notification-model]");
+  const relatedOrder = dashboardData.models.find((order) => order.id === notification.orderId);
+  openModelButton.hidden = !relatedOrder;
+  openModelButton.dataset.orderId = relatedOrder?.id || "";
+  detailsModal.hidden = false;
 }
 
 function refreshNotificationDropdown() {
@@ -2246,7 +2318,23 @@ function refreshNotificationDropdown() {
 function recordRealtimeNotification(source, payload = {}) {
   const eventType = payload.eventType || payload.event || "";
   const action = { INSERT: "إضافة", UPDATE: "تعديل", DELETE: "حذف" }[eventType] || "تحديث";
-  const recordId = payload.new?.id || payload.old?.id || "";
+  const row = payload.new || payload.old || {};
+  let recordData = row.data || row.payload || {};
+  if (typeof recordData === "string") {
+    try { recordData = JSON.parse(recordData); } catch { recordData = {}; }
+  }
+  if (!recordData || typeof recordData !== "object" || Array.isArray(recordData)) recordData = {};
+  const orderId = row.order_id || row.model_id || recordData.order_id || recordData.orderId || recordData.model_id || recordData.modelId || "";
+  const order = dashboardData?.models.find((item) => item.id === orderId);
+  const client = dashboardData?.clients.find((item) => item.id === (row.customer_id || recordData.customer_id || order?.customerId));
+  const actorId = row.created_by || row.user_id || row.owner_id || recordData.createdBy || recordData.userId || recordData.ownerId || "";
+  const actor = dashboardData?.users.find((user) => user.id === actorId);
+  const modelName = order?.name || row.model_name || row.modelName || recordData.model_name || recordData.modelName
+    || row.model_number || recordData.modelNumber || (orderId ? "موديل مرتبط" : "");
+  const personName = row.full_name || row.username || row.recipient_name || row.worker_name || row.customer_name || row.person_name || row.name
+    || recordData.fullName || recordData.username || recordData.recipientName || recordData.workerName || recordData.customerName || recordData.personName || recordData.name
+    || actor?.name || actor?.username || client?.name || "غير محدد في سجل التحديث";
+  const recordId = row.id || "";
   let messageSource = source;
   if (source === "التسليمات") {
     messageSource = eventType === "DELETE" ? "حذف تسليم موديل" : eventType === "UPDATE" ? "تعديل تسليم موديل" : "تسليم موديل";
@@ -2263,15 +2351,49 @@ function recordRealtimeNotification(source, payload = {}) {
   } else if (source === "الحسابات") {
     messageSource = "حساب مستخدم";
   }
+  const details = [
+    { label: "الإجراء", value: action },
+    { label: "نوع الحدث", value: messageSource },
+    ...(modelName ? [{ label: "الموديل", value: modelName }] : []),
+    { label: "الشخص أو الطرف المعني", value: personName },
+    ...(Number.isFinite(Number(row.quantity ?? recordData.quantity)) && (row.quantity ?? recordData.quantity) !== undefined
+      ? [{ label: "الكمية", value: `${row.quantity ?? recordData.quantity} قطعة` }]
+      : [])
+  ];
   const commitKey = payload.commit_timestamp || "";
   const existingCommit = commitKey
     ? realtimeNotifications.find((notification) => notification.commitKey === commitKey)
     : null;
   if (existingCommit) {
     if (!Array.isArray(existingCommit.sources)) existingCommit.sources = [];
+    let changed = false;
     if (!existingCommit.sources.includes(messageSource)) {
       existingCommit.sources.push(messageSource);
       existingCommit.message = `تحديثات: ${existingCommit.sources.join("، ")}`;
+      existingCommit.action = "تحديث";
+      existingCommit.eventLabel = existingCommit.message;
+      changed = true;
+    }
+    existingCommit.details = [...(existingCommit.details || [])];
+    details.forEach((detail) => {
+      if (!existingCommit.details.some((saved) => saved.label === detail.label && saved.value === detail.value)) {
+        existingCommit.details.push(detail);
+        changed = true;
+      }
+    });
+    if (!existingCommit.orderId && orderId) {
+      existingCommit.orderId = orderId;
+      changed = true;
+    }
+    if (!existingCommit.modelName && modelName) {
+      existingCommit.modelName = modelName;
+      changed = true;
+    }
+    if (!existingCommit.personName && personName) {
+      existingCommit.personName = personName;
+      changed = true;
+    }
+    if (changed) {
       persistRealtimeNotifications();
       refreshNotificationDropdown();
     }
@@ -2281,7 +2403,13 @@ function recordRealtimeNotification(source, payload = {}) {
   if (realtimeNotifications.some((notification) => notification.id === fingerprint)) return;
   realtimeNotifications.unshift({
     id: fingerprint,
-    message: `${action}: ${messageSource}`,
+    message: `${action}: ${messageSource}${modelName ? ` — ${modelName}` : ""}`,
+    action,
+    eventLabel: messageSource,
+    orderId,
+    modelName,
+    personName,
+    details,
     sources: [messageSource],
     commitKey,
     createdAt: payload.commit_timestamp || new Date().toISOString(),
@@ -2328,7 +2456,17 @@ function subscribeToFactoryUpdates(session) {
   presenceChannel = supabaseClient
     .channel("factory-online-presence", { config: { presence: { key: session.accountId } } })
     .on("presence", { event: "sync" }, () => {
-      onlineUserCount = Object.keys(presenceChannel.presenceState()).length;
+      const state = presenceChannel.presenceState();
+      onlineUsers = Object.entries(state).map(([key, metas]) => {
+        const meta = Array.isArray(metas) ? metas[metas.length - 1] || {} : {};
+        return {
+          key,
+          role: rolePages[meta.role] ? meta.role : "",
+          username: String(meta.username || ""),
+          fullName: String(meta.fullName || ""),
+          onlineAt: meta.online_at || ""
+        };
+      });
       updateOnlineIndicator();
     })
     .subscribe(async (status, error) => {
@@ -2336,6 +2474,7 @@ function subscribeToFactoryUpdates(session) {
         try {
           const trackStatus = await presenceChannel.track({
             username: session.username,
+            fullName: session.fullName,
             role: session.role,
             online_at: new Date().toISOString()
           });
@@ -2390,10 +2529,49 @@ async function refreshFromRealtime(session, source) {
   }
 }
 
+function enrichRealtimeNotifications() {
+  let changed = false;
+  for (const notification of realtimeNotifications) {
+    const order = dashboardData.models.find((item) => item.id === notification.orderId);
+    if (!order) continue;
+    const modelName = order.name || order.modelNumber || "موديل بدون اسم";
+    const personName = order.client || "عميل الطلبية";
+    if (!notification.modelName || notification.modelName === "موديل مرتبط") {
+      notification.modelName = modelName;
+      changed = true;
+    }
+    if (!notification.personName || notification.personName === "غير محدد في سجل التحديث") {
+      notification.personName = personName;
+      changed = true;
+    }
+    notification.details = Array.isArray(notification.details) ? notification.details : [];
+    for (const [label, value] of [["الموديل", notification.modelName], ["الشخص أو الطرف المعني", notification.personName]]) {
+      const detail = notification.details.find((item) => item.label === label);
+      if (detail && detail.value !== value) {
+        detail.value = value;
+        changed = true;
+      } else if (!detail) {
+        notification.details.push({ label, value });
+        changed = true;
+      }
+    }
+    const eventLabel = notification.sources?.length > 1
+      ? `تحديثات: ${notification.sources.join("، ")}`
+      : notification.eventLabel || notification.sources?.[0] || "تحديث";
+    const nextMessage = `${notification.action || "تحديث"}: ${eventLabel} — ${notification.modelName}`;
+    if (notification.message !== nextMessage) {
+      notification.message = nextMessage;
+      changed = true;
+    }
+  }
+  if (changed) persistRealtimeNotifications();
+}
+
 async function refreshDashboard(session) {
   const data = await readDashboardData(session);
   dashboardData = data;
   const accounts = await readAccounts(session);
+  enrichRealtimeNotifications();
   render(session, data, accounts);
 }
 
@@ -3409,6 +3587,10 @@ function bindActions(session) {
     } else if (event.target.matches('[name="pricingMode"]')) {
       updateStagePricing(orderForm);
       updateOrderTotals();
+    } else if (event.target.matches('[name="status"]')) {
+      const creatingInitialDelivery = !orderForm.elements.editIndex.value && event.target.value === "تم التسليم";
+      orderForm.querySelector("[data-initial-delivery-field]").hidden = !creatingInitialDelivery;
+      if (!orderForm.elements.editIndex.value && !creatingInitialDelivery) orderForm.elements.deliveredPieces.value = "";
     }
   });
   orderForm.addEventListener("input", (event) => {
@@ -3432,6 +3614,7 @@ function bindActions(session) {
     orderForm.elements.editIndex.value = "";
     orderForm.elements.status.disabled = false;
     orderForm.querySelector("[data-original-quantity-field]").hidden = true;
+    orderForm.querySelector("[data-initial-delivery-field]").hidden = true;
     updateStagePricing(orderForm);
     orderForm.querySelector("#model-price-history-note").hidden = true;
     if (modelPreviewObjectUrl) URL.revokeObjectURL(modelPreviewObjectUrl);
@@ -3469,6 +3652,7 @@ function bindActions(session) {
     updateStagePricing(orderForm);
     orderForm.elements.quantity.value = currentOrder.quantity || "";
     orderForm.elements.deliveredPieces.value = currentOrder.deliveredPieces;
+    orderForm.querySelector("[data-initial-delivery-field]").hidden = true;
     setSizePicker(orderForm.querySelector("[data-size-picker]"), currentOrder.sizes);
     setColorPicker(orderForm.querySelector("[data-color-picker]"), currentOrder.colors, currentOrder.colorNames);
     renderModelAllocation(orderForm, currentOrder.colorSizeDistribution);
@@ -3942,6 +4126,7 @@ function bindActions(session) {
     if (newOrderButton) {
       orderForm.reset();
       orderForm.elements.editIndex.value = "";
+      orderForm.querySelector("[data-initial-delivery-field]").hidden = true;
       syncOrderCustomerSelection(orderForm, newOrderButton.dataset.openOrderForClient);
       updateStagePricing(orderForm);
       orderForm.querySelector("#model-price-history-note").hidden = true;
@@ -4001,6 +4186,7 @@ function bindActions(session) {
     const sizeQuantity = sizePickerTotal(form);
     const quantity = quantityValue ? Number(quantityValue) : sizeQuantity;
     const deliveredPieces = Number(formData.get("deliveredPieces"));
+    const requestedStatus = String(formData.get("status"));
     const pricePerPiece = Number(formData.get("pricePerPiece"));
     const paidAmount = Number(formData.get("paidAmount"));
     const operationalExpenses = Number(formData.get("operationalExpenses") || 0);
@@ -4019,6 +4205,10 @@ function bindActions(session) {
     }
     if (!Number.isSafeInteger(quantity) || quantity < 0 || !Number.isSafeInteger(deliveredPieces) || deliveredPieces < 0) {
       window.factoryUI.toast("تحقق من إدخال أعداد صحيحة غير سالبة للكمية والتسليم.", "error");
+      return;
+    }
+    if (!existingOrder && requestedStatus === "تم التسليم" && (quantity <= 0 || deliveredPieces <= 0)) {
+      window.factoryUI.toast("أدخل العدد الكلي والعدد المسلّم لإضافة موديل بحالة تم التسليم.", "error");
       return;
     }
     const requestedOriginalQuantity = existingOrder && LOCKED_FACTORY_ORDER_STATUSES.includes(existingOrder.status)
@@ -4080,9 +4270,9 @@ function bindActions(session) {
         operationalExpenses,
         status: existingOrder && LOCKED_FACTORY_ORDER_STATUSES.includes(existingOrder.status)
           ? existingOrder.status
-          : String(formData.get("status")),
+          : requestedStatus,
         priority: String(formData.get("priority")),
-        productionType: String(formData.get("productionType")),
+        productionType: String(formData.get("productionType") || existingOrder?.productionType || "full_cutting"),
         workStages,
         pricingMode,
         stagePrices: pricingMode === "stages" ? stagePrices : {},

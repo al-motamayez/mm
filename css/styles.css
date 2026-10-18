@@ -39,7 +39,8 @@ button { cursor: pointer; }
 .live-notification-button:hover { background: var(--green-pale); }
 .live-notification-badge { position: absolute; top: -7px; right: -7px; display: grid; min-width: 19px; height: 19px; place-items: center; padding: 0 5px; border: 2px solid #fff; border-radius: 20px; color: #fff; background: #b63838; font-size: 10px; font-weight: 700; }
 .notification-control { position: relative; }
-.online-indicator { display: inline-flex; align-items: center; gap: 7px; color: #68756f; font-size: 11px; white-space: nowrap; }
+.online-indicator { display: inline-flex; align-items: center; gap: 7px; padding: 7px 9px; border: 1px solid transparent; border-radius: 9px; color: #68756f; background: transparent; font-size: 11px; white-space: nowrap; cursor: pointer; }
+.online-indicator:hover { border-color: var(--line); background: #fff; }
 .online-indicator-dot { width: 9px; height: 9px; border-radius: 50%; background: #9ba69f; }
 .online-indicator.online .online-indicator-dot { background: #25a461; box-shadow: 0 0 0 3px #25a46122; }
 .online-indicator.online { color: #276546; }
@@ -52,6 +53,18 @@ button { cursor: pointer; }
 .notification-entry-message { font-size: 12px; font-weight: 600; }
 .notification-entry time { color: #7d8982; font-size: 10px; }
 .notification-empty { margin: 0; padding: 20px; color: var(--muted); text-align: center; font-size: 12px; }
+.notification-entry > small { color: #65746b; font-size: 10px; }
+.notification-detail-list { display: grid; gap: 10px; margin: 18px 0 0; }
+.notification-detail-list > div { padding: 10px 12px; border: 1px solid #edf1ed; border-radius: 9px; background: #fbfcfb; }
+.notification-detail-list dt { color: var(--muted); font-size: 11px; }
+.notification-detail-list dd { margin: 4px 0 0; color: #34453e; font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.online-users-list { display: grid; gap: 8px; margin-top: 18px; }
+.online-user-entry { display: flex; align-items: center; gap: 10px; padding: 11px 12px; border: 1px solid #edf1ed; border-radius: 9px; background: #fbfcfb; }
+.online-user-entry > div { display: grid; gap: 3px; }
+.online-user-entry strong { color: #34453e; font-size: 13px; }
+.online-user-entry small { color: var(--muted); font-size: 11px; }
+.online-user-dot { width: 9px; height: 9px; border-radius: 50%; background: #25a461; box-shadow: 0 0 0 3px #25a46122; }
+.initial-delivery-field { grid-column: 1 / -1; padding: 12px; border: 1px solid #dcebe0; border-radius: 9px; background: #f5f9f6; }
 .eyebrow { margin: 0 0 10px; color: #568675; font-size: 13px; font-weight: 600; }
 .login-logo { display: block; width: clamp(170px, 21vw, 250px); height: clamp(176px, 23vw, 260px); object-fit: contain; filter: brightness(0) invert(1); }
 .login-brand-title { margin: 0; color: #fff; font-family: Arial, sans-serif; font-size: clamp(27px, 3.5vw, 42px); font-weight: 700; letter-spacing: .035em; line-height: 1.2; }
