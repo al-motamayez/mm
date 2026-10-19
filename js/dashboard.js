@@ -11,10 +11,10 @@ let realtimeRefreshTimer = null;
 let realtimeRefreshRunning = false;
 let realtimeNotifications = [];
 let notificationStorageAccount = "";
-let notificationStorageRole = "";
 let onlineUserCount = 0;
 let onlineUsers = [];
 let activeFinanceTab = "payments";
+const REALTIME_NOTIFICATION_MESSAGE = "تحديث جديد في البرنامج";
 const rolePages = {
   admin: "admin.html",
   cutting: "cutting.html",
@@ -31,8 +31,8 @@ const roleNames = {
 };
 const WORKER_JOB_TITLES = ["إمبلاج", "خياطة", "قص", "تشطيب", "مكواة", "تكييس", "عامل إنتاج", "أخرى"];
 const SIZE_OPTIONS = {
-  men: ["S", "M", "L", "XL", "2XL", "3XL", "4XL"],
-  women: ["S", "M", "L", "XL", "2XL", "3XL", "4XL"],
+  men: ["SX", "S", "M", "L", "XL", "2XL", "3XL", "4XL"],
+  women: ["SX", "S", "M", "L", "XL", "2XL", "3XL", "4XL"],
   children: Array.from({ length: 16 }, (_, index) => String(index + 1))
 };
 const SIZE_TYPE_LABELS = { men: "رجالي", women: "حريمي", children: "أطفال" };
@@ -2274,8 +2274,7 @@ function adminView(data, accounts) {
     </section>
     <div class="modal-backdrop" id="client-account-modal" hidden><section class="modal-card compact-view-modal" role="dialog" aria-modal="true" aria-labelledby="client-account-modal-title"><button class="modal-close" type="button" data-close-client-view aria-label="إغلاق">×</button><div id="client-account-modal-content"></div></section></div>
     <div class="modal-backdrop" id="model-details-modal" hidden><section class="modal-card compact-view-modal" role="dialog" aria-modal="true" aria-labelledby="model-details-title"><button class="modal-close" type="button" data-close-model-view aria-label="إغلاق">×</button><div id="model-details-modal-content"></div><div class="form-actions"><button class="button button-secondary" type="button" data-print-model-details>طباعة الموديل</button><button class="button button-secondary" type="button" data-edit-model-from-details>تعديل الطلبية</button><button class="row-action order-delete-action" type="button" data-action="delete-order">حذف الطلبية</button><button class="row-action" type="button" data-close-model-view>إغلاق</button></div></section></div>
-    <div class="modal-backdrop" data-notification-details-modal hidden><section class="modal-card compact-view-modal" role="dialog" aria-modal="true" aria-labelledby="notification-details-title"><button class="modal-close" type="button" data-close-notification-details aria-label="إغلاق">×</button><div data-notification-details-content></div><div class="form-actions"><button class="button button-primary" type="button" data-open-notification-model hidden>فتح الموديل</button><button class="row-action" type="button" data-close-notification-details>إغلاق</button></div></section></div>
-    <div class="modal-backdrop" data-online-users-modal hidden><section class="modal-card compact-view-modal" role="dialog" aria-modal="true" aria-labelledby="online-users-title"><button class="modal-close" type="button" data-close-online-users aria-label="إغلاق">×</button><h2 id="online-users-title">المتصلون الآن</h2><div class="online-users-list" data-online-users-list></div><div class="form-actions"><button class="row-action" type="button" data-close-online-users>إغلاق</button></div></section></div>`;
+    `;
 }
 
 function cuttingView(data) {
@@ -2734,8 +2733,9 @@ function render(session, data, accounts) {
     <div class="app-shell${collapsedClass}">
       <button class="sidebar-backdrop" type="button" data-sidebar-close aria-label="إغلاق القائمة الجانبية"></button>
       <aside class="sidebar" id="sidebar"><a class="brand" href="../index.html"><img class="brand-logo" src="../assets/al-motamayez-logo.png" alt="AL-MOTAMAYEZ logo"><span class="brand-copy"><strong>AL-MOTAMAYEZ</strong></span></a><nav aria-label="القائمة الرئيسية"><p class="side-label">القائمة الرئيسية</p>${navigation}</nav><div class="sidebar-bottom"><div class="profile-chip"><span class="avatar">${username.slice(0, 1)}</span><div class="profile-details"><strong>${username}</strong><span>${escapeHtml(session.roleName)}</span></div></div><button class="logout-button" id="logout" type="button">↪ تسجيل الخروج</button></div></aside>
-      <main class="main-content"><header class="topbar"><div class="topbar-leading"><button class="sidebar-toggle" type="button" data-sidebar-toggle aria-controls="sidebar" aria-expanded="true" aria-label="طي القائمة الجانبية"><span aria-hidden="true">☰</span></button><div class="topbar-title"><h1>${info.title}</h1><p>${info.description}</p></div></div><div class="header-brand"><button class="online-indicator${onlineUserCount ? " online" : ""}" data-online-indicator type="button" title="عرض الحسابات المتصلة"><span class="online-indicator-dot"></span><span>متصلون الآن: <strong data-online-count>${onlineUserCount}</strong></span></button><div class="notification-control"><button class="live-notification-button" type="button" data-live-notifications aria-label="الإشعارات" aria-expanded="false"><span aria-hidden="true">🔔</span><span class="live-notification-badge" data-live-badge aria-live="polite" hidden></span></button><section class="notification-dropdown" data-notification-dropdown hidden aria-label="الإشعارات"><header><strong>آخر التحديثات</strong><button type="button" class="notification-mark-read" data-mark-notifications-read>تعليم الكل كمقروء</button></header><div class="notification-list" data-notification-list>${notificationListMarkup()}</div></section></div><img class="header-logo" src="../assets/al-motamayez-logo.png" alt="AL-MOTAMAYEZ logo"><div class="brand-copy"><strong>AL-MOTAMAYEZ</strong></div><span class="date-label">${new Intl.DateTimeFormat("ar-EG-u-nu-latn", { dateStyle: "full" }).format(new Date())}</span></div></header>
+      <main class="main-content"><header class="topbar"><div class="topbar-leading"><button class="sidebar-toggle" type="button" data-sidebar-toggle aria-controls="sidebar" aria-expanded="true" aria-label="طي القائمة الجانبية"><span aria-hidden="true">☰</span></button><div class="topbar-title"><h1>${info.title}</h1><p>${info.description}</p></div></div><div class="header-brand">${session.role === "admin" ? `<button class="online-indicator${onlineUserCount ? " online" : ""}" data-online-indicator type="button" title="عرض الحسابات المتصلة"><span class="online-indicator-dot"></span><span>متصلون الآن: <strong data-online-count>${onlineUserCount}</strong></span></button>` : ""}<div class="notification-control"><button class="live-notification-button" type="button" data-live-notifications aria-label="إشعارات تحديثات البرنامج" aria-expanded="false"><span aria-hidden="true">🔔</span><span class="live-notification-badge" data-live-badge aria-live="polite" hidden></span></button><section class="notification-dropdown" data-notification-dropdown hidden aria-label="إشعارات تحديثات البرنامج"><header><strong>تحديثات البرنامج</strong><button type="button" class="notification-mark-read" data-mark-notifications-read>تعليم الكل كمقروء</button></header><div class="notification-list" data-notification-list>${notificationListMarkup()}</div></section></div><img class="header-logo" src="../assets/al-motamayez-logo.png" alt="AL-MOTAMAYEZ logo"><div class="brand-copy"><strong>AL-MOTAMAYEZ</strong></div><span class="date-label">${new Intl.DateTimeFormat("ar-EG-u-nu-latn", { dateStyle: "full" }).format(new Date())}</span></div></header>
     ${content}
+      ${session.role === "admin" ? '<div class="modal-backdrop" data-online-users-modal hidden><section class="modal-card compact-view-modal" role="dialog" aria-modal="true" aria-labelledby="online-users-title"><button class="modal-close" type="button" data-close-online-users aria-label="إغلاق">×</button><h2 id="online-users-title">المتصلون الآن</h2><div class="online-users-list" data-online-users-list></div><div class="form-actions"><button class="row-action" type="button" data-close-online-users>إغلاق</button></div></section></div>' : ""}
       <footer class="page-footer">AL-MOTAMAYEZ</footer></main>
     </div>`;
   activateDashboardView(window.location.hash.slice(1) || "dashboard", false);
@@ -2821,9 +2821,6 @@ function bindSidebar() {
         refreshNotificationDropdown();
         notificationDropdown.hidden = true;
         notificationButton.setAttribute("aria-expanded", "false");
-        if (document.querySelector("[data-notification-details-modal]")) {
-          showNotificationDetails(notification);
-        }
       }
     });
   }
@@ -2831,29 +2828,6 @@ function bindSidebar() {
     renderOnlineUsersList();
     const onlineUsersModal = document.querySelector("[data-online-users-modal]");
     if (onlineUsersModal) onlineUsersModal.hidden = false;
-  });
-  document.querySelector("[data-open-notification-model]")?.addEventListener("click", (event) => {
-    const order = dashboardData.models.find((item) => item.id === event.currentTarget.dataset.orderId);
-    if (!order) {
-      window.factoryUI.toast("لم يعد الموديل المرتبط بهذا الإشعار متاحاً لحسابك.", "error");
-      return;
-    }
-    document.querySelector("[data-notification-details-modal]").hidden = true;
-    const modelDetailsModal = document.querySelector("#model-details-modal");
-    modelDetailsModal.dataset.orderId = order.id;
-    modelDetailsModal.querySelector("#model-details-modal-content").innerHTML = modelDetailsModalView(order, session.role === "admin");
-    modelDetailsModal.querySelector("[data-edit-model-from-details]").hidden = session.role !== "admin" || Boolean(order.archivedAt);
-    const deleteButton = modelDetailsModal.querySelector("[data-action='delete-order']");
-    deleteButton.dataset.orderId = order.id;
-    deleteButton.hidden = session.role !== "admin" || !orderCanBeDeleted(order);
-    modelDetailsModal.hidden = false;
-  });
-  document.querySelectorAll("[data-close-notification-details]").forEach((button) => button.addEventListener("click", () => {
-    const detailsModal = document.querySelector("[data-notification-details-modal]");
-    if (detailsModal) detailsModal.hidden = true;
-  }));
-  document.querySelector("[data-notification-details-modal]")?.addEventListener("click", (event) => {
-    if (event.target === event.currentTarget) event.currentTarget.hidden = true;
   });
   document.querySelectorAll("[data-close-online-users]").forEach((button) => button.addEventListener("click", () => {
     const onlineUsersModal = document.querySelector("[data-online-users-modal]");
@@ -2909,59 +2883,50 @@ function notificationStorageKey(accountId) {
 }
 
 function initializeRealtimeNotifications(session) {
-  if (notificationStorageAccount === session.accountId && notificationStorageRole === session.role) {
-    filterRealtimeNotifications(session);
+  if (notificationStorageAccount === session.accountId) {
+    filterRealtimeNotifications();
     return;
   }
   notificationStorageAccount = session.accountId;
-  notificationStorageRole = session.role;
   try {
     const saved = JSON.parse(localStorage.getItem(notificationStorageKey(session.accountId)) || "[]");
     realtimeNotifications = Array.isArray(saved)
-      ? saved.filter((item) => item && typeof item.id === "string" && typeof item.message === "string")
+      ? saved.filter((item) => item && typeof item.id === "string")
         .map((item) => ({
-          ...item,
-          sources: Array.isArray(item.sources) ? item.sources : [],
-          details: Array.isArray(item.details)
-            ? item.details.filter((detail) => detail && typeof detail.label === "string" && typeof detail.value === "string")
-            : []
+          id: crypto.randomUUID(),
+          message: REALTIME_NOTIFICATION_MESSAGE,
+          createdAt: typeof item.createdAt === "string" ? item.createdAt : new Date().toISOString(),
+          read: Boolean(item.read)
         }))
         .slice(0, 40)
       : [];
-    filterRealtimeNotifications(session);
+    filterRealtimeNotifications();
   } catch (error) {
     realtimeNotifications = [];
     console.warn("تعذر تحميل الإشعارات المحفوظة محلياً.", error);
   }
 }
 
-function notificationSourceAllowed(notification, session) {
-  if (session.role === "admin") return true;
-  const publicOrderSources = ["الطلبات ومراحل الإنتاج", "التسليمات"];
-  return publicOrderSources.includes(notification.source)
-    && Boolean(notification.orderId)
-    && Boolean(dashboardData?.models.some((order) => order.id === notification.orderId));
-}
-
-function filterRealtimeNotifications(session) {
-  const filtered = realtimeNotifications.filter((notification) => notificationSourceAllowed(notification, session));
-  if (session.role !== "admin") {
-    filtered.forEach((notification) => {
-      notification.personName = "";
-      notification.details = (notification.details || []).filter((detail) => ["حالة الطلب", "الكمية"].includes(detail.label));
-      notification.message = notification.clientMessage || `تم تحديث طلبك: ${notification.modelName || "طلبية"}`;
-    });
-  }
-  if (filtered.length !== realtimeNotifications.length) {
-    realtimeNotifications = filtered;
-    persistRealtimeNotifications();
-  }
+function filterRealtimeNotifications() {
+  realtimeNotifications = realtimeNotifications.map((notification) => ({
+    id: notification.id,
+    message: REALTIME_NOTIFICATION_MESSAGE,
+    createdAt: notification.createdAt,
+    read: Boolean(notification.read)
+  }));
+  persistRealtimeNotifications();
 }
 
 function persistRealtimeNotifications() {
   if (!notificationStorageAccount) return;
   try {
-    localStorage.setItem(notificationStorageKey(notificationStorageAccount), JSON.stringify(realtimeNotifications.slice(0, 40)));
+    const safeNotifications = realtimeNotifications.slice(0, 40).map((notification) => ({
+      id: notification.id,
+      message: REALTIME_NOTIFICATION_MESSAGE,
+      createdAt: notification.createdAt,
+      read: Boolean(notification.read)
+    }));
+    localStorage.setItem(notificationStorageKey(notificationStorageAccount), JSON.stringify(safeNotifications));
   } catch (error) {
     console.warn("تعذر حفظ حالة قراءة الإشعارات محلياً.", error);
   }
@@ -2969,29 +2934,11 @@ function persistRealtimeNotifications() {
 
 function notificationListMarkup() {
   if (!realtimeNotifications.length) return '<p class="notification-empty">لا توجد تحديثات حديثة.</p>';
-  return realtimeNotifications.slice(0, 20).map((notification) => {
-    const summary = [notification.modelName, notification.personName === "غير محدد في سجل التحديث" ? "" : notification.personName].filter(Boolean).join(" · ");
-    return `
+  return realtimeNotifications.slice(0, 20).map((notification) => `
     <button class="notification-entry${notification.read ? " read" : " unread"}" type="button" data-notification-id="${escapeHtml(notification.id)}">
-      <span class="notification-entry-message">${escapeHtml(notification.message)}</span>
-      ${summary ? `<small>${escapeHtml(summary)}</small>` : ""}
+      <span class="notification-entry-message">${REALTIME_NOTIFICATION_MESSAGE}</span>
       <time>${formatDateTime(notification.createdAt)}</time>
-    </button>`;
-  }).join("");
-}
-
-function showNotificationDetails(notification) {
-  const detailsModal = document.querySelector("[data-notification-details-modal]");
-  const details = notification.details || [];
-  document.querySelector("[data-notification-details-content]").innerHTML = `
-    <h2 id="notification-details-title">${escapeHtml(notification.message)}</h2>
-    <p>وقت التحديث: ${formatDateTime(notification.createdAt)}</p>
-    <dl class="notification-detail-list">${details.map((detail) => `<div><dt>${escapeHtml(detail.label)}</dt><dd>${escapeHtml(detail.value)}</dd></div>`).join("") || "<div><dt>التفاصيل</dt><dd>تم تسجيل التحديث.</dd></div>"}</dl>`;
-  const openModelButton = document.querySelector("[data-open-notification-model]");
-  const relatedOrder = dashboardData.models.find((order) => order.id === notification.orderId);
-  openModelButton.hidden = !relatedOrder;
-  openModelButton.dataset.orderId = relatedOrder?.id || "";
-  detailsModal.hidden = false;
+    </button>`).join("");
 }
 
 function refreshNotificationDropdown() {
@@ -3000,104 +2947,10 @@ function refreshNotificationDropdown() {
   updateRealtimeBadge();
 }
 
-function recordRealtimeNotification(source, payload = {}) {
-  const eventType = payload.eventType || payload.event || "";
-  const action = { INSERT: "إضافة", UPDATE: "تعديل", DELETE: "حذف" }[eventType] || "تحديث";
-  const row = payload.new || payload.old || {};
-  const orderId = row.order_id || row.model_id || "";
-  const order = dashboardData?.models.find((item) => item.id === orderId);
-  const modelName = order?.name || order?.modelNumber || "الطلبية";
-  let eventLabel = source;
-  if (source === "التسليمات") {
-    eventLabel = eventType === "DELETE" ? "حذف تسليم" : eventType === "UPDATE" ? "تعديل تسليم" : "تسجيل تسليم";
-  } else if (source === "الطلبات ومراحل الإنتاج") {
-    eventLabel = row.signal_type === "stage" ? "تحديث مرحلة تشغيل" : "تحديث طلبية";
-  } else {
-    const adminLabels = {
-      "السجلات": "سجل النظام",
-      "الحركة النقدية": "حركة نقدية",
-      "تسجيلات الدخول والحسابات": "نشاط حساب",
-      "الحسابات": "حساب مستخدم",
-      "ملفات العملاء": "ملف عميل",
-      "مخزون القماش": "مخزون القماش",
-      "حركات القماش": "حركة قماش",
-      "حالة الحساب": "حالة حساب"
-    };
-    eventLabel = adminLabels[source] || "تحديث إداري";
-  }
-  const isAdmin = notificationStorageRole === "admin";
-  const isOrderNotification = ["الطلبات ومراحل الإنتاج", "التسليمات"].includes(source)
-    && Boolean(orderId)
-    && (isAdmin || Boolean(order));
-  if (!isAdmin && !isOrderNotification) return;
-  const clientMessage = source === "التسليمات"
-    ? `تم تسجيل تسليم لطلبك: ${modelName}`
-    : `تم تحديث طلبك: ${modelName}`;
-  let initialMessage = isAdmin
-    ? `${action}: ${eventLabel}${orderId ? ` — ${modelName}` : ""}`
-    : clientMessage;
-  const beforeOrder = order ? {
-    status: order.status,
-    quantity: Number(order.quantity || 0),
-    originalQuantity: Number(order.originalQuantity || 0),
-    pricePerPiece: Number(order.pricePerPiece || 0),
-    deliveredPieces: Number(order.deliveredPieces || 0),
-    expectedDeliveryDate: order.expectedDeliveryDate || "",
-    priority: order.priority || "",
-    workStages: [...(order.workStages || [])]
-  } : null;
-  const beforeDelivery = source === "التسليمات"
-    ? order?.deliveryHistory?.find((delivery) => delivery.id === row.id)
-    : null;
-  const details = [];
-  const deliveryQuantity = Number(row.quantity || 0);
-  if (source === "التسليمات" && isAdmin && eventType === "INSERT") {
-    const amount = Number(row.amount ?? deliveryQuantity * Number(row.price_per_piece || 0));
-    initialMessage = `تم تسجيل تسليم: ${modelName} - العدد: ${deliveryQuantity} - القيمة: ${money(amount)}`;
-    details.push(
-      { label: "الكمية المسلّمة", value: `${deliveryQuantity} قطعة` },
-      { label: "قيمة الدفعة", value: money(amount) }
-    );
-  } else if (source === "التسليمات" && isAdmin && eventType === "UPDATE") {
-    const oldRow = payload.old || {};
-    for (const [key, label] of [["quantity", "كمية التسليم"], ["price_per_piece", "سعر القطعة"]]) {
-      if (oldRow[key] !== undefined && row[key] !== undefined && Number(oldRow[key]) !== Number(row[key])) {
-        const format = key === "quantity" ? (value) => `${Number(value)} قطعة` : (value) => money(value);
-        details.push({ label, value: `من ${format(oldRow[key])} إلى ${format(row[key])}` });
-      }
-    }
-  }
-  if (isAdmin && !["الطلبات ومراحل الإنتاج", "التسليمات"].includes(source)) {
-    const labels = { INSERT: "تم تسجيل", UPDATE: "تم تحديث", DELETE: "تم حذف" };
-    details.push({ label: "الإجراء", value: `${labels[eventType] || "تم تحديث"} ${eventLabel}` });
-  }
-  if (isAdmin && source === "الطلبات ومراحل الإنتاج" && row.signal_type === "order") {
-    initialMessage = `${order ? "تم تعديل طلبية" : "تم تحديث طلبية"}: ${modelName}`;
-  }
-  const commitKey = payload.commit_timestamp || "";
-  const fingerprint = `${source}:${eventType}:${row.id || orderId || crypto.randomUUID()}:${commitKey}`;
-  if (realtimeNotifications.some((notification) => notification.id === fingerprint)) return;
+function recordRealtimeNotification(payload = {}) {
   realtimeNotifications.unshift({
-    id: fingerprint,
-    message: initialMessage,
-    clientMessage,
-    action,
-    eventLabel,
-    source,
-    orderId,
-    modelName,
-    quantity: deliveryQuantity,
-    details,
-    sources: [eventLabel],
-    beforeOrder,
-    beforeDelivery: beforeDelivery ? {
-      quantity: Number(beforeDelivery.quantity || 0),
-      pricePerPiece: Number(beforeDelivery.price_per_piece || 0)
-    } : null,
-    deliveryId: source === "التسليمات" ? row.id || "" : "",
-    eventType,
-    signalType: row.signal_type || "",
-    commitKey,
+    id: crypto.randomUUID(),
+    message: REALTIME_NOTIFICATION_MESSAGE,
     createdAt: payload.commit_timestamp || new Date().toISOString(),
     read: false
   });
@@ -3189,7 +3042,7 @@ async function revalidateSessionAfterAccountChange(session) {
 }
 
 function scheduleRealtimeRefresh(session, source, payload) {
-  recordRealtimeNotification(source, payload);
+  recordRealtimeNotification(payload);
   if (realtimeRefreshTimer) window.clearTimeout(realtimeRefreshTimer);
   realtimeRefreshTimer = window.setTimeout(() => {
     realtimeRefreshTimer = null;
@@ -3216,111 +3069,15 @@ async function refreshFromRealtime(session, source) {
   }
 }
 
-function enrichRealtimeNotifications(session) {
-  for (const notification of realtimeNotifications) {
-    if (notification.enriched) continue;
-    const order = dashboardData.models.find((item) => item.id === notification.orderId);
-    if (order) {
-      notification.modelName = order.name || order.modelNumber || "طلبية";
-      notification.clientMessage = notification.source === "التسليمات"
-        ? `تم تسجيل تسليم لطلبك: ${notification.modelName}`
-        : `تم تحديث طلبك: ${notification.modelName}`;
-    }
-    notification.details = Array.isArray(notification.details) ? notification.details : [];
-    if (session.role === "admin" && notification.source === "التسليمات" && order && notification.eventType !== "INSERT") {
-      const oldDelivery = notification.beforeDelivery;
-      const updatedDelivery = order.deliveryHistory?.find((delivery) => delivery.id === notification.deliveryId);
-      if (notification.eventType === "DELETE" && oldDelivery) {
-        notification.details = [{ label: "الدفعة المحذوفة", value: `${oldDelivery.quantity} قطعة` }];
-      } else if (oldDelivery && updatedDelivery) {
-        const changes = [];
-        if (oldDelivery.quantity !== Number(updatedDelivery.quantity)) {
-          changes.push({ label: "كمية التسليم", value: `من ${oldDelivery.quantity} قطعة إلى ${Number(updatedDelivery.quantity)} قطعة` });
-        }
-        if (oldDelivery.pricePerPiece !== Number(updatedDelivery.price_per_piece)) {
-          changes.push({ label: "سعر القطعة", value: `من ${money(oldDelivery.pricePerPiece)} إلى ${money(updatedDelivery.price_per_piece)}` });
-        }
-        notification.details = changes;
-      }
-    }
-    if (session.role === "admin" && notification.source === "الطلبات ومراحل الإنتاج" && order) {
-      if (notification.signalType === "order") {
-        if (!notification.beforeOrder) {
-          notification.action = "إضافة";
-          notification.eventLabel = "طلبية";
-          notification.details = [
-            { label: "العدد", value: `${Number(order.quantity || 0)} قطعة` },
-            { label: "سعر القطعة", value: money(order.pricePerPiece) }
-          ];
-        } else {
-          const current = {
-            status: order.status,
-            quantity: Number(order.quantity || 0),
-            originalQuantity: Number(order.originalQuantity || 0),
-            pricePerPiece: Number(order.pricePerPiece || 0),
-            deliveredPieces: Number(order.deliveredPieces || 0),
-            expectedDeliveryDate: order.expectedDeliveryDate || "",
-            priority: order.priority || "",
-            workStages: [...(order.workStages || [])]
-          };
-          const fields = [
-            ["status", "حالة الطلب", (value) => value],
-            ["quantity", "العدد المطلوب", (value) => `${value} قطعة`],
-            ["originalQuantity", "العدد الأصلي", (value) => `${value} قطعة`],
-            ["pricePerPiece", "سعر القطعة", (value) => money(value)],
-            ["deliveredPieces", "العدد المسلّم", (value) => `${value} قطعة`],
-            ["expectedDeliveryDate", "تاريخ التسليم المتوقع", (value) => value || "غير محدد"],
-            ["priority", "الأولوية", (value) => value || "عادي"],
-            ["workStages", "الأقسام المطلوبة", (value) => workStageLabels(value).join("، ") || "—"]
-          ];
-          const changes = fields.flatMap(([key, label, format]) =>
-            JSON.stringify(notification.beforeOrder[key]) !== JSON.stringify(current[key])
-              ? [{ label, value: `من ${format(notification.beforeOrder[key])} إلى ${format(current[key])}` }]
-              : []
-          );
-          if (changes.length) {
-            notification.action = "تعديل";
-            notification.eventLabel = "طلبية";
-            notification.details = changes;
-          } else {
-            notification.details = [];
-          }
-        }
-      } else {
-        notification.details = [{ label: "التحديث", value: "تم تحديث مرحلة تشغيل الطلبية." }];
-      }
-    }
-    if (session.role !== "admin") {
-      notification.details = notification.details.filter((detail) => ["حالة الطلب", "الكمية المسلّمة"].includes(detail.label));
-      notification.message = notification.clientMessage || `تم تحديث طلبك: ${notification.modelName || "طلبية"}`;
-    } else {
-      const verb = { INSERT: "إضافة", UPDATE: "تعديل", DELETE: "حذف" }[notification.eventType] || "تحديث";
-      if (notification.source === "التسليمات") {
-        notification.message = notification.eventType === "INSERT"
-          ? `تم تسجيل تسليم: ${notification.modelName} - العدد: ${notification.quantity} - القيمة: ${notification.details.find((detail) => detail.label === "قيمة الدفعة")?.value || money(0)}`
-          : `تم ${verb} تسليم: ${notification.modelName}`;
-      } else if (notification.source === "الطلبات ومراحل الإنتاج" && notification.signalType === "order") {
-        notification.message = `${notification.action === "إضافة" ? "تم إضافة طلبية" : "تم تعديل طلبية"}: ${notification.modelName}`;
-        if (notification.action === "إضافة" && order) {
-          notification.message += ` - العدد: ${Number(order.quantity || 0)} - السعر: ${money(order.pricePerPiece)}`;
-        }
-      } else if (notification.orderId) {
-        notification.message = `تم تحديث ${notification.eventLabel || "الطلبية"}: ${notification.modelName}`;
-      } else {
-        notification.message = `تم ${verb} ${notification.eventLabel || "سجل النظام"}`;
-      }
-    }
-    notification.enriched = true;
-  }
-  filterRealtimeNotifications(session);
-  persistRealtimeNotifications();
+function enrichRealtimeNotifications() {
+  filterRealtimeNotifications();
 }
 
 async function refreshDashboard(session) {
   const data = await readDashboardData(session);
   dashboardData = data;
   const accounts = await readAccounts(session);
-  enrichRealtimeNotifications(session);
+  enrichRealtimeNotifications();
   render(session, data, accounts);
 }
 

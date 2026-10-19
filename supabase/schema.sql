@@ -3013,7 +3013,7 @@ begin
     if coalesce(size_type, '') not in ('men', 'women', 'children') then
       raise exception 'Select a supported size category before selecting sizes.';
     end if;
-    if (size_type in ('men', 'women') and size_name not in ('S', 'M', 'L', 'XL', '2XL', '3XL', '4XL'))
+    if (size_type in ('men', 'women') and size_name not in ('SX', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL'))
        or (size_type = 'children' and size_name not in ('2', '4', '6', '8', '10', '12', '14', '16'))
        or size_name = any(selected_sizes) then
       raise exception 'The selected size list contains an invalid or duplicate size.';
