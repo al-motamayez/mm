@@ -1604,7 +1604,10 @@ as $$
               jsonb_typeof(color_entry.value -> 'sizes') <> 'object'
               or case
                 when jsonb_typeof(color_entry.value -> 'sizes') = 'object'
-                  then jsonb_object_length(color_entry.value -> 'sizes') = 0
+                  then not exists (
+                    select 1
+                    from jsonb_object_keys(color_entry.value -> 'sizes') as size_key(key)
+                  )
                 else false
               end
               or exists (
