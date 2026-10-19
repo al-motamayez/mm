@@ -3853,7 +3853,7 @@ create policy "Users read their own factory records"
       or (collection = 'settlements' and public.has_active_factory_role(array['client']))
       or (collection = 'leaves' and public.has_active_factory_role(array['worker', 'cutting', 'sewing']))
       or (collection = 'tasks' and public.has_active_factory_role(array['worker']))
-      or (collection in ('attendance', 'advances', 'payroll') and public.has_active_factory_role(array['cutting']))
+      or (collection in ('attendance', 'advances', 'payroll') and public.has_active_factory_role(array['cutting', 'sewing']))
     )
   );
 

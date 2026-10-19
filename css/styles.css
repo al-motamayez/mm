@@ -266,6 +266,12 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .incoming-assignment { display: grid; min-width: 210px; gap: 6px; }
 .incoming-assignment select { min-height: 38px; padding: 6px 9px; font-size: 12px; }
 .fabric-form input[type="color"] { width: 100%; min-height: 44px; padding: 5px; }
+.dashboard-section#incoming-fabric .panel-heading, .dashboard-section#owner-fabric .fabric-admin-tools .panel-heading { padding: 8px 11px; }
+.dashboard-section#incoming-fabric .panel-body, .dashboard-section#owner-fabric .fabric-admin-tools .panel-body { padding: 8px 11px; }
+.dashboard-section#incoming-fabric .fabric-form, .dashboard-section#owner-fabric .fabric-admin-tools .fabric-form { gap: 8px; padding: 9px; }
+.dashboard-section#incoming-fabric .incoming-fabric-group { gap: 6px; padding: 8px; }
+.dashboard-section#incoming-fabric .incoming-fabric-color-row { gap: 6px; padding: 6px; }
+.dashboard-section#incoming-fabric th, .dashboard-section#incoming-fabric td, .dashboard-section#owner-fabric th, .dashboard-section#owner-fabric td { padding: 7px 9px; }
 .dashboard-section#clients > .panel { overflow: visible; }
 .dashboard-section#clients .client-account-grid { padding-top: 20px; }
 .dashboard-section#client-accounts { overflow: visible; }
