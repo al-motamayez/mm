@@ -3893,16 +3893,47 @@ function bindWorkerProductionActions(session) {
     event.preventDefault();
     const button = form.querySelector('[type="submit"]');
     const modelName = String(form.elements.modelName.value).trim();
-    const quantity = Number(form.elements.quantity.value);
     const colors = productionColorsFromForm(form);
     const modelNumber = String(form.elements.modelNumber.value).trim();
     const countInputs = [...form.querySelectorAll("[data-worker-production-count]")];
+    const selectedSizes = Object.keys(workerProductionSelectedSizeData(form).counts);
     const totalFromGrid = workerProductionTotalFromForm(form);
-    if (!modelName || modelNumber.length > 120 || !Number.isSafeInteger(quantity) || quantity < 1 || quantity > 2147483647 || !colors.length
-      || colors.some((entry) => !entry.name || !Object.keys(entry.sizes).length)
-      || !workerProductionCountsAreValid(form) || !countInputs.length || quantity !== totalFromGrid
-      || colors.some((entry) => !Object.values(entry.sizes).every((count) => Number.isSafeInteger(count) && count > 0))) {
-      window.factoryUI.toast("أدخل وصف الموديل، واختر لوناً ومقاساً، واكتب اسماً لكل لون وعدداً صحيحاً لكل توزيع.", "error");
+    const quantity = totalFromGrid;
+    form.elements.quantity.value = String(quantity);
+    if (!modelName) {
+      window.factoryUI.toast("أدخل وصف الموديل أو الإنتاج.", "error");
+      form.elements.modelName.focus();
+      return;
+    }
+    if (modelNumber.length > 120) {
+      window.factoryUI.toast("يجب ألا يتجاوز رقم الموديل 120 حرفاً.", "error");
+      form.elements.modelNumber.focus();
+      return;
+    }
+    if (!colors.length || !selectedSizes.length || countInputs.length !== colors.length * selectedSizes.length) {
+      window.factoryUI.toast("اختر لوناً واحداً ومقاساً واحداً على الأقل قبل إدخال التوزيع.", "error");
+      return;
+    }
+    if (colors.some((entry) => !entry.name)) {
+      window.factoryUI.toast("اكتب اسماً لكل لون اخترته.", "error");
+      [...form.querySelectorAll("[data-color-choice] [data-color-name]")]
+        .find((input) => !input.value.trim())
+        ?.focus();
+      return;
+    }
+    if (!workerProductionCountsAreValid(form)) {
+      window.factoryUI.toast("أدخل أعداداً صحيحة من صفر إلى 2,147,483,647 في خانات التوزيع.", "error");
+      countInputs.find((input) => input.value !== "" && (
+        !Number.isSafeInteger(Number(input.value))
+        || Number(input.value) < 0
+        || Number(input.value) > 2147483647
+      ))?.focus();
+      return;
+    }
+    if (quantity < 1 || quantity > 2147483647
+      || colors.some((entry) => !Object.keys(entry.sizes).length
+        || !Object.values(entry.sizes).every((count) => Number.isSafeInteger(count) && count > 0))) {
+      window.factoryUI.toast("أدخل عدداً موجباً واحداً على الأقل لكل لون؛ يُحسب الإجمالي تلقائياً من التوزيع.", "error");
       return;
     }
     button.disabled = true;
