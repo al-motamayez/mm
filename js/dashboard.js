@@ -2236,11 +2236,12 @@ function bindSidebar() {
   const app = document.querySelector(".app-shell");
   const toggle = document.querySelector("[data-sidebar-toggle]");
   const setExpanded = (expanded) => {
+    if (!toggle) return;
     toggle.setAttribute("aria-expanded", String(expanded));
     toggle.setAttribute("aria-label", expanded ? "طي القائمة الجانبية" : "فتح القائمة الجانبية");
   };
   setExpanded(!window.matchMedia("(max-width: 800px)").matches && !sidebarCollapsed);
-  toggle.addEventListener("click", () => {
+  toggle?.addEventListener("click", () => {
     if (window.matchMedia("(max-width: 800px)").matches) {
       app.classList.toggle("drawer-open");
       setExpanded(app.classList.contains("drawer-open"));
@@ -2250,7 +2251,7 @@ function bindSidebar() {
     app.classList.toggle("sidebar-collapsed", sidebarCollapsed);
     setExpanded(!sidebarCollapsed);
   });
-  document.querySelector("[data-sidebar-close]").addEventListener("click", () => {
+  document.querySelector("[data-sidebar-close]")?.addEventListener("click", () => {
     app.classList.remove("drawer-open");
     setExpanded(false);
   });
