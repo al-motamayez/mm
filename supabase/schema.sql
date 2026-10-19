@@ -1656,6 +1656,7 @@ $$;
 create table if not exists public.factory_worker_production_submissions (
   id uuid primary key default gen_random_uuid(),
   worker_id uuid references auth.users (id) on delete set null,
+  parent_submission_id uuid references public.factory_worker_production_submissions (id) on delete restrict,
   worker_name text not null,
   job_title text not null default 'عامل إنتاج',
   model_name text not null check (length(trim(model_name)) between 1 and 160),
@@ -1670,9 +1671,13 @@ create table if not exists public.factory_worker_production_submissions (
 );
 alter table public.factory_worker_production_submissions
   add column if not exists model_number text not null default '',
+  add column if not exists parent_submission_id uuid references public.factory_worker_production_submissions (id) on delete restrict,
   drop constraint if exists factory_worker_production_submissions_model_number_check,
   add constraint factory_worker_production_submissions_model_number_check
-    check (length(model_number) <= 120);
+    check (length(model_number) <= 120),
+  drop constraint if exists factory_worker_production_submissions_parent_not_self_check,
+  add constraint factory_worker_production_submissions_parent_not_self_check
+    check (parent_submission_id is null or parent_submission_id <> id);
 alter table public.factory_worker_production_submissions
   drop constraint if exists factory_worker_production_submissions_colors_check,
   add constraint factory_worker_production_submissions_colors_check
@@ -1703,6 +1708,8 @@ alter table public.factory_finished_goods
     check (public.is_valid_factory_production_colors(colors));
 create index if not exists factory_worker_production_submissions_worker_created_idx
   on public.factory_worker_production_submissions (worker_id, created_at desc);
+create index if not exists factory_worker_production_submissions_parent_idx
+  on public.factory_worker_production_submissions (parent_submission_id);
 create index if not exists factory_worker_production_submissions_status_created_idx
   on public.factory_worker_production_submissions (status, created_at desc);
 create index if not exists factory_finished_goods_customer_confirmed_idx
@@ -4099,7 +4106,16 @@ create policy "Permitted workers submit own production"
     worker_id = auth.uid()
     and status = 'pending'
     and public.factory_production_colors_match_quantity(colors, quantity)
-    and (image_path is null or image_path like ('worker-submissions/' || auth.uid()::text || '/%'))
+    and image_path is not null
+    and image_path like ('worker-submissions/' || auth.uid()::text || '/%')
+    and (
+      parent_submission_id is null
+      or exists (
+        select 1 from public.factory_worker_production_submissions parent
+        where parent.id = factory_worker_production_submissions.parent_submission_id
+          and parent.worker_id = auth.uid()
+      )
+    )
     and exists (
       select 1 from public.users
       where id = auth.uid()
@@ -4117,7 +4133,8 @@ create policy "Permitted workers update own pending production"
     worker_id = auth.uid()
     and status = 'pending'
     and public.factory_production_colors_match_quantity(colors, quantity)
-    and (image_path is null or image_path like ('worker-submissions/' || auth.uid()::text || '/%'))
+    and image_path is not null
+    and image_path like ('worker-submissions/' || auth.uid()::text || '/%')
     and exists (
       select 1 from public.users
       where id = auth.uid()
@@ -4132,7 +4149,16 @@ create policy "Permitted workers update own pending production"
     worker_id = auth.uid()
     and status = 'pending'
     and public.factory_production_colors_match_quantity(colors, quantity)
-    and (image_path is null or image_path like ('worker-submissions/' || auth.uid()::text || '/%'))
+    and image_path is not null
+    and image_path like ('worker-submissions/' || auth.uid()::text || '/%')
+    and (
+      parent_submission_id is null
+      or exists (
+        select 1 from public.factory_worker_production_submissions parent
+        where parent.id = factory_worker_production_submissions.parent_submission_id
+          and parent.worker_id = auth.uid()
+      )
+    )
     and exists (
       select 1 from public.users
       where id = auth.uid()
@@ -4144,7 +4170,7 @@ create policy "Permitted workers update own pending production"
     )
   );
 revoke all on public.factory_worker_production_submissions from public, anon, authenticated;
-grant select, insert, update on public.factory_worker_production_submissions to authenticated;
+grant select, insert, update, delete on public.factory_worker_production_submissions to authenticated;
 drop policy if exists "Admins manage factory finished goods" on public.factory_finished_goods;
 create policy "Admins manage factory finished goods"
   on public.factory_finished_goods for all to authenticated

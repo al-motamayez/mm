@@ -189,7 +189,7 @@ async function readDashboardData(session) {
     : Promise.resolve({ data: [], error: null });
   const productionSubmissionsPromise = ["admin", "worker"].includes(session.role)
     ? supabaseClient.from("factory_worker_production_submissions")
-      .select("id, worker_id, worker_name, job_title, model_name, model_number, quantity, colors, image_path, notes, status, created_at, updated_at")
+      .select("id, worker_id, parent_submission_id, worker_name, job_title, model_name, model_number, quantity, colors, image_path, notes, status, created_at, updated_at")
       .order("created_at", { ascending: false })
     : Promise.resolve({ data: [], error: null });
   const finishedGoodsPromise = ["admin", "client"].includes(session.role)
@@ -246,6 +246,9 @@ async function readDashboardData(session) {
       || ["42P01", "PGRST205"].includes(finishedGoodsResult.error?.code)) {
     throw new Error("جداول تسليم إنتاج العمال غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
   }
+  if (["42703", "PGRST204"].includes(productionSubmissionsResult.error?.code)) {
+    throw new Error("حقول التسليمات التابعة غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+  }
   if (productionSubmissionsResult.error) throw productionSubmissionsResult.error;
   if (finishedGoodsResult.error) throw finishedGoodsResult.error;
   data.payments = payments;
@@ -255,8 +258,10 @@ async function readDashboardData(session) {
   data.fabrics = fabricsResult.data || [];
   data.fabricTransactions = fabricTransactionsResult.data || [];
   data.authEvents = authEventsResult.data || [];
-  data.productionSubmissions = (productionSubmissionsResult.data || []).map((submission) => ({
+  const productionSubmissions = productionSubmissionsResult.data || [];
+  data.productionSubmissions = productionSubmissions.map((submission) => ({
     ...submission,
+    parentSubmission: productionSubmissions.find((parent) => parent.id === submission.parent_submission_id) || null,
     imageUrl: submission.image_path
       ? supabaseClient.storage.from("factory-model-images").getPublicUrl(submission.image_path).data.publicUrl
       : ""
@@ -2117,8 +2122,9 @@ function workerPermissionsView(users) {
 
 function workerProductionReviewView(data) {
   const pending = data.productionSubmissions.filter((item) => item.status === "pending");
+  const rejected = data.productionSubmissions.filter((item) => item.status === "rejected");
   const confirmedRows = data.finishedGoods.map((item) =>
-    `<tr><td>${escapeHtml(item.model_name)}${item.model_number ? `<small class="worker-model-number">${escapeHtml(item.model_number)}</small>` : ""}</td><td>${escapeHtml(data.clients.find((client) => client.id === item.customer_id)?.name || "—")}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.quantity)} قطعة</td><td>${workerProductionColorMarkup(item.colors)}</td><td>${item.imageUrl ? `<a href="${escapeHtml(item.imageUrl)}" target="_blank" rel="noopener">عرض الصورة</a>` : "—"}</td><td>${escapeHtml(item.worker_name)}</td><td>${formatDateTime(item.confirmed_at)}</td></tr>`
+    `<tr><td>${escapeHtml(item.model_name)}${item.model_number ? `<small class="worker-model-number">${escapeHtml(item.model_number)}</small>` : ""}${data.productionSubmissions.find((submission) => submission.id === item.submission_id)?.parent_submission_id ? '<small class="submission-parent-note">تسليم تابع للتسليم السابق</small>' : ""}</td><td>${escapeHtml(data.clients.find((client) => client.id === item.customer_id)?.name || "—")}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.quantity)} قطعة</td><td>${workerProductionColorMarkup(item.colors)}</td><td>${item.imageUrl ? `<a href="${escapeHtml(item.imageUrl)}" target="_blank" rel="noopener"><img class="submission-image-preview" src="${escapeHtml(item.imageUrl)}" alt="صورة ${escapeHtml(item.model_name)}" loading="lazy"></a>` : "—"}</td><td>${escapeHtml(item.worker_name)}</td><td>${formatDateTime(item.confirmed_at)}</td></tr>`
   );
   const orderOptions = data.models.map((order) =>
     `<option value="${escapeHtml(order.id)}" data-customer="${escapeHtml(order.clientId || "")}">${escapeHtml(order.name)} · ${escapeHtml(order.client || "بدون عميل")}</option>`
@@ -2146,7 +2152,7 @@ function workerProductionReviewView(data) {
       `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)}${client.brand_name ? ` · ${escapeHtml(client.brand_name)}` : ""}</option>`
     ).join("");
     return `<form class="worker-submission-review" data-worker-submission="${escapeHtml(item.id)}">
-      <header>${item.imageUrl ? `<a href="${escapeHtml(item.imageUrl)}" target="_blank" rel="noopener"><img src="${escapeHtml(item.imageUrl)}" alt="صورة ${escapeHtml(item.model_name)}" loading="lazy"></a>` : ""}<div><h3>${escapeHtml(item.model_name)}</h3><p>${escapeHtml(item.worker_name)} · ${escapeHtml(item.job_title || "عامل")} · ${formatDateTime(item.created_at)}</p></div></header>
+      <header>${item.imageUrl ? `<a href="${escapeHtml(item.imageUrl)}" target="_blank" rel="noopener"><img src="${escapeHtml(item.imageUrl)}" alt="صورة ${escapeHtml(item.model_name)}" loading="lazy"></a>` : ""}<div><h3>${escapeHtml(item.model_name)}</h3><p>${escapeHtml(item.worker_name)} · ${escapeHtml(item.job_title || "عامل")} · ${formatDateTime(item.created_at)}</p>${item.parentSubmission ? `<span class="submission-parent-note">تسليم تابع للتسليم السابق · ${escapeHtml(item.parentSubmission.model_name)} · ${formatDateTime(item.parentSubmission.created_at)}</span>` : ""}</div></header>
       <div class="form-grid">
         <label class="field"><span>الموديل / الوصف</span><input name="modelName" maxlength="160" value="${escapeHtml(item.model_name)}" required></label>
         <label class="field"><span>رقم الموديل (اختياري)</span><input name="modelNumber" maxlength="120" value="${escapeHtml(item.model_number || "")}"></label>
@@ -2161,13 +2167,16 @@ function workerProductionReviewView(data) {
         <label class="field"><span>ربط بطلبية مسجلة (اختياري)</span><select name="orderId"><option value="">بدون ربط بطلبية</option>${orderOptions}</select></label>
         <label class="field wide"><span>ملاحظات العامل</span><textarea name="notes" rows="2" maxlength="1000">${escapeHtml(item.notes || "")}</textarea></label>
       </div>
-      <div class="form-actions"><button class="row-action" type="button" data-save-production-submission="${escapeHtml(item.id)}">حفظ التعديلات</button><button class="button button-primary" type="button" data-confirm-production-submission="${escapeHtml(item.id)}">تأكيد واستلام النهائي</button></div>
+      <div class="form-actions"><button class="row-action" type="button" data-save-production-submission="${escapeHtml(item.id)}">حفظ التعديلات</button><button class="button button-primary" type="button" data-confirm-production-submission="${escapeHtml(item.id)}">تأكيد واستلام النهائي</button><button class="button button-danger" type="button" data-reject-production-submission="${escapeHtml(item.id)}">رفض الطلب</button><button class="button button-secondary" type="button" data-delete-production-submission="${escapeHtml(item.id)}">حذف الطلب</button></div>
     </form>`;
   });
+  const rejectedCards = rejected.map((item) =>
+    `<article class="worker-submission-card"><header>${item.imageUrl ? `<a href="${escapeHtml(item.imageUrl)}" target="_blank" rel="noopener"><img src="${escapeHtml(item.imageUrl)}" alt="صورة ${escapeHtml(item.model_name)}" loading="lazy"></a>` : ""}<div><h3>${escapeHtml(item.model_name)}</h3><p>${escapeHtml(item.worker_name)} · ${formatDateTime(item.created_at)}</p>${item.parentSubmission ? '<span class="submission-parent-note">تسليم تابع للتسليم السابق</span>' : ""}${statusTag("مرفوض")}</div></header><div class="worker-submission-actions"><button class="button button-secondary" type="button" data-delete-production-submission="${escapeHtml(item.id)}">حذف الطلب</button></div></article>`
+  );
   return `${panel("تسليمات العامل الواردة للمراجعة", cards.length
     ? `<div class="worker-submission-list">${cards.join("")}</div>`
     : '<div class="empty-state">لا توجد تسليمات إنتاج بانتظار مراجعة الإدارة.</div>',
-  "تظهر هنا تسليمات العمال المرسلة للمراجعة. راجع الصورة والأعداد لكل مقاس ولون، ثم اختر العميل واعتمد التسليم.")}${panel("سجل الإنتاج المستلم نهائياً", table(["الموديل","العميل","الكمية","الألوان","الصورة","العامل","تاريخ الاستلام"], confirmedRows))}`;
+  "تظهر هنا تسليمات العمال الجديدة والتابعة. راجع الصورة والأعداد، ثم اعتمد التسليم أو ارفضه.")}${panel("التسليمات المرفوضة", rejectedCards.length ? `<div class="worker-submission-list">${rejectedCards.join("")}</div>` : '<div class="empty-state">لا توجد تسليمات مرفوضة.</div>')}${panel("سجل الإنتاج المستلم نهائياً", table(["الموديل","العميل","الكمية","الألوان","الصورة","العامل","تاريخ الاستلام"], confirmedRows))}`;
 }
 
 function adminView(data, accounts) {
@@ -2573,16 +2582,36 @@ function bindWorkerProductionAllocation(form) {
   });
 }
 
-function workerProductionSubmissionForm() {
-  return `<form id="worker-production-form" class="form-grid worker-production-form">
-    <label class="field"><span>اسم الموديل (اختياري إذا أُدخل الرقم)</span><input name="modelName" maxlength="160"></label>
-    <label class="field"><span>رقم الموديل (اختياري إذا أُدخل الاسم)</span><input name="modelNumber" maxlength="120"></label>
-    ${colorPickerMarkup("", "worker-production", {}, false)}
-    ${sizePickerMarkup("", "worker-production-sizes", false)}
+function workerProductionSubmissionForm(parentSubmission = null) {
+  const formId = parentSubmission ? "" : 'id="worker-production-form"';
+  const parentId = parentSubmission ? `data-parent-submission="${escapeHtml(parentSubmission.id)}"` : "";
+  const prefix = parentSubmission ? `worker-followup-${parentSubmission.id}` : "worker-production";
+  const initialColors = Array.isArray(parentSubmission?.colors) ? parentSubmission.colors : [];
+  const initialHexes = initialColors.map((entry) => typeof entry === "string" ? entry : entry.hex || entry.color || "")
+    .filter((color) => /^#[0-9A-F]{6}$/i.test(color)).join(", ");
+  const initialColorNames = Object.fromEntries(initialColors
+    .filter((entry) => entry && typeof entry === "object" && /^#[0-9A-F]{6}$/i.test(entry.hex || entry.color || ""))
+    .map((entry) => [(entry.hex || entry.color).toUpperCase(), String(entry.name || "")]));
+  const initialSizeNames = [...new Set(initialColors.flatMap((entry) =>
+    entry && typeof entry === "object" && entry.sizes && typeof entry.sizes === "object"
+      ? Object.keys(entry.sizes)
+      : []
+  ))];
+  const initialSizeType = Object.entries(SIZE_OPTIONS).find(([, sizes]) =>
+    initialSizeNames.length && initialSizeNames.every((size) => sizes.includes(size))
+  )?.[0] || "";
+  const initialSizeData = parentSubmission
+    ? JSON.stringify({ type: initialSizeType, counts: Object.fromEntries(initialSizeNames.map((size) => [size, "0"])) })
+    : "";
+  return `<form ${formId} ${parentId} data-worker-production-form class="form-grid worker-production-form${parentSubmission ? " worker-followup-form" : ""}">
+    <label class="field"><span>اسم الموديل (اختياري إذا أُدخل الرقم)</span><input name="modelName" maxlength="160" value="${escapeHtml(parentSubmission?.model_name || "")}"></label>
+    <label class="field"><span>رقم الموديل (اختياري إذا أُدخل الاسم)</span><input name="modelNumber" maxlength="120" value="${escapeHtml(parentSubmission?.model_number || "")}"></label>
+    ${colorPickerMarkup(initialHexes, prefix, initialColorNames, false)}
+    ${sizePickerMarkup(initialSizeData, `${prefix}-sizes`, false)}
     <div class="field worker-production-allocation"><label>الأعداد المسلّمة لكل لون ومقاس</label><small>أدخل عدد القطع في كل خانة؛ يُجمع الإجمالي تلقائياً من تفاصيل التوزيع.</small><div data-worker-production-allocation><p class="muted">اختر لوناً ومقاساً واحداً على الأقل لإدخال عدد كل لون ومقاس.</p></div></div>
     <label class="field"><span>مجموع الأعداد المفصلة (محسوب تلقائياً)</span><input name="quantity" type="number" min="1" step="1" value="0" readonly></label>
     <label class="field wide"><span>صورة الموديل (رفع صورة أو التقاط بالكاميرا)</span><input name="modelImage" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" required><small>إجباري · JPG أو PNG أو WEBP حتى 5 ميجابايت.</small></label>
-    <div class="form-actions"><button class="button button-primary" type="submit">إرسال للإدارة للمراجعة</button></div>
+    <div class="form-actions"><button class="button button-primary" type="submit">${parentSubmission ? "إرسال التسليم التابع للإدارة" : "إرسال للإدارة للمراجعة"}</button></div>
   </form>`;
 }
 
@@ -2592,8 +2621,13 @@ function workerView(data, session) {
   const datedRows = (records, renderColumns) => records.map((record) =>
     `<tr>${renderColumns(record).map((value) => `<td>${escapeHtml(value)}</td>`).join("")}<td>${formatDateTime(record._createdAt || record.created_at || record.date)}</td></tr>`
   );
-  const productionRows = data.productionSubmissions.map((submission) =>
-    `<tr><td>${escapeHtml(submission.model_name)}${submission.model_number ? `<small class="worker-model-number">${escapeHtml(submission.model_number)}</small>` : ""}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(submission.quantity)} قطعة</td><td>${workerProductionColorMarkup(submission.colors)}</td><td>${submission.imageUrl ? `<a href="${escapeHtml(submission.imageUrl)}" target="_blank" rel="noopener">عرض الصورة</a>` : "—"}</td><td>${statusTag(submission.status === "pending" ? "قيد مراجعة الإدارة" : submission.status === "confirmed" ? "تم الاستلام النهائي" : "مرفوض")}</td><td>${formatDateTime(submission.created_at)}</td></tr>`
+  const productionCards = data.productionSubmissions.map((submission) =>
+    `<article class="worker-submission-card">
+      <header>${submission.imageUrl ? `<a href="${escapeHtml(submission.imageUrl)}" target="_blank" rel="noopener"><img src="${escapeHtml(submission.imageUrl)}" alt="صورة الموديل ${escapeHtml(submission.model_name)}" loading="lazy"></a>` : ""}<div><h3>${escapeHtml(submission.model_name)}${submission.model_number ? `<small class="worker-model-number">${escapeHtml(submission.model_number)}</small>` : ""}</h3><p>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(submission.quantity)} قطعة · ${formatDateTime(submission.created_at)}</p><p>${statusTag(submission.status === "pending" ? "قيد مراجعة الإدارة" : submission.status === "confirmed" ? "تم الاستلام النهائي" : "مرفوض")}</p>${submission.parent_submission_id ? '<span class="submission-parent-note">تسليم تابع للتسليم السابق</span>' : ""}</div></header>
+      ${workerProductionColorMarkup(submission.colors)}
+      ${submission.parentSubmission ? `<p class="muted">تابع للتسليم: ${escapeHtml(submission.parentSubmission.model_name)} · ${formatDateTime(submission.parentSubmission.created_at)}</p>` : ""}
+      <details><summary>إضافة تسليم تابع لهذا العمل</summary>${workerProductionSubmissionForm(submission)}</details>
+    </article>`
   );
   const personalAccount = `<section id="personal-account" class="dashboard-section">
     <div class="stats-grid">${stat("سجلات الحضور", data.personalAttendance.length)}${stat("إجمالي السلف", money(data.personalAdvances.reduce((sum, item) => sum + formatAmount(item), 0)))}${stat("إجمالي المصروفات", money(data.workerExpenses.reduce((sum, item) => sum + formatAmount(item), 0)))}${stat("آخر مرتب مسجل", data.personalPayroll[0] ? money(formatAmount(data.personalPayroll[0])) : "—")}</div>
@@ -2612,7 +2646,7 @@ function workerView(data, session) {
       : '<div class="empty-state">لا توجد سجلات مرتب مسجلة لحسابك.</div>')}
   </section>`;
   const production = session.canSubmitProduction
-    ? `<section id="worker-production" class="dashboard-section worker-production-section">${panel("تسليم طلبية / تسليم أعداد", workerProductionSubmissionForm(), "أدخل اسم ورقم الموديل، وحدد المقاسات والأعداد لكل لون، وأرفق صورة الموديل.")}${panel("تسليماتي المرسلة", table(["الموديل","الكمية","تفصيل اللون والمقاس","الصورة","الحالة","وقت الإرسال"], productionRows))}</section>`
+    ? `<section id="worker-production" class="dashboard-section worker-production-section">${panel("تسليم طلبية / تسليم أعداد", workerProductionSubmissionForm(), "أدخل اسم ورقم الموديل، وحدد المقاسات والأعداد لكل لون، وأرفق صورة الموديل.")}${panel("تسليماتي المرسلة", productionCards.length ? `<div class="worker-submission-list">${productionCards.join("")}</div>` : '<div class="empty-state">لا توجد تسليمات إنتاج مرسلة بعد.</div>')}</section>`
     : "";
   return `<section id="dashboard" class="dashboard-section"><div class="stats-grid">${stat("المهام المسندة إليّ", tasks.length, "حسب حساب العامل")}${stat("قيد التنفيذ", tasks.filter((item) => item.status === "قيد التنفيذ").length)}${stat("مهام جديدة", tasks.filter((item) => item.status === "جديدة").length)}${session.jobTitle ? stat("المسمى الوظيفي", escapeHtml(session.jobTitle)) : ""}</div>${panel("مهامي", table(["المهمة","الموديل","الكمية","موعد التسليم","الحالة"], tasks.map((item) => `<tr><td>${escapeHtml(item.task)}</td><td>${escapeHtml(item.model)}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.quantity)}</td><td>${escapeHtml(item.due)}</td><td>${statusTag(item.status)}</td></tr>`)))}</section>${personalAccount}${production}`;
 }
@@ -2715,6 +2749,10 @@ function navigationItems(role, info, session = null) {
   return [{ id: "dashboard", icon: info.icon, label: "لوحة التحكم" }];
 }
 
+function developerFooterMarkup() {
+  return `<footer class="page-footer"><a class="developer-contact" href="https://wa.me/201026230027" target="_blank" rel="noopener noreferrer" aria-label="تواصل عبر واتساب مع ZERO ZERO على الرقم 01026230027"><img class="developer-avatar" src="../assets/developer-avatar.svg" alt=""><span class="developer-name">ZERO ZERO</span><span class="developer-whatsapp"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.2 11.7a8.2 8.2 0 0 1-12.1 7.2L3.5 20l1.2-4.3a8.2 8.2 0 1 1 15.5-4Z"/><path d="M8.1 7.8c.3-.5.6-.5 1-.5h.4c.2 0 .4.1.5.4l.7 1.6c.1.3.1.5-.1.7l-.6.7c-.2.2-.2.4 0 .6.5.9 1.2 1.6 2.2 2.1.2.1.4.1.6-.1l.8-.9c.2-.2.4-.2.7-.1l1.5.7c.3.1.4.3.4.5 0 .4-.2 1.2-.7 1.5-.5.4-1.1.6-1.8.5-1-.1-2.2-.6-3.5-1.7-1.6-1.3-2.6-2.9-2.9-4-.3-1 .1-1.7.8-2Z"/></svg> تواصل عبر واتساب · 01026230027</span></a></footer>`;
+}
+
 function render(session, data, accounts) {
   initializeRealtimeNotifications(session);
   document.querySelectorAll("body > #order-modal").forEach((modal) => modal.remove());
@@ -2740,7 +2778,7 @@ function render(session, data, accounts) {
       <main class="main-content"><header class="topbar"><div class="topbar-leading"><button class="sidebar-toggle" type="button" data-sidebar-toggle aria-controls="sidebar" aria-expanded="true" aria-label="طي القائمة الجانبية"><span aria-hidden="true">☰</span></button><div class="topbar-title"><h1>${info.title}</h1><p>${info.description}</p></div></div><div class="header-brand">${session.role === "admin" ? `<button class="online-indicator${onlineUserCount ? " online" : ""}" data-online-indicator type="button" title="عرض الحسابات المتصلة"><span class="online-indicator-dot"></span><span>متصلون الآن: <strong data-online-count>${onlineUserCount}</strong></span></button>` : ""}<div class="notification-control"><button class="live-notification-button" type="button" data-live-notifications aria-label="إشعارات تحديثات البرنامج" aria-expanded="false"><span aria-hidden="true">🔔</span><span class="live-notification-badge" data-live-badge aria-live="polite" hidden></span></button><section class="notification-dropdown" data-notification-dropdown hidden aria-label="إشعارات تحديثات البرنامج"><header><strong>تحديثات البرنامج</strong><button type="button" class="notification-mark-read" data-mark-notifications-read>تعليم الكل كمقروء</button></header><div class="notification-list" data-notification-list>${notificationListMarkup()}</div></section></div><img class="header-logo" src="../assets/al-motamayez-logo.png" alt="AL-MOTAMAYEZ logo"><div class="brand-copy"><strong>AL-MOTAMAYEZ</strong></div><span class="date-label">${new Intl.DateTimeFormat("ar-EG-u-nu-latn", { dateStyle: "full" }).format(new Date())}</span></div></header>
     ${content}
       ${session.role === "admin" ? '<div class="modal-backdrop" data-online-users-modal hidden><section class="modal-card compact-view-modal" role="dialog" aria-modal="true" aria-labelledby="online-users-title"><button class="modal-close" type="button" data-close-online-users aria-label="إغلاق">×</button><h2 id="online-users-title">المتصلون الآن</h2><div class="online-users-list" data-online-users-list></div><div class="form-actions"><button class="row-action" type="button" data-close-online-users>إغلاق</button></div></section></div>' : ""}
-      <footer class="page-footer">AL-MOTAMAYEZ</footer></main>
+      ${developerFooterMarkup()}</main>
     </div>`;
   activateDashboardView(window.location.hash.slice(1) || "dashboard", false);
   bindSidebar();
@@ -3889,97 +3927,100 @@ function productionColorsFromForm(form) {
 }
 
 function bindWorkerProductionActions(session) {
-  const form = document.querySelector("#worker-production-form");
-  if (!form || !session.canSubmitProduction) return;
-  bindPickers(form);
-  bindWorkerProductionAllocation(form);
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const button = form.querySelector('[type="submit"]');
-    const modelName = String(form.elements.modelName.value).trim();
-    const colors = productionColorsFromForm(form);
-    const modelNumber = String(form.elements.modelNumber.value).trim();
-    const countInputs = [...form.querySelectorAll("[data-worker-production-count]")];
-    const selectedSizes = Object.keys(workerProductionSelectedSizeData(form).counts);
-    const totalFromGrid = workerProductionTotalFromForm(form);
-    const quantity = totalFromGrid;
-    form.elements.quantity.value = String(quantity);
-    if (!modelName && !modelNumber) {
-      window.factoryUI.toast("أدخل اسم الموديل أو رقمه على الأقل.", "error");
-      form.elements.modelName.focus();
-      return;
-    }
-    if (modelName.length > 160 || modelNumber.length > 120) {
-      window.factoryUI.toast("تحقق من طول اسم الموديل (160 حرفاً) ورقمه (120 حرفاً) كحد أقصى.", "error");
-      (modelName.length > 160 ? form.elements.modelName : form.elements.modelNumber).focus();
-      return;
-    }
-    const imageFile = form.elements.modelImage.files?.[0];
-    if (!imageFile) {
-      window.factoryUI.toast("أرفق صورة الموديل قبل إرسال التسليم.", "error");
-      form.elements.modelImage.focus();
-      return;
-    }
-    if (!colors.length || !selectedSizes.length || countInputs.length !== colors.length * selectedSizes.length) {
-      window.factoryUI.toast("اختر لوناً واحداً ومقاساً واحداً على الأقل قبل إدخال التوزيع.", "error");
-      return;
-    }
-    if (!workerProductionCountsAreValid(form) || countInputs.some((input) => !input.value || Number(input.value) < 1)) {
-      window.factoryUI.toast("أدخل عدداً صحيحاً موجباً لكل لون ومقاس.", "error");
-      const invalidCount = countInputs.find((input) => input.value !== "" && (
-        !Number.isSafeInteger(Number(input.value))
-        || Number(input.value) < 1
-        || Number(input.value) > 2147483647
-      ));
-      (invalidCount || countInputs.find((input) => !input.value))?.focus();
-      return;
-    }
-    if (quantity < 1 || quantity > 2147483647
-      || colors.some((entry) => !Object.keys(entry.sizes).length
-        || !Object.values(entry.sizes).every((count) => Number.isSafeInteger(count) && count > 0))) {
-      window.factoryUI.toast("أدخل عدداً موجباً واحداً على الأقل لكل لون؛ يُحسب الإجمالي تلقائياً من التوزيع.", "error");
-      return;
-    }
-    button.disabled = true;
-    let imagePath = null;
-    let submissionSaved = false;
-    try {
-      imagePath = await uploadWorkerProductionImage(session.accountId, imageFile);
-      const { error } = await supabaseClient.from("factory_worker_production_submissions").insert({
-        worker_id: session.accountId,
-        worker_name: session.fullName,
-        job_title: session.jobTitle || "عامل إنتاج",
-        model_name: modelName || modelNumber,
-        model_number: modelNumber,
-        quantity,
-        colors,
-        image_path: imagePath,
-        notes: ""
-      });
-      if (error) throw error;
-      submissionSaved = true;
-      form.reset();
-      setColorPicker(form.querySelector("[data-color-picker]"), "");
-      const sizePicker = form.querySelector("[data-size-picker]");
-      sizePicker.querySelectorAll("[data-size-toggle]").forEach((toggle) => {
-        toggle.setAttribute("aria-pressed", "false");
-        toggle.closest(".size-choice").classList.remove("active");
-      });
-      updateSizePicker(sizePicker);
-      renderWorkerProductionAllocation(form);
-      await refreshDashboard(session);
-      window.factoryUI.toast("تم إرسال التسليم للإدارة للمراجعة.");
-    } catch (error) {
-      if (imagePath && !submissionSaved) {
-        const { error: cleanupError } = await supabaseClient.storage.from("factory-model-images").remove([imagePath]);
-        if (cleanupError) console.warn("تعذر حذف صورة تسليم العامل بعد فشل الحفظ.", cleanupError);
+  if (!session.canSubmitProduction) return;
+  document.querySelectorAll("[data-worker-production-form]").forEach((form) => {
+    bindPickers(form);
+    bindWorkerProductionAllocation(form);
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const button = form.querySelector('[type="submit"]');
+      const modelName = String(form.elements.modelName.value).trim();
+      const colors = productionColorsFromForm(form);
+      const modelNumber = String(form.elements.modelNumber.value).trim();
+      const countInputs = [...form.querySelectorAll("[data-worker-production-count]")];
+      const selectedSizes = Object.keys(workerProductionSelectedSizeData(form).counts);
+      const quantity = workerProductionTotalFromForm(form);
+      form.elements.quantity.value = String(quantity);
+      if (!modelName && !modelNumber) {
+        window.factoryUI.toast("أدخل اسم الموديل أو رقمه على الأقل.", "error");
+        form.elements.modelName.focus();
+        return;
       }
-      reportDashboardFailure(session, submissionSaved
-        ? "تم إرسال التسليم، لكن تعذر تحديث البيانات"
-        : "تعذر إرسال تسليم الإنتاج", error);
-    } finally {
-      button.disabled = false;
-    }
+      if (modelName.length > 160 || modelNumber.length > 120) {
+        window.factoryUI.toast("تحقق من طول اسم الموديل (160 حرفاً) ورقمه (120 حرفاً) كحد أقصى.", "error");
+        (modelName.length > 160 ? form.elements.modelName : form.elements.modelNumber).focus();
+        return;
+      }
+      const imageFile = form.elements.modelImage.files?.[0];
+      if (!imageFile) {
+        window.factoryUI.toast("أرفق صورة الموديل قبل إرسال التسليم.", "error");
+        form.elements.modelImage.focus();
+        return;
+      }
+      if (!colors.length || !selectedSizes.length || countInputs.length !== colors.length * selectedSizes.length) {
+        window.factoryUI.toast("اختر لوناً واحداً ومقاساً واحداً على الأقل قبل إدخال التوزيع.", "error");
+        return;
+      }
+      if (!workerProductionCountsAreValid(form) || countInputs.some((input) => !input.value || Number(input.value) < 1)) {
+        window.factoryUI.toast("أدخل عدداً صحيحاً موجباً لكل لون ومقاس.", "error");
+        const invalidCount = countInputs.find((input) => input.value !== "" && (
+          !Number.isSafeInteger(Number(input.value))
+          || Number(input.value) < 1
+          || Number(input.value) > 2147483647
+        ));
+        (invalidCount || countInputs.find((input) => !input.value))?.focus();
+        return;
+      }
+      if (quantity < 1 || quantity > 2147483647
+        || colors.some((entry) => !Object.keys(entry.sizes).length
+          || !Object.values(entry.sizes).every((count) => Number.isSafeInteger(count) && count > 0))) {
+        window.factoryUI.toast("أدخل عدداً موجباً واحداً على الأقل لكل لون؛ يُحسب الإجمالي تلقائياً من التوزيع.", "error");
+        return;
+      }
+      button.disabled = true;
+      let imagePath = null;
+      let submissionSaved = false;
+      try {
+        imagePath = await uploadWorkerProductionImage(session.accountId, imageFile);
+        const { error } = await supabaseClient.from("factory_worker_production_submissions").insert({
+          worker_id: session.accountId,
+          worker_name: session.fullName,
+          job_title: session.jobTitle || "عامل إنتاج",
+          model_name: modelName || modelNumber,
+          model_number: modelNumber,
+          quantity,
+          colors,
+          image_path: imagePath,
+          notes: "",
+          parent_submission_id: form.dataset.parentSubmission || null
+        });
+        if (error) throw error;
+        submissionSaved = true;
+        form.reset();
+        setColorPicker(form.querySelector("[data-color-picker]"), "");
+        const sizePicker = form.querySelector("[data-size-picker]");
+        sizePicker.querySelectorAll("[data-size-toggle]").forEach((toggle) => {
+          toggle.setAttribute("aria-pressed", "false");
+          toggle.closest(".size-choice").classList.remove("active");
+        });
+        updateSizePicker(sizePicker);
+        renderWorkerProductionAllocation(form);
+        await refreshDashboard(session);
+        window.factoryUI.toast(form.dataset.parentSubmission
+          ? "تم إرسال التسليم التابع كدفعة جديدة مرتبطة بالتسليم السابق."
+          : "تم إرسال التسليم للإدارة للمراجعة.");
+      } catch (error) {
+        if (imagePath && !submissionSaved) {
+          const { error: cleanupError } = await supabaseClient.storage.from("factory-model-images").remove([imagePath]);
+          if (cleanupError) console.warn("تعذر حذف صورة تسليم العامل بعد فشل الحفظ.", cleanupError);
+        }
+        reportDashboardFailure(session, submissionSaved
+          ? "تم إرسال التسليم، لكن تعذر تحديث البيانات"
+          : "تعذر إرسال تسليم الإنتاج", error);
+      } finally {
+        button.disabled = false;
+      }
+    });
   });
 }
 
@@ -4074,6 +4115,64 @@ function bindWorkerProductionReview(session) {
     } catch (error) {
       button.disabled = false;
       reportDashboardFailure(session, "تعذر اعتماد تسليم الإنتاج", error);
+    }
+  }));
+  document.querySelectorAll("[data-reject-production-submission]").forEach((button) => button.addEventListener("click", async () => {
+    const submissionId = button.dataset.rejectProductionSubmission;
+    if (!submissionId || !await window.factoryUI.confirmAction({
+      title: "رفض تسليم الإنتاج",
+      message: "سيُنقل الطلب إلى سجل التسليمات المرفوضة، ولن يضاف إلى مخزون العميل.",
+      confirmLabel: "رفض الطلب"
+    })) return;
+    button.disabled = true;
+    try {
+      const { data, error } = await supabaseClient.from("factory_worker_production_submissions")
+        .update({ status: "rejected", updated_at: new Date().toISOString() })
+        .eq("id", submissionId)
+        .eq("status", "pending")
+        .select("id")
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) throw new Error("لم يعد هذا الطلب بانتظار المراجعة.");
+      await refreshDashboard(session);
+      window.factoryUI.toast("تم رفض طلب التسليم.");
+    } catch (error) {
+      button.disabled = false;
+      reportDashboardFailure(session, "تعذر رفض طلب التسليم", error);
+    }
+  }));
+  document.querySelectorAll("[data-delete-production-submission]").forEach((button) => button.addEventListener("click", async () => {
+    const submissionId = button.dataset.deleteProductionSubmission;
+    if (!submissionId || !await window.factoryUI.confirmAction({
+      title: "حذف تسليم الإنتاج",
+      message: "سيُحذف هذا الطلب نهائياً. لا يمكن حذف تسليم معتمد أو تسليم أصلي له دفعات تابعة.",
+      confirmLabel: "حذف الطلب"
+    })) return;
+    button.disabled = true;
+    try {
+      const { data, error } = await supabaseClient.from("factory_worker_production_submissions")
+        .delete()
+        .eq("id", submissionId)
+        .in("status", ["pending", "rejected"])
+        .select("id, image_path")
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) throw new Error("لم يُحذف الطلب: قد يكون معتمداً أو مرتبطاً بتسليم تابع.");
+      let imageCleanupFailed = false;
+      if (data.image_path) {
+        const { error: imageError } = await supabaseClient.storage.from("factory-model-images").remove([data.image_path]);
+        if (imageError) {
+          imageCleanupFailed = true;
+          console.warn("حُذف سجل التسليم لكن تعذر حذف صورته من التخزين.", imageError);
+        }
+      }
+      await refreshDashboard(session);
+      window.factoryUI.toast(imageCleanupFailed
+        ? "تم حذف الطلب، لكن تعذر حذف الصورة من التخزين."
+        : "تم حذف طلب التسليم.");
+    } catch (error) {
+      button.disabled = false;
+      reportDashboardFailure(session, "تعذر حذف طلب التسليم", error);
     }
   }));
 }
@@ -5434,6 +5533,6 @@ initializeDashboard().catch((error) => {
   const message = adminError
     ? `تعذر تحميل لوحة الإدارة: ${escapeHtml(error.message)}.`
     : "تعذر تحميل البيانات الآن. أعد المحاولة لاحقًا أو تواصل مع الإدارة.";
-  document.querySelector("#app").innerHTML = `<main class="main-content"><div class="notice">${message}</div></main>`;
+  document.querySelector("#app").innerHTML = `<main class="main-content"><div class="notice">${message}</div></main>${developerFooterMarkup()}`;
   window.factoryUI.toast(adminError ? `تعذر تحميل لوحة الإدارة: ${error.message}` : "تعذر تحميل البيانات الآن. أعد المحاولة لاحقًا.", "error");
 });

@@ -19,12 +19,13 @@
 [hidden] { display: none !important; }
 body { min-width: 320px; min-height: 100vh; margin: 0; }
 #app { width: 100%; min-width: 0; }
+.construction-banner { padding: 10px 16px; color: #633b00; background: #fff1c7; border-bottom: 1px solid #e8cc7f; text-align: center; font-size: 14px; font-weight: 700; line-height: 1.6; }
 button, input, select { font: inherit; }
 a { color: inherit; text-decoration: none; }
 button { cursor: pointer; }
 
-.login-page { background: #f5f7f4; }
-.login-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(340px, 0.85fr); min-height: 100vh; }
+.login-page { display: flex; flex-direction: column; background: #f5f7f4; }
+.login-layout { display: grid; flex: 1; grid-template-columns: minmax(0, 1fr) minmax(340px, 0.85fr); min-height: calc(100vh - 120px); }
 .login-intro { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px; padding: 9vw; color: white; background: radial-gradient(ellipse at 15% 80%, #31695b 0, transparent 42%), var(--green-dark); text-align: center; }
 .brand { display: inline-flex; align-items: center; gap: 10px; width: fit-content; font-size: 18px; font-weight: 700; }
 .brand-mark { display: grid; width: 36px; height: 36px; place-items: center; border-radius: 12px; color: var(--green-dark); background: #d9e9df; }
@@ -318,6 +319,17 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .worker-submission-review { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: #fbfcfa; }
 .worker-submission-review > header { display: flex; align-items: center; gap: 12px; }
 .worker-submission-review > header img { width: 100px; height: 100px; border-radius: 8px; object-fit: cover; }
+.worker-submission-card { display: grid; gap: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+.worker-submission-card > header { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.worker-submission-card > header img { width: 88px; height: 88px; border: 1px solid var(--line); border-radius: 8px; object-fit: cover; }
+.submission-image-preview { display: block; width: 78px; height: 78px; border: 1px solid var(--line); border-radius: 7px; object-fit: cover; }
+.worker-submission-card h3, .worker-submission-card p { margin: 0 0 5px; }
+.worker-submission-card details { border-top: 1px solid var(--line); padding-top: 10px; }
+.worker-submission-card summary { color: var(--green); font-weight: 700; cursor: pointer; }
+.worker-followup-form { margin-top: 12px; }
+.submission-parent-note { display: inline-flex; width: fit-content; padding: 5px 9px; border-radius: 7px; color: #684700; background: #fff3cf; font-size: 12px; font-weight: 700; }
+.worker-submission-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.worker-submission-actions .button { min-height: 40px; }
 .worker-submission-review h3, .worker-submission-review p { margin: 0 0 5px; }
 .worker-submission-review .color-picker { grid-column: 1 / -1; }
 .worker-production-allocation { grid-column: 1 / -1; min-width: 0; }
@@ -510,7 +522,13 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .order-progress-step.complete { color: #527764; }
 .order-progress-step.complete::before, .order-progress-step.complete:not(:last-child)::after { border-color: #5b9874; background: #5b9874; }
 .order-progress-step.current { color: var(--green-dark); font-weight: 700; }
-.page-footer { margin-top: 30px; color: #9aa49e; text-align: center; font-size: 11px; }
+.page-footer { display: flex; justify-content: center; margin-top: 30px; padding: 14px 10px; border-top: 1px solid #e1e7e2; color: #65736d; text-align: center; font-size: 11px; }
+.developer-contact { display: inline-flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 8px 11px; max-width: 100%; color: inherit; }
+.developer-contact:hover .developer-name, .developer-contact:focus-visible .developer-name { color: var(--green); }
+.developer-avatar { width: 38px; height: 38px; border: 1px solid #c9d0cb; border-radius: 50%; object-fit: cover; filter: grayscale(1); }
+.developer-name { color: #26362f; font-size: 13px; font-weight: 700; letter-spacing: .08em; }
+.developer-whatsapp { display: inline-flex; align-items: center; gap: 5px; color: #286b45; font-size: 12px; font-weight: 600; }
+.developer-whatsapp svg { width: 20px; height: 20px; flex: 0 0 20px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.6; }
 
 .toast-region { position: fixed; z-index: 1100; top: 20px; left: 20px; display: grid; width: min(390px, calc(100vw - 40px)); gap: 10px; direction: rtl; }
 .toast { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 14px 16px; border: 1px solid #d7e5dc; border-right: 4px solid #39815d; border-radius: 11px; color: #254c37; background: #fff; box-shadow: 0 12px 35px #16372b1c; font-size: 13px; line-height: 1.7; animation: toast-in .2s ease-out; }
@@ -743,6 +761,9 @@ input, select, .modal-form textarea { color: #1d3028; font-size: 16px; }
 }
 
 @media (max-width: 768px) {
+  .construction-banner { padding: 9px 12px; font-size: 13px; }
+  .developer-contact { gap: 7px 9px; }
+  .developer-whatsapp { width: 100%; justify-content: center; }
   .main-content { min-width: 0; padding: 16px 12px 30px; }
   .topbar, .topbar-leading, .clients-toolbar, .section-heading, .form-actions,
   .client-detail-toolbar, .client-detail-actions, .worker-submission-review > header {
@@ -750,13 +771,15 @@ input, select, .modal-form textarea { color: #1d3028; font-size: 16px; }
     gap: 10px;
   }
   .topbar-title, .topbar-title > *, .clients-toolbar > *, .section-heading > *,
-  .form-actions > *, .client-detail-actions > *, .worker-submission-review > header > div {
+  .form-actions > *, .client-detail-actions > *, .worker-submission-review > header > div,
+  .worker-submission-card > header > div {
     min-width: 0;
     max-width: 100%;
     overflow-wrap: anywhere;
   }
   .dashboard-section, .panel, .panel-body, .form-grid, .form-section-grid,
-  .worker-production-form, .worker-submission-review, .worker-submission-review .form-grid {
+  .worker-production-form, .worker-submission-review, .worker-submission-review .form-grid,
+  .worker-submission-card {
     min-width: 0;
     max-width: 100%;
   }
