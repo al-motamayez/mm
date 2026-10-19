@@ -731,15 +731,15 @@ function parseColorNames(value) {
     .map(([color, name]) => [color.toUpperCase(), name.trim().slice(0, 64)]));
 }
 
-function colorPickerMarkup(value, prefix, colorNames = {}) {
+function colorPickerMarkup(value, prefix, colorNames = {}, includeColorNames = true) {
   const selected = String(value || "").split(",").map((color) => color.trim()).filter(Boolean);
   const normalizedNames = Object.fromEntries(Object.entries(colorNames)
     .filter(([color, name]) => /^#[0-9A-F]{6}$/i.test(color) && typeof name === "string")
     .map(([color, name]) => [color.toUpperCase(), name.trim().slice(0, 64)]));
   const choices = [...new Set(selected)].map((color) =>
-    colorPickerChoice(color, normalizedNames[color.toUpperCase()] || "")
+    colorPickerChoice(color, normalizedNames[color.toUpperCase()] || "", includeColorNames)
   ).join("");
-  return `<div class="field color-picker" data-color-picker="${prefix}">
+  return `<div class="field color-picker" data-color-picker="${prefix}" data-color-names-enabled="${includeColorNames}">
     <label>اختيار درجات الألوان</label>
     <div class="color-picker-controls">${customColorControlMarkup("#000000", "data-color-input")}<button class="row-action" type="button" data-add-color>إضافة لون آخر</button></div>
     <div class="color-swatch-list" data-color-list>${choices || '<span class="muted">لم يتم اختيار ألوان بعد.</span>'}</div>
@@ -748,9 +748,12 @@ function colorPickerMarkup(value, prefix, colorNames = {}) {
   </div>`;
 }
 
-function colorPickerChoice(color, name = "") {
+function colorPickerChoice(color, name = "", includeColorName = true) {
   const isHex = /^#[0-9a-f]{6}$/i.test(color);
-  return `<span class="color-choice" data-color-choice="${escapeHtml(color)}"><span class="color-choice-swatch"${isHex ? ` style="--swatch-color:${escapeHtml(color)}"` : ""}></span><span class="color-choice-value">${escapeHtml(color)}</span><label class="color-choice-name"><span>اسم اللون</span><input type="text" data-color-name maxlength="64" value="${escapeHtml(name)}" aria-label="اسم اللون ${escapeHtml(color)}"></label><button type="button" data-remove-color="${escapeHtml(color)}" aria-label="إزالة اللون ${escapeHtml(color)}">×</button></span>`;
+  const nameField = includeColorName
+    ? `<label class="color-choice-name"><span>اسم اللون</span><input type="text" data-color-name maxlength="64" value="${escapeHtml(name)}" aria-label="اسم اللون ${escapeHtml(color)}"></label>`
+    : "";
+  return `<span class="color-choice" data-color-choice="${escapeHtml(color)}"><span class="color-choice-swatch"${isHex ? ` style="--swatch-color:${escapeHtml(color)}"` : ""}></span><span class="color-choice-value">${escapeHtml(color)}</span>${nameField}<button type="button" data-remove-color="${escapeHtml(color)}" aria-label="إزالة اللون ${escapeHtml(color)}">×</button></span>`;
 }
 
 function colorSummaryMarkup(colors, colorNames = {}, colorPlyData = null) {
@@ -811,7 +814,7 @@ function updateColorPicker(root) {
   const selected = choices.map((choice) => choice.dataset.colorChoice);
   root.querySelector("[data-color-value]").value = [...new Set(selected)].join(", ");
   root.querySelector("[data-color-names-value]").value = JSON.stringify(Object.fromEntries(choices
-    .map((choice) => [choice.dataset.colorChoice.toUpperCase(), String(choice.querySelector("[data-color-name]").value).trim()])
+    .map((choice) => [choice.dataset.colorChoice.toUpperCase(), String(choice.querySelector("[data-color-name]")?.value || "").trim()])
     .filter(([, name]) => name)));
 }
 
@@ -842,11 +845,12 @@ function bindPickers(form) {
     const renderColors = () => {
       const list = root.querySelector("[data-color-list]");
       const names = Object.fromEntries([...root.querySelectorAll("[data-color-choice]")].map((choice) =>
-        [choice.dataset.colorChoice, String(choice.querySelector("[data-color-name]").value).trim()]
+        [choice.dataset.colorChoice, String(choice.querySelector("[data-color-name]")?.value || "").trim()]
       ));
       const colors = [...new Set([...root.querySelectorAll("[data-color-choice]")].map((choice) => choice.dataset.colorChoice))];
+      const includeNames = root.dataset.colorNamesEnabled !== "false";
       list.innerHTML = colors.length
-        ? colors.map((color) => colorPickerChoice(color, names[color])).join("")
+        ? colors.map((color) => colorPickerChoice(color, names[color], includeNames)).join("")
         : '<span class="muted">لم يتم اختيار ألوان بعد.</span>';
       colors.forEach((color, index) => {
         const input = list.querySelectorAll("[data-color-name]")[index];
@@ -953,8 +957,9 @@ function setSizePicker(root, value) {
 function setColorPicker(root, value, colorNames = {}) {
   const colors = String(value || "").split(",").map((color) => color.trim()).filter(Boolean);
   const names = parseColorNames(colorNames);
+  const includeNames = root.dataset.colorNamesEnabled !== "false";
   root.querySelector("[data-color-list]").innerHTML = colors.length
-    ? [...new Set(colors)].map((color) => colorPickerChoice(color, names[color.toUpperCase()] || "")).join("")
+    ? [...new Set(colors)].map((color) => colorPickerChoice(color, names[color.toUpperCase()] || "", includeNames)).join("")
     : '<span class="muted">لم يتم اختيار ألوان بعد.</span>';
   updateColorPicker(root);
 }
@@ -2453,7 +2458,7 @@ function workerProductionAllocationGridMarkup(colors, sizeData, existingColors =
     const hex = entry.color.toUpperCase();
     const sizeCells = selectedSizes.map((size) => {
       const count = existingCount(hex, size);
-      return `<td data-label="${escapeHtml(size)}"><input type="number" min="0" max="2147483647" step="1" value="${count}" data-worker-production-count data-color="${escapeHtml(hex)}" data-size="${escapeHtml(size)}" aria-label="${escapeHtml(entry.name || hex)} مقاس ${escapeHtml(size)}" placeholder="0"></td>`;
+      return `<td data-label="${escapeHtml(size)}"><input type="number" min="1" max="2147483647" step="1" value="${count}" data-worker-production-count data-color="${escapeHtml(hex)}" data-size="${escapeHtml(size)}" aria-label="${escapeHtml(entry.name || hex)} مقاس ${escapeHtml(size)}" placeholder="العدد" required></td>`;
     }).join("");
     const rowTotal = selectedSizes.reduce((sum, size) => sum + Number(existingCount(hex, size) || 0), 0);
     return `<tr><th><span class="model-color-chip"><span class="color-breakdown-swatch" style="--swatch-color:${escapeHtml(hex)}"></span><strong>${escapeHtml(entry.name || hex)}</strong></span></th>${sizeCells}<td data-worker-color-total>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(rowTotal)}</td></tr>`;
@@ -2570,14 +2575,13 @@ function bindWorkerProductionAllocation(form) {
 
 function workerProductionSubmissionForm() {
   return `<form id="worker-production-form" class="form-grid worker-production-form">
-    <label class="field"><span>اسم الموديل / وصف الإنتاج</span><input name="modelName" maxlength="160" required></label>
-    <label class="field"><span>رقم الموديل</span><input name="modelNumber" maxlength="120"></label>
-    ${colorPickerMarkup("", "worker-production")}
+    <label class="field"><span>اسم الموديل (اختياري إذا أُدخل الرقم)</span><input name="modelName" maxlength="160"></label>
+    <label class="field"><span>رقم الموديل (اختياري إذا أُدخل الاسم)</span><input name="modelNumber" maxlength="120"></label>
+    ${colorPickerMarkup("", "worker-production", {}, false)}
     ${sizePickerMarkup("", "worker-production-sizes", false)}
     <div class="field worker-production-allocation"><label>الأعداد المسلّمة لكل لون ومقاس</label><small>أدخل عدد القطع في كل خانة؛ يُجمع الإجمالي تلقائياً من تفاصيل التوزيع.</small><div data-worker-production-allocation><p class="muted">اختر لوناً ومقاساً واحداً على الأقل لإدخال عدد كل لون ومقاس.</p></div></div>
     <label class="field"><span>مجموع الأعداد المفصلة (محسوب تلقائياً)</span><input name="quantity" type="number" min="1" step="1" value="0" readonly></label>
-    <label class="field wide"><span>صورة الموديل (رفع صورة أو التقاط بالكاميرا)</span><input name="modelImage" type="file" accept="image/jpeg,image/png,image/webp" capture="environment"><small>اختياري · JPG أو PNG أو WEBP حتى 5 ميجابايت.</small></label>
-    <label class="field wide"><span>ملاحظات</span><textarea name="notes" rows="2" maxlength="1000"></textarea></label>
+    <label class="field wide"><span>صورة الموديل (رفع صورة أو التقاط بالكاميرا)</span><input name="modelImage" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" required><small>إجباري · JPG أو PNG أو WEBP حتى 5 ميجابايت.</small></label>
     <div class="form-actions"><button class="button button-primary" type="submit">إرسال للإدارة للمراجعة</button></div>
   </form>`;
 }
@@ -3900,34 +3904,34 @@ function bindWorkerProductionActions(session) {
     const totalFromGrid = workerProductionTotalFromForm(form);
     const quantity = totalFromGrid;
     form.elements.quantity.value = String(quantity);
-    if (!modelName) {
-      window.factoryUI.toast("أدخل وصف الموديل أو الإنتاج.", "error");
+    if (!modelName && !modelNumber) {
+      window.factoryUI.toast("أدخل اسم الموديل أو رقمه على الأقل.", "error");
       form.elements.modelName.focus();
       return;
     }
-    if (modelNumber.length > 120) {
-      window.factoryUI.toast("يجب ألا يتجاوز رقم الموديل 120 حرفاً.", "error");
-      form.elements.modelNumber.focus();
+    if (modelName.length > 160 || modelNumber.length > 120) {
+      window.factoryUI.toast("تحقق من طول اسم الموديل (160 حرفاً) ورقمه (120 حرفاً) كحد أقصى.", "error");
+      (modelName.length > 160 ? form.elements.modelName : form.elements.modelNumber).focus();
+      return;
+    }
+    const imageFile = form.elements.modelImage.files?.[0];
+    if (!imageFile) {
+      window.factoryUI.toast("أرفق صورة الموديل قبل إرسال التسليم.", "error");
+      form.elements.modelImage.focus();
       return;
     }
     if (!colors.length || !selectedSizes.length || countInputs.length !== colors.length * selectedSizes.length) {
       window.factoryUI.toast("اختر لوناً واحداً ومقاساً واحداً على الأقل قبل إدخال التوزيع.", "error");
       return;
     }
-    if (colors.some((entry) => !entry.name)) {
-      window.factoryUI.toast("اكتب اسماً لكل لون اخترته.", "error");
-      [...form.querySelectorAll("[data-color-choice] [data-color-name]")]
-        .find((input) => !input.value.trim())
-        ?.focus();
-      return;
-    }
-    if (!workerProductionCountsAreValid(form)) {
-      window.factoryUI.toast("أدخل أعداداً صحيحة من صفر إلى 2,147,483,647 في خانات التوزيع.", "error");
-      countInputs.find((input) => input.value !== "" && (
+    if (!workerProductionCountsAreValid(form) || countInputs.some((input) => !input.value || Number(input.value) < 1)) {
+      window.factoryUI.toast("أدخل عدداً صحيحاً موجباً لكل لون ومقاس.", "error");
+      const invalidCount = countInputs.find((input) => input.value !== "" && (
         !Number.isSafeInteger(Number(input.value))
-        || Number(input.value) < 0
+        || Number(input.value) < 1
         || Number(input.value) > 2147483647
-      ))?.focus();
+      ));
+      (invalidCount || countInputs.find((input) => !input.value))?.focus();
       return;
     }
     if (quantity < 1 || quantity > 2147483647
@@ -3940,17 +3944,17 @@ function bindWorkerProductionActions(session) {
     let imagePath = null;
     let submissionSaved = false;
     try {
-      imagePath = await uploadWorkerProductionImage(session.accountId, form.elements.modelImage.files[0]);
+      imagePath = await uploadWorkerProductionImage(session.accountId, imageFile);
       const { error } = await supabaseClient.from("factory_worker_production_submissions").insert({
         worker_id: session.accountId,
         worker_name: session.fullName,
         job_title: session.jobTitle || "عامل إنتاج",
-        model_name: modelName,
+        model_name: modelName || modelNumber,
         model_number: modelNumber,
         quantity,
         colors,
         image_path: imagePath,
-        notes: String(form.elements.notes.value).trim()
+        notes: ""
       });
       if (error) throw error;
       submissionSaved = true;
@@ -4006,7 +4010,7 @@ function bindWorkerProductionReview(session) {
       ? colors
       : colors.map(({ sizes, ...entry }) => entry);
     if (!modelName || modelNumber.length > 120 || !Number.isSafeInteger(quantity) || quantity < 1 || quantity > 2147483647
-      || (hasDistribution && (colors.some((entry) => !entry.name || !Object.keys(entry.sizes).length)
+      || (hasDistribution && (colors.some((entry) => !Object.keys(entry.sizes).length)
         || workerProductionTotalFromForm(form) !== quantity
         || !workerProductionCountsAreValid(form)))) {
       window.factoryUI.toast("تحقق من بيانات الموديل والكمية وتوزيع الألوان والمقاسات قبل الحفظ.", "error");
@@ -4041,7 +4045,7 @@ function bindWorkerProductionReview(session) {
     const hasDistribution = colors.some((entry) => Object.keys(entry.sizes).length);
     if (!modelName || modelNumber.length > 120 || !Number.isSafeInteger(quantity) || quantity < 1 || quantity > 2147483647 || !customerId
       || !hasDistribution
-      || colors.some((entry) => !entry.name || !Object.keys(entry.sizes).length)
+      || colors.some((entry) => !Object.keys(entry.sizes).length)
       || workerProductionTotalFromForm(form) !== quantity
       || !workerProductionCountsAreValid(form)) {
       window.factoryUI.toast("أدخل الموديل والكمية، وأكمل توزيع الألوان والمقاسات، واختر العميل قبل التأكيد.", "error");
