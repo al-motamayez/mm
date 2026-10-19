@@ -1598,7 +1598,60 @@ as $$
           or coalesce(color_entry.value ->> 'hex', '') !~ '^#[0-9A-Fa-f]{6}$'
           or (color_entry.value ? 'name' and jsonb_typeof(color_entry.value -> 'name') <> 'string')
           or length(coalesce(color_entry.value ->> 'name', '')) > 64
+          or (
+            color_entry.value ? 'sizes'
+            and (
+              jsonb_typeof(color_entry.value -> 'sizes') <> 'object'
+              or case
+                when jsonb_typeof(color_entry.value -> 'sizes') = 'object'
+                  then jsonb_object_length(color_entry.value -> 'sizes') = 0
+                else false
+              end
+              or exists (
+                select 1
+                from jsonb_each(
+                  case
+                    when jsonb_typeof(color_entry.value -> 'sizes') = 'object'
+                      then color_entry.value -> 'sizes'
+                    else '{}'::jsonb
+                  end
+                ) as size_entry(key, value)
+                where size_entry.key = ''
+                  or jsonb_typeof(size_entry.value) <> 'number'
+                  or size_entry.value::text !~ '^[1-9][0-9]*$'
+                  or (size_entry.value #>> '{}')::numeric > 2147483647
+              )
+            )
+          )
       )
+  end;
+$$;
+
+create or replace function public.factory_production_colors_match_quantity(color_list jsonb, expected_quantity integer)
+returns boolean
+language sql
+immutable
+parallel safe
+set search_path = public
+as $$
+  select case
+    when expected_quantity is null or expected_quantity < 1
+      or not public.is_valid_factory_production_colors(color_list) then false
+    when not exists (
+      select 1
+      from jsonb_array_elements(color_list) as color_entry(value)
+      where color_entry.value ? 'sizes'
+    ) then true
+    when exists (
+      select 1
+      from jsonb_array_elements(color_list) as color_entry(value)
+      where not (color_entry.value ? 'sizes')
+    ) then false
+    else coalesce((
+      select sum((size_entry.value #>> '{}')::numeric)
+      from jsonb_array_elements(color_list) as color_entry(value)
+      cross join lateral jsonb_each(color_entry.value -> 'sizes') as size_entry(key, value)
+    ), 0) = expected_quantity
   end;
 $$;
 
@@ -1608,6 +1661,7 @@ create table if not exists public.factory_worker_production_submissions (
   worker_name text not null,
   job_title text not null default 'عامل إنتاج',
   model_name text not null check (length(trim(model_name)) between 1 and 160),
+  model_number text not null default '' check (length(model_number) <= 120),
   quantity integer not null check (quantity > 0),
   colors jsonb not null default '[]'::jsonb,
   image_path text,
@@ -1616,6 +1670,11 @@ create table if not exists public.factory_worker_production_submissions (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+alter table public.factory_worker_production_submissions
+  add column if not exists model_number text not null default '',
+  drop constraint if exists factory_worker_production_submissions_model_number_check,
+  add constraint factory_worker_production_submissions_model_number_check
+    check (length(model_number) <= 120);
 alter table public.factory_worker_production_submissions
   drop constraint if exists factory_worker_production_submissions_colors_check,
   add constraint factory_worker_production_submissions_colors_check
@@ -1627,6 +1686,7 @@ create table if not exists public.factory_finished_goods (
   order_id uuid references public.orders (id) on delete set null,
   customer_id uuid not null references public.factory_clients (id) on delete restrict,
   model_name text not null check (length(trim(model_name)) between 1 and 160),
+  model_number text not null default '' check (length(model_number) <= 120),
   quantity integer not null check (quantity > 0),
   colors jsonb not null default '[]'::jsonb,
   image_path text,
@@ -1634,6 +1694,11 @@ create table if not exists public.factory_finished_goods (
   confirmed_by uuid references auth.users (id) on delete set null,
   confirmed_at timestamptz not null default now()
 );
+alter table public.factory_finished_goods
+  add column if not exists model_number text not null default '',
+  drop constraint if exists factory_finished_goods_model_number_check,
+  add constraint factory_finished_goods_model_number_check
+    check (length(model_number) <= 120);
 alter table public.factory_finished_goods
   drop constraint if exists factory_finished_goods_colors_check,
   add constraint factory_finished_goods_colors_check
@@ -4035,6 +4100,7 @@ create policy "Permitted workers submit own production"
   with check (
     worker_id = auth.uid()
     and status = 'pending'
+    and public.factory_production_colors_match_quantity(colors, quantity)
     and (image_path is null or image_path like ('worker-submissions/' || auth.uid()::text || '/%'))
     and exists (
       select 1 from public.users
@@ -4052,6 +4118,7 @@ create policy "Permitted workers update own pending production"
   using (
     worker_id = auth.uid()
     and status = 'pending'
+    and public.factory_production_colors_match_quantity(colors, quantity)
     and (image_path is null or image_path like ('worker-submissions/' || auth.uid()::text || '/%'))
     and exists (
       select 1 from public.users
@@ -4066,6 +4133,7 @@ create policy "Permitted workers update own pending production"
   with check (
     worker_id = auth.uid()
     and status = 'pending'
+    and public.factory_production_colors_match_quantity(colors, quantity)
     and (image_path is null or image_path like ('worker-submissions/' || auth.uid()::text || '/%'))
     and exists (
       select 1 from public.users
@@ -4360,9 +4428,12 @@ begin
 end;
 $$;
 
+drop function if exists public.confirm_factory_worker_production(uuid, text, integer, jsonb, uuid, uuid);
+
 create or replace function public.confirm_factory_worker_production(
   requested_submission_id uuid,
   requested_model_name text,
+  requested_model_number text,
   requested_quantity integer,
   requested_colors jsonb,
   requested_customer_id uuid,
@@ -4382,9 +4453,10 @@ begin
     raise exception 'Only active admins can confirm worker production.';
   end if;
   if length(trim(coalesce(requested_model_name, ''))) not between 1 and 160
+     or length(coalesce(requested_model_number, '')) > 120
      or requested_quantity is null
      or requested_quantity < 1
-     or not public.is_valid_factory_production_colors(requested_colors) then
+     or not public.factory_production_colors_match_quantity(requested_colors, requested_quantity) then
     raise exception 'Enter valid production model, quantity, and colors.';
   end if;
 
@@ -4413,12 +4485,12 @@ begin
   end if;
 
   insert into public.factory_finished_goods (
-    submission_id, order_id, customer_id, model_name, quantity,
+    submission_id, order_id, customer_id, model_name, model_number, quantity,
     colors, image_path, worker_name, confirmed_by
   )
   values (
     current_submission.id, requested_order_id, requested_customer_id,
-    trim(requested_model_name), requested_quantity, requested_colors,
+    trim(requested_model_name), coalesce(requested_model_number, ''), requested_quantity, requested_colors,
     current_submission.image_path, current_submission.worker_name, auth.uid()
   )
   returning id into finished_goods_id;
@@ -4426,6 +4498,7 @@ begin
   update public.factory_worker_production_submissions
   set status = 'confirmed',
       model_name = trim(requested_model_name),
+      model_number = coalesce(requested_model_number, ''),
       quantity = requested_quantity,
       colors = requested_colors,
       updated_at = now()
@@ -4444,10 +4517,12 @@ revoke all on function public.delete_factory_fabric_transaction(uuid) from publi
 grant execute on function public.delete_factory_fabric_transaction(uuid) to authenticated;
 revoke all on function public.transition_factory_sewing_stage(uuid, text) from public, anon, authenticated;
 grant execute on function public.transition_factory_sewing_stage(uuid, text) to authenticated;
-revoke all on function public.confirm_factory_worker_production(uuid, text, integer, jsonb, uuid, uuid) from public, anon, authenticated;
-grant execute on function public.confirm_factory_worker_production(uuid, text, integer, jsonb, uuid, uuid) to authenticated;
+revoke all on function public.confirm_factory_worker_production(uuid, text, text, integer, jsonb, uuid, uuid) from public, anon, authenticated;
+grant execute on function public.confirm_factory_worker_production(uuid, text, text, integer, jsonb, uuid, uuid) to authenticated;
 revoke all on function public.is_valid_factory_production_colors(jsonb) from public, anon, authenticated;
 grant execute on function public.is_valid_factory_production_colors(jsonb) to authenticated;
+revoke all on function public.factory_production_colors_match_quantity(jsonb, integer) from public, anon, authenticated;
+grant execute on function public.factory_production_colors_match_quantity(jsonb, integer) to authenticated;
 
 grant execute on function public.has_active_factory_role(text[]) to authenticated;
 revoke all on function public.owns_factory_client_profile(uuid) from public, anon, authenticated;
@@ -4542,11 +4617,30 @@ create policy "Factory staff upload model images"
   );
 
 drop policy if exists "Factory admins delete model images" on storage.objects;
-create policy "Factory admins delete model images"
+drop policy if exists "Factory staff delete eligible model images" on storage.objects;
+create policy "Factory staff delete eligible model images"
   on storage.objects for delete to authenticated
   using (
     bucket_id = 'factory-model-images'
-    and public.has_active_factory_role(array['admin'])
+    and (
+      public.has_active_factory_role(array['admin'])
+      or (
+        public.has_active_factory_role(array['worker'])
+        and name like ('worker-submissions/' || auth.uid()::text || '/%')
+        and exists (
+          select 1 from public.users
+          where id = auth.uid()
+            and role = 'worker'
+            and status = 'active'
+            and can_submit_production
+        )
+        and not exists (
+          select 1 from public.factory_worker_production_submissions
+          where worker_id = auth.uid()
+            and image_path = name
+        )
+      )
+    )
   );
 
 -- Create this Auth user with email auto-confirmed before running the schema:
