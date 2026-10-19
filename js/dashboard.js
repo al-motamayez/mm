@@ -2256,33 +2256,38 @@ function bindSidebar() {
   });
   const notificationButton = document.querySelector("[data-live-notifications]");
   const notificationDropdown = document.querySelector("[data-notification-dropdown]");
-  notificationButton.addEventListener("click", () => {
-    notificationDropdown.hidden = !notificationDropdown.hidden;
-    notificationButton.setAttribute("aria-expanded", String(!notificationDropdown.hidden));
-  });
-  document.querySelector("[data-mark-notifications-read]").addEventListener("click", () => {
-    realtimeNotifications.forEach((notification) => { notification.read = true; });
-    persistRealtimeNotifications();
-    refreshNotificationDropdown();
-  });
-  notificationDropdown.addEventListener("click", (event) => {
-    const notificationButtonClicked = event.target.closest("[data-notification-id]");
-    if (!notificationButtonClicked) return;
-    const notification = realtimeNotifications.find((entry) => entry.id === notificationButtonClicked.dataset.notificationId);
-    if (notification) {
-      notification.read = true;
+  if (notificationButton && notificationDropdown) {
+    notificationButton.addEventListener("click", () => {
+      notificationDropdown.hidden = !notificationDropdown.hidden;
+      notificationButton.setAttribute("aria-expanded", String(!notificationDropdown.hidden));
+    });
+    document.querySelector("[data-mark-notifications-read]")?.addEventListener("click", () => {
+      realtimeNotifications.forEach((notification) => { notification.read = true; });
       persistRealtimeNotifications();
       refreshNotificationDropdown();
-      notificationDropdown.hidden = true;
-      notificationButton.setAttribute("aria-expanded", "false");
-      showNotificationDetails(notification);
-    }
-  });
-  document.querySelector("[data-online-indicator]").addEventListener("click", () => {
+    });
+    notificationDropdown.addEventListener("click", (event) => {
+      const notificationButtonClicked = event.target.closest("[data-notification-id]");
+      if (!notificationButtonClicked) return;
+      const notification = realtimeNotifications.find((entry) => entry.id === notificationButtonClicked.dataset.notificationId);
+      if (notification) {
+        notification.read = true;
+        persistRealtimeNotifications();
+        refreshNotificationDropdown();
+        notificationDropdown.hidden = true;
+        notificationButton.setAttribute("aria-expanded", "false");
+        if (document.querySelector("[data-notification-details-modal]")) {
+          showNotificationDetails(notification);
+        }
+      }
+    });
+  }
+  document.querySelector("[data-online-indicator]")?.addEventListener("click", () => {
     renderOnlineUsersList();
-    document.querySelector("[data-online-users-modal]").hidden = false;
+    const onlineUsersModal = document.querySelector("[data-online-users-modal]");
+    if (onlineUsersModal) onlineUsersModal.hidden = false;
   });
-  document.querySelector("[data-open-notification-model]").addEventListener("click", (event) => {
+  document.querySelector("[data-open-notification-model]")?.addEventListener("click", (event) => {
     const order = dashboardData.models.find((item) => item.id === event.currentTarget.dataset.orderId);
     if (!order) {
       window.factoryUI.toast("لم يعد الموديل المرتبط بهذا الإشعار متاحاً لحسابك.", "error");
@@ -2299,15 +2304,17 @@ function bindSidebar() {
     modelDetailsModal.hidden = false;
   });
   document.querySelectorAll("[data-close-notification-details]").forEach((button) => button.addEventListener("click", () => {
-    document.querySelector("[data-notification-details-modal]").hidden = true;
+    const detailsModal = document.querySelector("[data-notification-details-modal]");
+    if (detailsModal) detailsModal.hidden = true;
   }));
-  document.querySelector("[data-notification-details-modal]").addEventListener("click", (event) => {
+  document.querySelector("[data-notification-details-modal]")?.addEventListener("click", (event) => {
     if (event.target === event.currentTarget) event.currentTarget.hidden = true;
   });
   document.querySelectorAll("[data-close-online-users]").forEach((button) => button.addEventListener("click", () => {
-    document.querySelector("[data-online-users-modal]").hidden = true;
+    const onlineUsersModal = document.querySelector("[data-online-users-modal]");
+    if (onlineUsersModal) onlineUsersModal.hidden = true;
   }));
-  document.querySelector("[data-online-users-modal]").addEventListener("click", (event) => {
+  document.querySelector("[data-online-users-modal]")?.addEventListener("click", (event) => {
     if (event.target === event.currentTarget) event.currentTarget.hidden = true;
   });
   document.querySelectorAll("[data-sidebar-link]").forEach((link) => link.addEventListener("click", (event) => {
