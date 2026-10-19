@@ -1147,45 +1147,119 @@ function syncCustomColorTrigger(field) {
   trigger.querySelector("[data-custom-color-label]").textContent = color;
 }
 
-const CUSTOM_COLOR_PALETTE = [
-  "#000000", "#FFFFFF", "#808080", "#C0C0C0", "#800000", "#FF0000", "#800080", "#FF00FF",
-  "#008000", "#00FF00", "#808000", "#FFFF00", "#000080", "#0000FF", "#008080", "#00FFFF",
-  "#7C2D12", "#C2410C", "#D97706", "#EAB308", "#4D7C0F", "#16A34A", "#0F766E", "#0891B2",
-  "#1D4ED8", "#6D28D9", "#A21CAF", "#BE123C", "#FCA5A5", "#FED7AA", "#FEF08A", "#BBF7D0",
-  "#A5F3FC", "#BFDBFE", "#DDD6FE", "#FBCFE8"
-];
+function hexToHsv(hex) {
+  const normalized = /^#[0-9A-F]{6}$/i.test(hex) ? hex.slice(1) : "000000";
+  const [red, green, blue] = [0, 2, 4].map((offset) => parseInt(normalized.slice(offset, offset + 2), 16) / 255);
+  const maximum = Math.max(red, green, blue);
+  const minimum = Math.min(red, green, blue);
+  const delta = maximum - minimum;
+  let hue = 0;
+  if (delta) {
+    if (maximum === red) hue = 60 * (((green - blue) / delta) % 6);
+    else if (maximum === green) hue = 60 * ((blue - red) / delta + 2);
+    else hue = 60 * ((red - green) / delta + 4);
+  }
+  return {
+    h: (hue + 360) % 360,
+    s: maximum === 0 ? 0 : delta / maximum,
+    v: maximum
+  };
+}
+
+function hsvToHex({ h, s, v }) {
+  const chroma = v * s;
+  const segment = h / 60;
+  const secondary = chroma * (1 - Math.abs((segment % 2) - 1));
+  const [red, green, blue] = segment < 1 ? [chroma, secondary, 0]
+    : segment < 2 ? [secondary, chroma, 0]
+      : segment < 3 ? [0, chroma, secondary]
+        : segment < 4 ? [0, secondary, chroma]
+          : segment < 5 ? [secondary, 0, chroma]
+            : [chroma, 0, secondary];
+  const offset = v - chroma;
+  return `#${[red, green, blue].map((value) =>
+    Math.round((value + offset) * 255).toString(16).padStart(2, "0")
+  ).join("")}`.toUpperCase();
+}
 
 function bindCustomColorPickers() {
   if (document.querySelector("[data-custom-color-modal]")) return;
-  document.body.insertAdjacentHTML("beforeend", `<div class="modal-backdrop custom-color-modal" data-custom-color-modal hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="custom-color-title"><button class="modal-close" type="button" data-close-custom-color aria-label="إغلاق">×</button><h2 id="custom-color-title">اختيار اللون</h2><p>اختر من الألوان الجاهزة أو أدخل رمز HEX.</p><div class="custom-color-palette">${CUSTOM_COLOR_PALETTE.map((color) => `<button type="button" data-palette-color="${color}" style="--swatch-color:${color}" aria-label="${color}"></button>`).join("")}</div><label class="field"><span>رمز اللون</span><input type="text" data-custom-color-hex maxlength="7" pattern="#[0-9A-Fa-f]{6}" placeholder="#RRGGBB"></label><p class="custom-color-error" data-custom-color-error hidden>أدخل رمز لون بصيغة #RRGGBB.</p><div class="form-actions"><button class="button button-primary" type="button" data-confirm-custom-color>اختيار اللون</button><button class="row-action" type="button" data-close-custom-color>إلغاء</button></div></section></div>`);
+  document.body.insertAdjacentHTML("beforeend", `<div class="modal-backdrop custom-color-modal" data-custom-color-modal hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="custom-color-title"><button class="modal-close" type="button" data-close-custom-color aria-label="إغلاق">×</button><h2 id="custom-color-title">اختيار درجة اللون</h2><p>حرّك المؤشر على عجلة الألوان، ثم اختر درجة التشبع والسطوع.</p><div class="custom-color-controls"><div class="custom-color-wheel-wrap"><div class="custom-color-wheel" data-color-wheel role="slider" aria-label="عجلة الألوان" aria-valuemin="0" aria-valuemax="359" tabindex="0"><i data-color-wheel-marker></i></div></div><div class="custom-color-shade" data-color-shade role="slider" aria-label="تشبع اللون وسطوعه" aria-valuemin="0" aria-valuemax="100" tabindex="0"><i data-color-shade-marker></i></div></div><div class="custom-color-value-row"><i data-color-result-swatch></i><label class="field"><span>رمز اللون HEX</span><input type="text" data-custom-color-hex maxlength="7" pattern="#[0-9A-Fa-f]{6}" placeholder="#RRGGBB"></label></div><p class="custom-color-error" data-custom-color-error hidden>أدخل رمز لون بصيغة #RRGGBB.</p><div class="form-actions"><button class="button button-primary" type="button" data-confirm-custom-color>اختيار اللون</button><button class="row-action" type="button" data-close-custom-color>إلغاء</button></div></section></div>`);
   const modal = document.querySelector("[data-custom-color-modal]");
   let activeTrigger = null;
-  let selectedColor = "#000000";
+  let hsv = { h: 0, s: 0, v: 0 };
   const hexInput = modal.querySelector("[data-custom-color-hex]");
+  const wheel = modal.querySelector("[data-color-wheel]");
+  const shade = modal.querySelector("[data-color-shade]");
+  const errorMessage = modal.querySelector("[data-custom-color-error]");
   const close = () => {
     modal.hidden = true;
     activeTrigger = null;
   };
+  const renderColor = () => {
+    const color = hsvToHex(hsv);
+    hexInput.value = color;
+    shade.style.setProperty("--hue-color", `hsl(${hsv.h} 100% 50%)`);
+    modal.querySelector("[data-color-wheel-marker]").style.setProperty("--hue-angle", `${hsv.h}deg`);
+    modal.querySelector("[data-color-shade-marker]").style.setProperty("--shade-x", `${hsv.s * 100}%`);
+    modal.querySelector("[data-color-shade-marker]").style.setProperty("--shade-y", `${(1 - hsv.v) * 100}%`);
+    modal.querySelector("[data-color-result-swatch]").style.setProperty("--swatch-color", color);
+    wheel.setAttribute("aria-valuenow", String(Math.round(hsv.h)));
+    shade.setAttribute("aria-valuenow", String(Math.round(hsv.s * 100)));
+    errorMessage.hidden = true;
+  };
+  const setHueFromPointer = (event) => {
+    const bounds = wheel.getBoundingClientRect();
+    const x = event.clientX - bounds.left - bounds.width / 2;
+    const y = event.clientY - bounds.top - bounds.height / 2;
+    hsv.h = (Math.atan2(y, x) * 180 / Math.PI + 90 + 360) % 360;
+    renderColor();
+  };
+  const setShadeFromPointer = (event) => {
+    const bounds = shade.getBoundingClientRect();
+    hsv.s = Math.min(1, Math.max(0, (event.clientX - bounds.left) / bounds.width));
+    hsv.v = 1 - Math.min(1, Math.max(0, (event.clientY - bounds.top) / bounds.height));
+    renderColor();
+  };
+  const bindDragPicker = (element, update) => {
+    let dragging = false;
+    element.addEventListener("pointerdown", (event) => {
+      dragging = true;
+      element.setPointerCapture(event.pointerId);
+      update(event);
+      event.preventDefault();
+    });
+    element.addEventListener("pointermove", (event) => {
+      if (dragging) update(event);
+    });
+    element.addEventListener("pointerup", () => { dragging = false; });
+    element.addEventListener("pointercancel", () => { dragging = false; });
+    element.addEventListener("keydown", (event) => {
+      if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) return;
+      event.preventDefault();
+      if (element === wheel) {
+        hsv.h = (hsv.h + (event.key === "ArrowLeft" || event.key === "ArrowDown" ? -1 : 1) + 360) % 360;
+      } else {
+        const step = event.shiftKey ? 0.1 : 0.01;
+        if (event.key === "ArrowLeft") hsv.s = Math.max(0, hsv.s - step);
+        if (event.key === "ArrowRight") hsv.s = Math.min(1, hsv.s + step);
+        if (event.key === "ArrowUp") hsv.v = Math.min(1, hsv.v + step);
+        if (event.key === "ArrowDown") hsv.v = Math.max(0, hsv.v - step);
+      }
+      renderColor();
+    });
+  };
+  bindDragPicker(wheel, setHueFromPointer);
+  bindDragPicker(shade, setShadeFromPointer);
   document.addEventListener("click", (event) => {
     const trigger = event.target.closest("[data-custom-color-trigger]");
     if (trigger) {
       activeTrigger = trigger;
       const field = trigger.parentElement.querySelector('input[type="hidden"]');
-      selectedColor = /^#[0-9A-F]{6}$/i.test(field?.value || "") ? field.value.toUpperCase() : "#000000";
-      hexInput.value = selectedColor;
-      modal.querySelector("[data-custom-color-error]").hidden = true;
-      modal.querySelectorAll("[data-palette-color]").forEach((button) => {
-        button.classList.toggle("selected", button.dataset.paletteColor === selectedColor);
-      });
+      hsv = hexToHsv(field?.value || "#000000");
+      renderColor();
       modal.hidden = false;
       hexInput.focus();
-      return;
-    }
-    const paletteButton = event.target.closest("[data-palette-color]");
-    if (paletteButton && modal.contains(paletteButton)) {
-      selectedColor = paletteButton.dataset.paletteColor;
-      hexInput.value = selectedColor;
-      modal.querySelectorAll("[data-palette-color]").forEach((button) => button.classList.toggle("selected", button === paletteButton));
       return;
     }
     if (event.target.closest("[data-close-custom-color]") || event.target === modal) {
@@ -1195,7 +1269,7 @@ function bindCustomColorPickers() {
     if (event.target.closest("[data-confirm-custom-color]")) {
       const color = hexInput.value.trim().toUpperCase();
       if (!/^#[0-9A-F]{6}$/.test(color) || !activeTrigger) {
-        modal.querySelector("[data-custom-color-error]").hidden = false;
+        errorMessage.hidden = false;
         return;
       }
       const field = activeTrigger.parentElement.querySelector('input[type="hidden"]');
@@ -1211,9 +1285,8 @@ function bindCustomColorPickers() {
   hexInput.addEventListener("input", () => {
     const color = hexInput.value.trim().toUpperCase();
     if (/^#[0-9A-F]{6}$/.test(color)) {
-      selectedColor = color;
-      modal.querySelectorAll("[data-palette-color]").forEach((button) => button.classList.toggle("selected", button.dataset.paletteColor === color));
-      modal.querySelector("[data-custom-color-error]").hidden = true;
+      hsv = hexToHsv(color);
+      renderColor();
     }
   });
   modal.addEventListener("keydown", (event) => {
@@ -2077,10 +2150,10 @@ function workerProductionReviewView(data) {
       <div class="form-actions"><button class="row-action" type="button" data-save-production-submission="${escapeHtml(item.id)}">حفظ التعديلات</button><button class="button button-primary" type="button" data-confirm-production-submission="${escapeHtml(item.id)}">تأكيد واستلام النهائي</button></div>
     </form>`;
   });
-  return `${panel("موديلات تم تسليمها من الإمبلاج", cards.length
+  return `${panel("تسليمات العامل الواردة للمراجعة", cards.length
     ? `<div class="worker-submission-list">${cards.join("")}</div>`
     : '<div class="empty-state">لا توجد تسليمات إنتاج بانتظار مراجعة الإدارة.</div>',
-  "بعد التأكيد يظهر رصيد الإنتاج في حساب العميل المختار.")}${panel("سجل الإنتاج المستلم نهائياً", table(["الموديل","العميل","الكمية","الألوان","الصورة","العامل","تاريخ الاستلام"], confirmedRows))}`;
+  "تظهر هنا تسليمات العمال المرسلة للمراجعة. راجع الصورة والأعداد لكل مقاس ولون، ثم اختر العميل واعتمد التسليم.")}${panel("سجل الإنتاج المستلم نهائياً", table(["الموديل","العميل","الكمية","الألوان","الصورة","العامل","تاريخ الاستلام"], confirmedRows))}`;
 }
 
 function adminView(data, accounts) {
@@ -2364,13 +2437,17 @@ function workerProductionAllocationGridMarkup(colors, sizeData, existingColors =
   const existingByColor = new Map(existingColors
     .filter((entry) => entry && typeof entry === "object")
     .map((entry) => [String(entry.hex || entry.color || "").toUpperCase(), entry.sizes || {}]));
+  const existingCount = (color, size) => {
+    const count = Number(existingByColor.get(color.toUpperCase())?.[size] || 0);
+    return Number.isSafeInteger(count) && count > 0 ? count : "";
+  };
   return `<div class="worker-allocation-scroll"><table class="worker-allocation-table"><thead><tr><th>اللون</th>${selectedSizes.map((size) => `<th>${escapeHtml(size)}</th>`).join("")}<th>الإجمالي</th></tr></thead><tbody>${colors.map((entry) => {
     const hex = entry.color.toUpperCase();
     const sizeCells = selectedSizes.map((size) => {
-      const count = Number(existingByColor.get(hex)?.[size] || 0);
-      return `<td><input type="number" min="0" step="1" value="${count > 0 ? count : ""}" data-worker-production-count data-color="${escapeHtml(hex)}" data-size="${escapeHtml(size)}" aria-label="${escapeHtml(entry.name || hex)} مقاس ${escapeHtml(size)}" placeholder="0"></td>`;
+      const count = existingCount(hex, size);
+      return `<td><input type="number" min="0" max="2147483647" step="1" value="${count}" data-worker-production-count data-color="${escapeHtml(hex)}" data-size="${escapeHtml(size)}" aria-label="${escapeHtml(entry.name || hex)} مقاس ${escapeHtml(size)}" placeholder="0"></td>`;
     }).join("");
-    const rowTotal = selectedSizes.reduce((sum, size) => sum + Number(existingByColor.get(hex)?.[size] || 0), 0);
+    const rowTotal = selectedSizes.reduce((sum, size) => sum + Number(existingCount(hex, size) || 0), 0);
     return `<tr><th><span class="model-color-chip"><span class="color-breakdown-swatch" style="--swatch-color:${escapeHtml(hex)}"></span><strong>${escapeHtml(entry.name || hex)}</strong></span></th>${sizeCells}<td data-worker-color-total>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(rowTotal)}</td></tr>`;
   }).join("")}</tbody><tfoot><tr><th>الإجمالي</th>${selectedSizes.map((size) => `<td data-worker-size-total="${escapeHtml(size)}">${new Intl.NumberFormat("ar-EG-u-nu-latn").format(colors.reduce((sum, entry) => sum + Number(existingByColor.get(entry.color.toUpperCase())?.[size] || 0), 0))}</td>`).join("")}<td data-worker-grand-total>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(existingColors.reduce((sum, entry) => sum + Object.values(entry?.sizes || {}).reduce((subtotal, count) => subtotal + Number(count || 0), 0), 0))}</td></tr></tfoot></table></div>`;
 }
@@ -2419,7 +2496,10 @@ function updateWorkerProductionAllocationTotals(form) {
   const cells = [...form.querySelectorAll("[data-worker-production-count]")];
   const colors = workerProductionSelectedColors(form);
   const sizes = workerProductionSelectedSizeData(form).counts;
-  const grandTotal = cells.reduce((sum, input) => sum + (Number.isSafeInteger(Number(input.value)) ? Number(input.value) : 0), 0);
+  const grandTotal = cells.reduce((sum, input) => {
+    const count = input.value === "" ? 0 : Number(input.value);
+    return sum + (Number.isSafeInteger(count) && count >= 0 ? count : 0);
+  }, 0);
   colors.forEach((color) => {
     const total = cells.filter((input) => input.dataset.color === color.color)
       .reduce((sum, input) => sum + Number(input.value || 0), 0);
@@ -2460,6 +2540,11 @@ function bindWorkerProductionAllocation(form) {
   renderWorkerProductionAllocation(form);
   form.addEventListener("input", (event) => {
     if (event.target.matches("[data-worker-production-count]")) {
+      if (!workerProductionCountsAreValid(form)) {
+        event.target.setCustomValidity("أدخل عدداً صحيحاً من صفر إلى 2,147,483,647.");
+      } else {
+        event.target.setCustomValidity("");
+      }
       updateWorkerProductionAllocationTotals(form);
     } else if (event.target.matches("[data-color-name]")) {
       renderWorkerProductionAllocation(form);
@@ -2481,8 +2566,8 @@ function workerProductionSubmissionForm() {
     <label class="field"><span>رقم الموديل</span><input name="modelNumber" maxlength="120"></label>
     ${colorPickerMarkup("", "worker-production")}
     ${sizePickerMarkup("", "worker-production-sizes", false)}
-    <div class="field worker-production-allocation"><label>الأعداد المسلّمة لكل لون ومقاس</label><div data-worker-production-allocation><p class="muted">اختر لوناً ومقاساً واحداً على الأقل لإدخال عدد كل لون ومقاس.</p></div></div>
-    <label class="field"><span>إجمالي القطع المسلّمة</span><input name="quantity" type="number" min="1" step="1" value="0" readonly></label>
+    <div class="field worker-production-allocation"><label>الأعداد المسلّمة لكل لون ومقاس</label><small>أدخل عدد القطع في كل خانة؛ يُجمع الإجمالي تلقائياً من تفاصيل التوزيع.</small><div data-worker-production-allocation><p class="muted">اختر لوناً ومقاساً واحداً على الأقل لإدخال عدد كل لون ومقاس.</p></div></div>
+    <label class="field"><span>مجموع الأعداد المفصلة (محسوب تلقائياً)</span><input name="quantity" type="number" min="1" step="1" value="0" readonly></label>
     <label class="field wide"><span>صورة الموديل (رفع صورة أو التقاط بالكاميرا)</span><input name="modelImage" type="file" accept="image/jpeg,image/png,image/webp" capture="environment"><small>اختياري · JPG أو PNG أو WEBP حتى 5 ميجابايت.</small></label>
     <label class="field wide"><span>ملاحظات</span><textarea name="notes" rows="2" maxlength="1000"></textarea></label>
     <div class="form-actions"><button class="button button-primary" type="submit">إرسال للإدارة للمراجعة</button></div>
@@ -2515,7 +2600,7 @@ function workerView(data, session) {
       : '<div class="empty-state">لا توجد سجلات مرتب مسجلة لحسابك.</div>')}
   </section>`;
   const production = session.canSubmitProduction
-    ? `<section id="worker-production" class="dashboard-section worker-production-section">${panel("تسليم طلبية / تسليم أعداد", workerProductionSubmissionForm(), "أدخل رقم واسم الموديل، ثم عدد كل لون في كل مقاس. يُرسل التسليم للإدارة للمراجعة ولا يظهر في حساب العميل قبل التأكيد النهائي.")}${panel("تسليماتي للإدارة", table(["الموديل","الكمية","تفصيل اللون والمقاس","الصورة","الحالة","وقت الإرسال"], productionRows))}</section>`
+    ? `<section id="worker-production" class="dashboard-section worker-production-section">${panel("تسليم طلبية / تسليم أعداد", workerProductionSubmissionForm(), "أدخل اسم ورقم الموديل، وحدد المقاسات والأعداد لكل لون، وأرفق صورة الموديل.")}${panel("تسليماتي المرسلة", table(["الموديل","الكمية","تفصيل اللون والمقاس","الصورة","الحالة","وقت الإرسال"], productionRows))}</section>`
     : "";
   return `<section id="dashboard" class="dashboard-section"><div class="stats-grid">${stat("المهام المسندة إليّ", tasks.length, "حسب حساب العامل")}${stat("قيد التنفيذ", tasks.filter((item) => item.status === "قيد التنفيذ").length)}${stat("مهام جديدة", tasks.filter((item) => item.status === "جديدة").length)}${session.jobTitle ? stat("المسمى الوظيفي", escapeHtml(session.jobTitle)) : ""}</div>${panel("مهامي", table(["المهمة","الموديل","الكمية","موعد التسليم","الحالة"], tasks.map((item) => `<tr><td>${escapeHtml(item.task)}</td><td>${escapeHtml(item.model)}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.quantity)}</td><td>${escapeHtml(item.due)}</td><td>${statusTag(item.status)}</td></tr>`)))}</section>${personalAccount}${production}`;
 }

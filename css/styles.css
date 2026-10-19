@@ -299,11 +299,19 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .color-ply-row .field { display: grid; gap: 7px; }
 .color-ply-row .custom-color-trigger { min-width: 100px; }
 .custom-color-trigger { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 40px; padding: 6px 10px; border: 1px solid #aebfb3; border-radius: 8px; color: #263b31; background: #fff; cursor: pointer; }
-.custom-color-trigger i, .custom-color-palette button { display: inline-block; width: 24px; height: 24px; border: 1px solid #aeb5b1; border-radius: 5px; background: var(--swatch-color); }
+.custom-color-trigger i, [data-color-result-swatch] { display: inline-block; width: 24px; height: 24px; border: 1px solid #aeb5b1; border-radius: 5px; background: var(--swatch-color); }
 .custom-color-modal .modal-card { width: min(460px, 100%); }
-.custom-color-palette { display: grid; grid-template-columns: repeat(8, minmax(24px, 1fr)); gap: 8px; margin: 14px 0; }
-.custom-color-palette button { width: 100%; min-height: 34px; cursor: pointer; }
-.custom-color-palette button.selected { outline: 3px solid var(--green); outline-offset: 2px; }
+.custom-color-controls { display: grid; grid-template-columns: 176px minmax(160px, 1fr); align-items: center; justify-content: center; gap: 22px; margin: 18px auto; }
+.custom-color-wheel-wrap { display: grid; place-items: center; }
+.custom-color-wheel { position: relative; width: 166px; aspect-ratio: 1; border: 1px solid #d5ddd8; border-radius: 50%; background: conic-gradient(#ff0000 0deg, #ffff00 60deg, #00ff00 120deg, #00ffff 180deg, #0000ff 240deg, #ff00ff 300deg, #ff0000 360deg); cursor: crosshair; touch-action: none; }
+.custom-color-wheel::after { position: absolute; inset: 19%; border: 1px solid #d5ddd8; border-radius: 50%; background: var(--surface, #fff); content: ""; pointer-events: none; }
+.custom-color-wheel [data-color-wheel-marker] { position: absolute; z-index: 1; top: 50%; left: 50%; width: 18px; height: 18px; border: 2px solid #fff; border-radius: 50%; background: transparent; box-shadow: 0 0 0 1px #17231c; transform: rotate(var(--hue-angle)) translateY(-70px) rotate(calc(0deg - var(--hue-angle))); pointer-events: none; }
+.custom-color-shade { position: relative; width: 100%; min-height: 166px; border: 1px solid #b9c3bd; border-radius: 9px; background-color: var(--hue-color); background-image: linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, transparent); cursor: crosshair; touch-action: none; }
+.custom-color-shade [data-color-shade-marker] { position: absolute; top: var(--shade-y); left: var(--shade-x); width: 16px; height: 16px; border: 2px solid #fff; border-radius: 50%; box-shadow: 0 0 0 1px #17231c; transform: translate(-50%, -50%); pointer-events: none; }
+.custom-color-value-row { display: grid; grid-template-columns: auto minmax(140px, 1fr); align-items: end; gap: 12px; }
+.custom-color-value-row [data-color-result-swatch] { width: 42px; height: 42px; border-radius: 8px; }
+.custom-color-modal [data-custom-color-hex] { font-family: ui-monospace, Consolas, monospace; direction: ltr; }
+.custom-color-wheel:focus-visible, .custom-color-shade:focus-visible { outline: 3px solid var(--green); outline-offset: 4px; }
 .custom-color-error { color: #a13b2f !important; }
 .worker-production-form, .worker-submission-review .form-grid { padding: 12px; }
 .worker-submission-list { display: grid; gap: 12px; }
@@ -322,6 +330,11 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .worker-model-number { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; }
 .permission-toggle { display: flex; align-items: center; gap: 8px; }
 .permission-toggle input { width: 18px; min-height: 18px; }
+@media (max-width: 520px) {
+  .custom-color-controls { grid-template-columns: 1fr; gap: 16px; }
+  .custom-color-wheel { width: 156px; }
+  .custom-color-shade { min-height: 150px; }
+}
 .color-ply-remove { margin-bottom: 2px; }
 .color-breakdown-swatch { display: inline-block; width: 16px; height: 16px; margin-inline-end: 7px; border: 1px solid #89958e; border-radius: 50%; background: var(--swatch-color); vertical-align: middle; }
 .model-color-list { display: flex; flex-wrap: wrap; gap: 6px; }

@@ -1640,11 +1640,6 @@ as $$
   select case
     when expected_quantity is null or expected_quantity < 1
       or not public.is_valid_factory_production_colors(color_list) then false
-    when not exists (
-      select 1
-      from jsonb_array_elements(color_list) as color_entry(value)
-      where color_entry.value ? 'sizes'
-    ) then true
     when exists (
       select 1
       from jsonb_array_elements(color_list) as color_entry(value)
