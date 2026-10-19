@@ -629,6 +629,7 @@ set model_name = coalesce(
       when 'تم القص' then 'تم القص'
       when 'معلق - في انتظار الخياطة' then 'معلق - في انتظار الخياطة'
       when 'في الخياطة' then 'في الخياطة'
+      when 'متاح للإمبلاج / التعبئة' then 'متاح للإمبلاج / التعبئة'
       when 'في الخط' then 'في الخياطة'
       when 'تحت التصنيع' then 'قيد الفرش'
       when 'قيد الإنتاج' then 'قيد الفرش'
@@ -659,7 +660,7 @@ alter table public.orders
     status in (
       'قيد الانتظار', 'معلق', 'تحت الإنشاء', 'قيد الفرش',
       'تم الفرش / جاهز للقص', 'تم القص', 'معلق - في انتظار الخياطة',
-      'في الخياطة', 'جاهز للتسليم', 'تم التسليم', 'تم التسليم بالكامل',
+      'في الخياطة', 'متاح للإمبلاج / التعبئة', 'جاهز للتسليم', 'تم التسليم', 'تم التسليم بالكامل',
       'تم التسليم والإغلاق'
     )
   );
@@ -1037,7 +1038,7 @@ begin
     or requested_status not in (
       'قيد الانتظار', 'معلق', 'تحت الإنشاء', 'قيد الفرش',
       'تم الفرش / جاهز للقص', 'تم القص', 'معلق - في انتظار الخياطة',
-      'في الخياطة', 'جاهز للتسليم', 'تم التسليم'
+      'في الخياطة', 'متاح للإمبلاج / التعبئة', 'جاهز للتسليم', 'تم التسليم'
     ) then
     raise exception 'Invalid factory order data.';
   end if;
@@ -1060,6 +1061,11 @@ begin
     nullif(trim(coalesce(requested_model_name, '')), ''),
     nullif(trim(coalesce(requested_model_number, '')), '')
   );
+
+  if requested_order_id is null
+     and requested_status in ('معلق - في انتظار الخياطة', 'في الخياطة', 'متاح للإمبلاج / التعبئة') then
+    raise exception 'New orders cannot skip the cutting and sewing handoff workflow.';
+  end if;
 
   if requested_order_id is null then
     insert into public.orders (
@@ -1119,6 +1125,14 @@ begin
     if current_status in ('مكتمل', 'تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق')
        and requested_status is distinct from current_status then
       raise exception 'A delivered factory order must remain closed.';
+    end if;
+    if current_status is distinct from requested_status
+       and requested_status in ('معلق - في انتظار الخياطة', 'في الخياطة', 'متاح للإمبلاج / التعبئة') then
+      raise exception 'Use the production workflow controls to move an order into sewing or finishing.';
+    end if;
+    if current_status in ('معلق - في انتظار الخياطة', 'في الخياطة', 'متاح للإمبلاج / التعبئة')
+       and requested_status is distinct from current_status then
+      raise exception 'Production workflow statuses can only be changed through their stage controls.';
     end if;
     if exists (
       select 1 from public.orders
@@ -1200,13 +1214,6 @@ begin
       update public.factory_deliveries
       set price_per_piece = requested_price_per_piece
       where order_id = requested_order_id;
-    end if;
-    if requested_status = 'في الخياطة' then
-      update public.production_stages
-      set status = 'قيد التنفيذ',
-          updated_at = now()
-      where order_id = requested_order_id
-        and stage_name = 'sewing';
     end if;
     saved_order_id := requested_order_id;
   end if;
@@ -4065,6 +4072,133 @@ begin
 end;
 $$;
 
+create or replace function public.transition_factory_sewing_stage(
+  requested_order_id uuid,
+  requested_action text
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  current_order public.orders%rowtype;
+  current_sewing_stage public.production_stages%rowtype;
+  next_stage_name text;
+begin
+  if requested_order_id is null
+     or requested_action is null
+     or requested_action not in ('make_available', 'start', 'finish') then
+    raise exception 'A valid order and sewing action are required.';
+  end if;
+  if requested_action = 'make_available'
+     and not public.is_active_factory_admin() then
+    raise exception 'Only active admins can make sewing orders available.';
+  elsif requested_action in ('start', 'finish')
+     and not public.has_active_factory_role(array['sewing']) then
+    raise exception 'Only active sewing supervisors can update sewing stages.';
+  end if;
+
+  select *
+    into current_order
+  from public.orders
+  where id = requested_order_id
+  for update;
+  if not found
+     or current_order.archived_at is not null
+     or current_order.status in ('مكتمل', 'تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق') then
+    raise exception 'The active factory order was not found.';
+  end if;
+  if not coalesce('sewing' = any(current_order.work_stages), false) then
+    raise exception 'This order does not include a sewing stage.';
+  end if;
+
+  select *
+    into current_sewing_stage
+  from public.production_stages
+  where order_id = requested_order_id
+    and stage_name = 'sewing'
+  for update;
+  if not found then
+    raise exception 'The sewing stage for this order was not found.';
+  end if;
+
+  if requested_action = 'make_available' then
+    if current_order.status not in ('تم القص', 'معلق - في انتظار الخياطة')
+       or current_sewing_stage.status in ('متاح للخياطة', 'قيد الخياطة', 'مكتمل') then
+      raise exception 'Only a cut order that has not entered sewing can be made available.';
+    end if;
+    if not exists (
+      select 1
+      from public.production_stages
+      where order_id = requested_order_id
+        and stage_name = 'cutting'
+        and status = 'مكتمل'
+    ) then
+      raise exception 'Finish cutting before making this order available for sewing.';
+    end if;
+
+    update public.production_stages
+    set status = 'متاح للخياطة',
+        updated_at = now()
+    where id = current_sewing_stage.id;
+    update public.orders
+    set status = 'معلق - في انتظار الخياطة'
+    where id = requested_order_id;
+    return;
+  end if;
+
+  if requested_action = 'start' then
+    if current_sewing_stage.status <> 'متاح للخياطة' then
+      raise exception 'Only an available sewing order can be started.';
+    end if;
+    update public.production_stages
+    set status = 'قيد الخياطة',
+        updated_at = now()
+    where id = current_sewing_stage.id;
+    update public.orders
+    set status = 'في الخياطة'
+    where id = requested_order_id;
+    return;
+  end if;
+
+  if current_sewing_stage.status <> 'قيد الخياطة' then
+    raise exception 'Only a sewing order in progress can be completed.';
+  end if;
+
+  select selected_stage.stage_name
+    into next_stage_name
+  from unnest(current_order.work_stages) with ordinality as selected_stage(stage_name, stage_position)
+  where selected_stage.stage_name in ('finishing', 'ironing', 'packaging')
+  order by selected_stage.stage_position
+  limit 1;
+
+  update public.production_stages
+  set status = 'مكتمل',
+      completed_quantity = target_quantity,
+      updated_at = now()
+  where id = current_sewing_stage.id;
+
+  if next_stage_name is not null then
+    update public.production_stages
+    set status = 'متاح للإمبلاج / التعبئة',
+        updated_at = now()
+    where order_id = requested_order_id
+      and stage_name = next_stage_name;
+    if not found then
+      raise exception 'The next production stage for this order was not found.';
+    end if;
+    update public.orders
+    set status = 'متاح للإمبلاج / التعبئة'
+    where id = requested_order_id;
+  else
+    update public.orders
+    set status = 'جاهز للتسليم'
+    where id = requested_order_id;
+  end if;
+end;
+$$;
+
 revoke all on function public.delete_factory_payment(uuid) from public, anon, authenticated;
 grant execute on function public.delete_factory_payment(uuid) to authenticated;
 revoke all on function public.delete_factory_cash_transaction(uuid) from public, anon, authenticated;
@@ -4073,6 +4207,8 @@ revoke all on function public.update_factory_cash_transaction(uuid, text, text, 
 grant execute on function public.update_factory_cash_transaction(uuid, text, text, text, numeric, text, timestamptz) to authenticated;
 revoke all on function public.delete_factory_fabric_transaction(uuid) from public, anon, authenticated;
 grant execute on function public.delete_factory_fabric_transaction(uuid) to authenticated;
+revoke all on function public.transition_factory_sewing_stage(uuid, text) from public, anon, authenticated;
+grant execute on function public.transition_factory_sewing_stage(uuid, text) to authenticated;
 
 grant execute on function public.has_active_factory_role(text[]) to authenticated;
 revoke all on function public.create_factory_order_stages() from public, anon, authenticated;

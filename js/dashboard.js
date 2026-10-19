@@ -429,12 +429,21 @@ async function readDashboardData(session) {
     .filter((stage) => stageNames.get(stage.stage_name) === "sewing")
     .map((stage) => ({
       id: stage.id,
+      order: stage.order_id,
       line: stage.line_name || "—",
       model: ordersById.get(stage.order_id)?.model_name || ordersById.get(stage.order_id)?.model_number || "موديل غير محدد",
+      modelNumber: ordersById.get(stage.order_id)?.model_number || "",
+      client: clientsById.get(ordersById.get(stage.order_id)?.customer_id)?.name || "",
+      modelImageUrl: ordersById.get(stage.order_id)?.model_image_url || "",
+      colors: ordersById.get(stage.order_id)?.colors || "",
+      sizes: ordersById.get(stage.order_id)?.sizes || "",
+      workStages: ordersById.get(stage.order_id)?.work_stages || [],
+      technicalNotes: stage.technical_notes || "",
+      orderStatus: ordersById.get(stage.order_id)?.status || "",
       supervisor: stage.worker_name || "—",
       target: stage.target_quantity || ordersById.get(stage.order_id)?.total_pieces || 0,
       produced: stage.completed_quantity || 0,
-      status: stage.status
+      status: stage.status === "قيد التنفيذ" ? "قيد الخياطة" : stage.status
     }));
 
   data.users = session.role === "admin" ? await readUsers() : [];
@@ -1059,8 +1068,8 @@ function formatRecordDate(value) {
 
 function statusClass(value) {
   if (String(value).startsWith("قيد الفرش")
-    || ["قيد المراجعة", "قيد التنفيذ", "قيد الإنتاج", "قيد الانتظار", "معلق", "تحت الإنشاء", "تم الفرش / جاهز للقص", "معلق - في انتظار الخياطة", "جار العمل"].includes(value)) return "warning";
-  if (["جديدة", "جاهز للتسليم", "تم القص", "في الخياطة"].includes(value)) return "info";
+    || ["قيد المراجعة", "قيد التنفيذ", "قيد الخياطة", "قيد الإنتاج", "قيد الانتظار", "معلق", "تحت الإنشاء", "تم الفرش / جاهز للقص", "معلق - في انتظار الخياطة", "جار العمل"].includes(value)) return "warning";
+  if (["جديدة", "جاهز للتسليم", "تم القص", "في الخياطة", "متاح للخياطة", "متاح للإمبلاج / التعبئة"].includes(value)) return "info";
   if (value === "جاهز للتسليم" || value === "مكتمل" || value === "تم التسليم" || value === "تم التسليم بالكامل" || value === "تم التسليم والإغلاق") return "";
   return "muted";
 }
@@ -1171,7 +1180,7 @@ function orderCards(models, withActions = false) {
 }
 
 function orderProgress(status) {
-  const stages = ["قيد الانتظار", "قيد الفرش", "تم الفرش / جاهز للقص", "تم القص", "معلق - في انتظار الخياطة", "في الخياطة", "جاهز للتسليم", "تم التسليم", "تم التسليم بالكامل", "تم التسليم والإغلاق"];
+  const stages = ["قيد الانتظار", "قيد الفرش", "تم الفرش / جاهز للقص", "تم القص", "معلق - في انتظار الخياطة", "في الخياطة", "متاح للإمبلاج / التعبئة", "جاهز للتسليم", "تم التسليم", "تم التسليم بالكامل", "تم التسليم والإغلاق"];
   const activeStatus = status === "معلق" || status === "تحت الإنشاء" ? "قيد الانتظار" : status;
   const activeIndex = Math.max(0, stages.indexOf(activeStatus));
   const steps = stages.map((stage, index) => `<span class="order-progress-step${index <= activeIndex ? " complete" : ""}${index === activeIndex ? " current" : ""}">${stage}</span>`).join("");
@@ -1417,8 +1426,11 @@ function cashLedgerView(data) {
 const FACTORY_ORDER_STATUSES = [
   "قيد الانتظار", "معلق", "تحت الإنشاء", "قيد الفرش",
   "تم الفرش / جاهز للقص", "تم القص", "معلق - في انتظار الخياطة",
-  "في الخياطة", "جاهز للتسليم"
+  "في الخياطة", "متاح للإمبلاج / التعبئة", "جاهز للتسليم"
 ];
+const MANUAL_FACTORY_ORDER_STATUSES = FACTORY_ORDER_STATUSES.filter((status) =>
+  !["معلق - في انتظار الخياطة", "في الخياطة", "متاح للإمبلاج / التعبئة"].includes(status)
+);
 const LOCKED_FACTORY_ORDER_STATUSES = ["مكتمل", "تم التسليم", "تم التسليم بالكامل", "تم التسليم والإغلاق"];
 
 function adminDashboardView(data) {
@@ -1485,21 +1497,23 @@ function adminDashboardView(data) {
 function modelStatusReviewView(data) {
   const orders = data.models;
   const statusOptions = (selected, includeLocked = false) => [...new Set([
-    ...FACTORY_ORDER_STATUSES,
+    ...MANUAL_FACTORY_ORDER_STATUSES,
     ...(includeLocked ? LOCKED_FACTORY_ORDER_STATUSES : []),
-    ...(selected && !FACTORY_ORDER_STATUSES.includes(selected) ? [selected] : [])
+    ...(selected && !MANUAL_FACTORY_ORDER_STATUSES.includes(selected) ? [selected] : [])
   ])]
     .map((status) => `<option value="${escapeHtml(status)}"${selected === status ? " selected" : ""}>${escapeHtml(status)}</option>`)
     .join("");
   return `<div class="clients-toolbar"><div><h2>الموديلات</h2><p>حالة الموديل لا تتغير تلقائياً. تُقفل نهائياً بعد التسليم.</p></div><label class="field model-status-filter"><span>تصفية حسب الحالة</span><select data-filter-model-status><option value="">كل الحالات</option>${statusOptions("", true)}</select></label></div>
     ${orders.length ? `<div class="model-status-list">${orders.map((order) => {
       const isLocked = Boolean(order.archivedAt) || LOCKED_FACTORY_ORDER_STATUSES.includes(order.status);
+      const workflowManaged = ["معلق - في انتظار الخياطة", "في الخياطة", "متاح للإمبلاج / التعبئة"].includes(order.status);
       return `<article class="model-status-row" data-model-status-row data-current-status="${escapeHtml(order.status)}">
       <div class="model-status-info"><strong>${escapeHtml(order.name)}</strong><span>العميل: ${escapeHtml(order.client || "—")}</span><span>العدد: ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity)} قطعة</span><span>السعر: ${money(order.pricePerPiece)}</span></div>
       ${statusTag(order.displayStatus || order.status)}
-      <label class="model-status-control"><span>الحالة اليدوية${isLocked ? " · مقفلة" : ""}</span><select data-model-status="${escapeHtml(order.id)}"${isLocked ? " disabled" : ""}>${statusOptions(order.status, isLocked)}</select></label>
-      <button class="button button-secondary" type="button" data-save-model-status="${escapeHtml(order.id)}"${isLocked ? " disabled" : ""}>حفظ الحالة</button>
+      <label class="model-status-control"><span>الحالة اليدوية${isLocked ? " · مقفلة" : workflowManaged ? " · تُدار من سير الإنتاج" : ""}</span><select data-model-status="${escapeHtml(order.id)}"${isLocked || workflowManaged ? " disabled" : ""}>${statusOptions(order.status, isLocked)}</select></label>
+      <button class="button button-secondary" type="button" data-save-model-status="${escapeHtml(order.id)}"${isLocked || workflowManaged ? " disabled" : ""}>حفظ الحالة</button>
       ${isLocked ? '<span class="order-delete-protected">لا يمكن تغيير حالة موديل تم تسليمه أو إغلاقه.</span>' : ""}
+      ${workflowManaged ? '<span class="order-delete-protected">تُحدّث هذه الحالة من أزرار إتاحة الخياطة وبدء الخياطة والإمبلاج.</span>' : ""}
     </article>`;
     }).join("")}</div>` : '<div class="empty-state">لا توجد موديلات لمراجعتها.</div>'}`;
 }
@@ -1862,7 +1876,7 @@ function adminView(data, accounts) {
           <div class="model-allocation field"><label>توزيع العدد على الألوان والمقاسات</label><div data-model-allocation-grid><p class="muted">أدخل العدد الكلي واختر الألوان والمقاسات لعرض التوزيع.</p></div><input type="hidden" name="colorSizeDistribution" value='{"colors":[]}'></div>
           <label class="field model-image-field"><span>صورة الموديل (اختياري)</span><input type="file" name="modelImage" accept="image/jpeg,image/png,image/webp"><small>JPG أو PNG أو WEBP بحد أقصى 5 ميجابايت.</small><div data-model-image-preview></div></label>
           <div class="field" data-expected-delivery-field><label for="model-expected-delivery">تاريخ التسليم المتوقع (اختياري)</label><input id="model-expected-delivery" name="expectedDeliveryDate" type="date"></div>
-          <div class="field"><label for="model-status">حالة الطلب</label><select id="model-status" name="status"><option>قيد الانتظار</option><option>معلق</option><option>تحت الإنشاء</option><option>قيد الفرش</option><option>تم الفرش / جاهز للقص</option><option>تم القص</option><option>معلق - في انتظار الخياطة</option><option>في الخياطة</option><option>جاهز للتسليم</option><option>تم التسليم</option></select></div>
+          <div class="field"><label for="model-status">حالة الطلب</label><select id="model-status" name="status"><option>قيد الانتظار</option><option>معلق</option><option>تحت الإنشاء</option><option>قيد الفرش</option><option>تم الفرش / جاهز للقص</option><option>تم القص</option><option>جاهز للتسليم</option><option>تم التسليم</option></select></div>
           <div class="field" data-initial-delivery-field hidden><label for="model-delivered-pieces">العدد المسلّم</label><input id="model-delivered-pieces" name="deliveredPieces" type="number" min="1" step="1"><small>يُسجل كدفعة تسليم تاريخية ويُحتسب ضمن حساب العميل.</small></div>
           <div class="field" data-model-priority-field><label for="model-priority">أولوية التنفيذ</label><select id="model-priority" name="priority"><option>عادي</option><option>مرتفع</option><option>عاجل</option></select></div>
         </div></section>
@@ -1881,6 +1895,8 @@ function adminView(data, accounts) {
       </form></section></div>
       <div class="modal-backdrop" id="delivery-modal" hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="delivery-modal-title"><button class="modal-close" type="button" data-close-delivery aria-label="إغلاق">×</button><h2 id="delivery-modal-title">تسجيل تسليم جديد</h2><p id="delivery-modal-description">أدخل كمية هذه الدفعة واسم مستلمها؛ ستُضاف إلى إجمالي ما تم تسليمه حتى الآن.</p><form id="delivery-form" class="modal-form"><input type="hidden" name="orderId"><input type="hidden" name="finalize" value=""><label for="delivery-settlement-choice" data-settlement-choice-field hidden>طريقة التسوية</label><select id="delivery-settlement-choice" name="settlementChoice" data-settlement-choice-field hidden></select><label for="delivery-quantity" id="delivery-quantity-label">كمية التسليم</label><input id="delivery-quantity" name="quantity" type="number" min="1" step="1" required><label for="delivery-recipient">اسم المستلم</label><input id="delivery-recipient" name="recipientName" required><div class="form-actions"><button class="button button-primary" type="submit">تسجيل التسليم</button><button class="row-action" type="button" data-close-delivery>إلغاء</button></div></form></section></div>
     </section>
+    <section id="cutting" class="dashboard-section">${adminCuttingTransferView(data)}</section>
+    <section id="sewing" class="dashboard-section">${adminSewingView(data)}</section>
     <section id="finance" class="dashboard-section">
       <div class="client-management-tabs finance-management-tabs" role="tablist" aria-label="حسابات العملاء والمصاريف">
         <button type="button" role="tab" aria-selected="${activeFinanceTab === "payments"}" class="client-management-tab${activeFinanceTab === "payments" ? " active" : ""}" data-finance-tab="payments">الدفعات المالية</button>
@@ -2023,8 +2039,49 @@ function cuttingPersonalAccountView(data) {
       : '<div class="empty-state">لا توجد سجلات مرتب مسجلة لحسابك حاليًا.</div>')}`;
 }
 
+function sewingOrderRows(orders, actionLabel = "", action = "") {
+  return orders.length
+    ? table(["رقم الأمر", "الموديل", "العميل", "الكمية", "خط الخياطة", "الحالة", "إجراء"], orders.map((item) =>
+      `<tr><td>${escapeHtml(item.order.slice(0, 8))}</td><td>${escapeHtml(item.model)}${item.modelNumber ? `<small> · ${escapeHtml(item.modelNumber)}</small>` : ""}<details class="sewing-order-preview"><summary>معاينة التفاصيل</summary><div>${modelImageMarkup(item.modelImageUrl)}<span>المقاسات: ${escapeHtml(item.sizes || "—")}</span><span>الألوان: ${escapeHtml(item.colors || "—")}</span><span>الأقسام: ${escapeHtml(workStageLabels(item.workStages).join("، ") || "—")}</span>${item.technicalNotes ? `<span>ملاحظات القص: ${escapeHtml(item.technicalNotes)}</span>` : ""}</div></details></td><td>${escapeHtml(item.client || "—")}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.target)} قطعة${item.produced ? `<small> · المنجز: ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.produced)}</small>` : ""}</td><td>${escapeHtml(item.line)}</td><td>${statusTag(item.status)}</td><td>${action ? `<button class="button button-secondary" type="button" data-sewing-action="${action}" data-sewing-order="${escapeHtml(item.order)}">${actionLabel}</button>` : "—"}</td></tr>`
+    ))
+    : '<div class="empty-state">لا توجد قصّات في هذه القائمة.</div>';
+}
+
 function sewingView(data) {
-  return `<div class="stats-grid">${stat("مراحل الخياطة", data.sewing.length, "مراحل نشطة")}${stat("مراحل مكتملة", data.sewing.filter((item) => item.status === "مكتمل").length, "حسب حالة المرحلة")}${stat("مراحل قيد العمل", data.sewing.filter((item) => item.status !== "مكتمل").length, "حسب حالة المرحلة")}</div>${panel("متابعة مراحل الخياطة", table(["رقم الأمر","الموديل","العامل","الحالة"], data.sewing.map((item) => `<tr><td>${escapeHtml(item.order.slice(0, 8))}</td><td>${escapeHtml(item.model)}</td><td>${escapeHtml(item.supervisor)}</td><td>${statusTag(item.status)}</td></tr>`)))}`;
+  const available = data.sewing.filter((item) => item.status === "متاح للخياطة");
+  const inProgress = data.sewing.filter((item) => item.status === "قيد الخياطة");
+  const completed = data.sewing.filter((item) => item.status === "مكتمل");
+  return `<div class="stats-grid">${stat("قصّات متاحة للبدء", available.length)}${stat("قيد الخياطة الفعلية", inProgress.length)}${stat("محوّلة للإمبلاج / التعبئة", completed.length)}</div>
+    ${panel("قصّات متاحة للبدء", sewingOrderRows(available, "بدء الخياطة / استلام على المكنة", "start"), "لا يبدأ العمل إلا بعد استلام المشرف للقصّة")}
+    ${panel("قصّات قيد الخياطة الفعلية", sewingOrderRows(inProgress, "تحويل للإمبلاج / التعبئة", "finish"))}
+    ${panel("قصّات مكتملة الخياطة", sewingOrderRows(completed), "تم تسليمها للمرحلة التالية")}`;
+}
+
+function adminSewingView(data) {
+  const available = data.sewing.filter((item) => item.status === "متاح للخياطة");
+  const inProgress = data.sewing.filter((item) => item.status === "قيد الخياطة");
+  const completed = data.sewing.filter((item) => item.status === "مكتمل");
+  return `<div class="stats-grid">${stat("متاحة للخياطة", available.length)}${stat("بدأت الخياطة", inProgress.length)}${stat("مكتملة / محوّلة", completed.length)}</div>
+    ${panel("قصّات متاحة للخياطة", sewingOrderRows(available))}
+    ${panel("قصّات بدأ المشرف خياطتها", sewingOrderRows(inProgress))}
+    ${panel("قصّات مكتملة ومحوّلة للإمبلاج / التعبئة", sewingOrderRows(completed))}`;
+}
+
+function adminCuttingTransferView(data) {
+  const finishedCutting = data.models.filter((order) =>
+    !order.archivedAt
+    && ["تم القص", "معلق - في انتظار الخياطة"].includes(order.status)
+    && (order.workStages || []).includes("sewing")
+  );
+  return panel("قصّات جاهزة للإتاحة للخياطة", finishedCutting.length
+    ? table(["الموديل", "العميل", "الكمية", "حالة الخياطة", "إجراء"], finishedCutting.map((order) => {
+      const sewing = data.sewing.find((stage) => stage.order === order.id);
+      const stageStatus = sewing?.status || "مرحلة الخياطة غير موجودة";
+      const canTransfer = sewing && !["متاح للخياطة", "قيد الخياطة", "مكتمل"].includes(sewing.status);
+      return `<tr><td>${escapeHtml(order.name)}</td><td>${escapeHtml(order.client || "—")}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity)} قطعة</td><td>${statusTag(stageStatus)}</td><td>${canTransfer ? `<button class="button button-secondary" type="button" data-make-sewing-available="${escapeHtml(order.id)}">إتاحة للخياطة</button>` : "—"}</td></tr>`;
+    }))
+    : '<div class="empty-state">لا توجد قصّات مكتملة تنتظر إتاحتها للخياطة.</div>',
+  "لا تبدأ الخياطة تلقائياً عند الإتاحة؛ يستلم المشرف القصّة من لوحته لبدء العمل.");
 }
 
 function workerView(data, session) {
@@ -2085,6 +2142,8 @@ function navigationItems(role, info) {
       { id: "dashboard", icon: "▦", label: "لوحة التحكم" },
       { id: "clients", icon: "◇", label: "إدارة العملاء" },
       { id: "orders", icon: "▤", label: "الموديلات والطلبيات" },
+      { id: "cutting", icon: "✂", label: "القص" },
+      { id: "sewing", icon: "⌁", label: "الخياطة" },
       { id: "workers-production", icon: "⌁", label: "العمال والإنتاج" },
       { id: "finance", icon: "ج.م", label: "حسابات العملاء / المصاريف" },
       { id: "owner-fabric", icon: "▧", label: "قماش الإدارة" },
@@ -3450,6 +3509,60 @@ function bindFabricAdminActions(session) {
   }));
 }
 
+function bindSewingStageActions(session) {
+  document.querySelectorAll("[data-sewing-action]").forEach((button) => button.addEventListener("click", async () => {
+    const action = button.dataset.sewingAction;
+    const orderId = button.dataset.sewingOrder;
+    if (!orderId || !["start", "finish"].includes(action)) {
+      window.factoryUI.toast("تعذر تحديد أمر الخياطة أو الإجراء المطلوب.", "error");
+      return;
+    }
+    button.disabled = true;
+    try {
+      const { error } = await supabaseClient.rpc("transition_factory_sewing_stage", {
+        requested_order_id: orderId,
+        requested_action: action
+      });
+      if (error?.code === "PGRST202") {
+        throw new Error("دالة انتقال مراحل الخياطة غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+      }
+      if (error) throw error;
+      await refreshDashboard(session);
+      window.factoryUI.toast(action === "start"
+        ? "تم استلام القصّة وبدء الخياطة الفعلية."
+        : "اكتملت الخياطة وتم تحويل القصّة للمرحلة التالية.");
+    } catch (error) {
+      reportDashboardFailure(session, "تعذر تحديث مرحلة الخياطة", error);
+    } finally {
+      if (button.isConnected) button.disabled = false;
+    }
+  }));
+  document.querySelectorAll("[data-make-sewing-available]").forEach((button) => button.addEventListener("click", async () => {
+    const orderId = button.dataset.makeSewingAvailable;
+    if (!orderId) {
+      window.factoryUI.toast("تعذر تحديد أمر القص.", "error");
+      return;
+    }
+    button.disabled = true;
+    try {
+      const { error } = await supabaseClient.rpc("transition_factory_sewing_stage", {
+        requested_order_id: orderId,
+        requested_action: "make_available"
+      });
+      if (error?.code === "PGRST202") {
+        throw new Error("دالة انتقال مراحل الخياطة غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+      }
+      if (error) throw error;
+      await refreshDashboard(session);
+      window.factoryUI.toast("أصبحت القصّة متاحة لمشرف الخياطة، ولم يبدأ تنفيذها بعد.");
+    } catch (error) {
+      reportDashboardFailure(session, "تعذر إتاحة القصّة للخياطة", error);
+    } finally {
+      if (button.isConnected) button.disabled = false;
+    }
+  }));
+}
+
 function bindActions(session) {
   document.querySelector("#logout").addEventListener("click", async () => {
     const { error } = await supabaseClient.auth.signOut();
@@ -3467,8 +3580,13 @@ function bindActions(session) {
     bindCuttingActions(session);
     return;
   }
+  if (session.role === "sewing") {
+    bindSewingStageActions(session);
+    return;
+  }
   if (session.role !== "admin") return;
   bindFabricAdminActions(session);
+  bindSewingStageActions(session);
   document.querySelectorAll("[data-orders-tab]").forEach((button) => button.addEventListener("click", () => {
     activeOrdersTab = button.dataset.ordersTab;
     document.querySelectorAll("[data-orders-tab]").forEach((tab) => {
@@ -3745,8 +3863,12 @@ function bindActions(session) {
       ? `<img class="model-thumbnail" src="${modelPreviewObjectUrl}" alt="معاينة صورة الموديل">`
       : "";
   });
+  const removeWorkflowStatusOptions = () => {
+    orderForm.elements.status.querySelectorAll("[data-workflow-status-option]").forEach((option) => option.remove());
+  };
   const closeOrderModal = () => {
     orderModal.hidden = true;
+    removeWorkflowStatusOptions();
     orderForm.reset();
     orderForm.elements.editIndex.value = "";
     orderForm.elements.status.disabled = false;
@@ -3771,7 +3893,13 @@ function bindActions(session) {
     }
     if (modelPreviewObjectUrl) URL.revokeObjectURL(modelPreviewObjectUrl);
     modelPreviewObjectUrl = "";
+    removeWorkflowStatusOptions();
     orderForm.reset();
+    if (![...orderForm.elements.status.options].some((option) => option.value === currentOrder.status)) {
+      const option = new Option(currentOrder.status, currentOrder.status);
+      option.dataset.workflowStatusOption = "";
+      orderForm.elements.status.add(option);
+    }
     orderForm.elements.savedOrderId.value = "";
     orderForm.elements.editIndex.value = String(orderIndex);
     const closedOrder = LOCKED_FACTORY_ORDER_STATUSES.includes(currentOrder.status);
@@ -4262,6 +4390,7 @@ function bindActions(session) {
   document.querySelector("#client-details").addEventListener("click", (event) => {
     const newOrderButton = event.target.closest("[data-open-order-for-client]");
     if (newOrderButton) {
+      removeWorkflowStatusOptions();
       orderForm.reset();
       orderForm.elements.editIndex.value = "";
       updateOrderConditionalFields();
