@@ -741,3 +741,206 @@ input, select, .modal-form textarea { color: #1d3028; font-size: 16px; }
 @media (max-width: 720px) {
   .incoming-fabric-group { grid-template-columns: 1fr; }
 }
+
+@media (max-width: 768px) {
+  .main-content { min-width: 0; padding: 16px 12px 30px; }
+  .topbar, .topbar-leading, .clients-toolbar, .section-heading, .form-actions,
+  .client-detail-toolbar, .client-detail-actions, .worker-submission-review > header {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .topbar-title, .topbar-title > *, .clients-toolbar > *, .section-heading > *,
+  .form-actions > *, .client-detail-actions > *, .worker-submission-review > header > div {
+    min-width: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+  .dashboard-section, .panel, .panel-body, .form-grid, .form-section-grid,
+  .worker-production-form, .worker-submission-review, .worker-submission-review .form-grid {
+    min-width: 0;
+    max-width: 100%;
+  }
+  .panel-heading { align-items: flex-start; gap: 8px; padding: 12px; }
+  .panel-heading h2 { font-size: 16px; line-height: 1.5; overflow-wrap: anywhere; }
+  .panel-heading p { font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
+  .panel-body { padding: 11px; }
+  .form-grid, .payment-form, .form-section-grid,
+  .order-form .form-section-grid, .cutting-submit-form .form-section-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+  .form-grid > *, .form-section-grid > *, .form-grid .wide,
+  .order-form .form-section-grid > *, .cutting-submit-form .form-section-grid > * {
+    grid-column: 1 / -1;
+    min-width: 0;
+  }
+  .form-grid label, .form-section-grid .field, .form-section-grid label,
+  .worker-production-allocation > label, .worker-submission-review .field > span {
+    font-size: 15px;
+    line-height: 1.5;
+  }
+  .field input, .field select, input, select, .modal-form textarea,
+  .cutting-submit-form .form-section-grid .field input,
+  .cutting-submit-form .form-section-grid .field select {
+    min-width: 0;
+    min-height: 48px;
+    font-size: 16px;
+  }
+  textarea { max-width: 100%; }
+  .form-actions { display: flex; flex-wrap: wrap; }
+  .form-actions > .button, .form-actions > .row-action {
+    flex: 1 1 145px;
+    min-height: 46px;
+    white-space: normal;
+  }
+  .form-grid .button, .form-grid .row-action { min-height: 46px; }
+  .size-option-group { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .size-choice { min-width: 0; grid-template-columns: minmax(48px, 1fr) minmax(76px, 1fr); align-items: center; gap: 8px; }
+  .size-toggle { min-width: 48px; min-height: 46px; }
+  .size-count-label { width: 100%; }
+  .size-count-label input { min-height: 46px; font-size: 16px; }
+  .color-ply-row, .incoming-fabric-color-row, .fabric-entry-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+    padding: 10px;
+  }
+  .color-ply-row > .field:first-child,
+  .incoming-fabric-color-row > .field,
+  .fabric-entry-row > .field:first-child { grid-column: 1 / -1; }
+  .color-ply-remove, .incoming-fabric-color-row > .row-action,
+  .fabric-entry-row > .row-action { justify-self: stretch; min-height: 44px; }
+  .table-wrap { width: 100%; max-width: 100%; overflow: visible; }
+  .table-wrap > table {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    white-space: normal;
+  }
+  .table-wrap > table > thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); clip-path: inset(50%); white-space: nowrap; }
+  .table-wrap > table > tbody { display: grid; gap: 9px; width: 100%; }
+  .table-wrap > table > tbody > tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    min-width: 0;
+    padding: 6px 10px;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    background: #fff;
+  }
+  .table-wrap > table > tbody > tr > td {
+    display: grid;
+    grid-template-columns: minmax(92px, 0.38fr) minmax(0, 1fr);
+    align-items: start;
+    gap: 9px;
+    min-width: 0;
+    padding: 8px 2px;
+    border-top: 0;
+    border-bottom: 1px solid #edf1ed;
+    font-size: 14px;
+    line-height: 1.55;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .table-wrap > table > tbody > tr > td:last-child { border-bottom: 0; }
+  .table-wrap > table > tbody > tr > td::before {
+    color: #40544b;
+    font-size: 13px;
+    font-weight: 700;
+    content: attr(data-label);
+  }
+  .table-wrap > table > tbody > tr > td[colspan] { display: block; }
+  .table-wrap > table > tbody > tr > td[colspan]::before { content: none; }
+  .table-wrap td .row-action, .table-wrap td .button { min-height: 42px; }
+  .table-wrap td .model-color-list { gap: 5px; }
+  .table-wrap td .model-color-chip { flex-wrap: wrap; white-space: normal; }
+  .worker-allocation-scroll { overflow: visible; border: 0; }
+  .worker-allocation-table, .worker-allocation-table tbody,
+  .worker-allocation-table tfoot, .worker-allocation-table tr {
+    display: grid;
+    width: 100%;
+    min-width: 0;
+  }
+  .worker-allocation-table { gap: 10px; }
+  .worker-allocation-table thead { display: none; }
+  .worker-allocation-table tbody { gap: 10px; }
+  .worker-allocation-table tbody tr {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 7px;
+    padding: 9px;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    background: #fff;
+  }
+  .worker-allocation-table tbody tr > th {
+    grid-column: 1 / -1;
+    justify-self: stretch;
+    padding: 0 0 7px;
+    border-bottom: 1px solid #edf1ed;
+    text-align: right;
+  }
+  .worker-allocation-table tbody tr > td {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 4px;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    text-align: right;
+    white-space: normal;
+  }
+  .worker-allocation-table tbody tr > td::before {
+    color: #40544b;
+    font-size: 13px;
+    font-weight: 700;
+    content: attr(data-label);
+  }
+  .worker-allocation-table tbody tr > td input { width: 100%; min-height: 48px; font-size: 16px; }
+  .worker-allocation-table tbody tr > td[data-worker-color-total] { grid-column: 1 / -1; }
+  .worker-allocation-table tfoot { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding: 9px; border: 1px solid var(--line); border-radius: 9px; }
+  .worker-allocation-table tfoot tr { grid-column: 1 / -1; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .worker-allocation-table tfoot th, .worker-allocation-table tfoot td {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 4px;
+    padding: 5px;
+    border: 0;
+    text-align: right;
+    white-space: normal;
+  }
+  .worker-allocation-table tfoot th:first-child { grid-column: 1 / -1; }
+  .worker-allocation-table tfoot td::before { color: #40544b; font-size: 13px; content: attr(data-label); }
+  .worker-allocation-table tfoot td:last-child { grid-column: 1 / -1; }
+  .worker-allocation-table tfoot td:last-child::before { content: "المجموع العام"; }
+  .modal-backdrop { place-items: center; padding: max(10px, env(safe-area-inset-top)) 10px max(10px, env(safe-area-inset-bottom)); }
+  .modal-card, .compact-view-modal, .confirm-dialog, .custom-color-modal .modal-card {
+    width: min(95vw, 520px);
+    max-width: 95vw;
+    max-height: 90dvh;
+    overflow-y: auto;
+    padding: 20px 15px;
+    border-radius: 13px;
+  }
+  .modal-card h2 { font-size: 19px; }
+  .custom-color-controls { grid-template-columns: minmax(0, 1fr); justify-items: center; gap: 14px; }
+  .custom-color-wheel { width: min(54vw, 176px); }
+  .custom-color-shade { min-height: 150px; }
+  .custom-color-value-row { width: 100%; }
+  .order-progress { min-width: 0; }
+  .stat-card, .order-card, .worker-submission-review { min-width: 0; padding: 11px; }
+  .worker-submission-review > header img { flex: 0 0 76px; width: 76px; height: 76px; }
+  .worker-submission-review .form-grid { padding: 0; }
+  .worker-production-form { gap: 12px; padding: 0; }
+}
+
+@media (max-width: 420px) {
+  .main-content { padding-right: 9px; padding-left: 9px; }
+  .stats-grid { gap: 7px; }
+  .stat-card { padding: 10px; }
+  .panel-heading { padding: 10px; }
+  .panel-body { padding: 9px; }
+  .table-wrap > table > tbody > tr { padding-right: 8px; padding-left: 8px; }
+  .table-wrap > table > tbody > tr > td { grid-template-columns: minmax(82px, 0.34fr) minmax(0, 1fr); gap: 7px; font-size: 14px; }
+  .worker-allocation-table tbody tr { grid-template-columns: minmax(0, 1fr); }
+  .worker-allocation-table tbody tr > th, .worker-allocation-table tbody tr > td[data-worker-color-total] { grid-column: 1; }
+  .form-section { padding: 11px; }
+}

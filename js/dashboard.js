@@ -1369,7 +1369,16 @@ function syncOrderCustomerSelection(form, customerId = form.elements.customerId.
 
 function table(headers, rows) {
   if (!rows.length) return '<div class="empty-state">لا توجد بيانات لعرضها حاليًا.</div>';
-  return `<div class="table-wrap"><table><thead><tr>${headers.map((heading) => `<th>${heading}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
+  const labeledRows = rows.map((row) => {
+    let cellIndex = 0;
+    return row.replace(/<td\b([^>]*)>/g, (cell, attributes) => {
+      const heading = headers[cellIndex++];
+      if (/\bdata-label\s*=/.test(attributes)) return cell;
+      const label = String(heading || "").replace(/<[^>]*>/g, "");
+      return `<td${attributes} data-label="${escapeHtml(label)}">`;
+    });
+  });
+  return `<div class="table-wrap"><table><thead><tr>${headers.map((heading) => `<th>${heading}</th>`).join("")}</tr></thead><tbody>${labeledRows.join("")}</tbody></table></div>`;
 }
 
 function panel(title, content, subtitle = "", id = "") {
@@ -2445,11 +2454,11 @@ function workerProductionAllocationGridMarkup(colors, sizeData, existingColors =
     const hex = entry.color.toUpperCase();
     const sizeCells = selectedSizes.map((size) => {
       const count = existingCount(hex, size);
-      return `<td><input type="number" min="0" max="2147483647" step="1" value="${count}" data-worker-production-count data-color="${escapeHtml(hex)}" data-size="${escapeHtml(size)}" aria-label="${escapeHtml(entry.name || hex)} مقاس ${escapeHtml(size)}" placeholder="0"></td>`;
+      return `<td data-label="${escapeHtml(size)}"><input type="number" min="0" max="2147483647" step="1" value="${count}" data-worker-production-count data-color="${escapeHtml(hex)}" data-size="${escapeHtml(size)}" aria-label="${escapeHtml(entry.name || hex)} مقاس ${escapeHtml(size)}" placeholder="0"></td>`;
     }).join("");
     const rowTotal = selectedSizes.reduce((sum, size) => sum + Number(existingCount(hex, size) || 0), 0);
     return `<tr><th><span class="model-color-chip"><span class="color-breakdown-swatch" style="--swatch-color:${escapeHtml(hex)}"></span><strong>${escapeHtml(entry.name || hex)}</strong></span></th>${sizeCells}<td data-worker-color-total>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(rowTotal)}</td></tr>`;
-  }).join("")}</tbody><tfoot><tr><th>الإجمالي</th>${selectedSizes.map((size) => `<td data-worker-size-total="${escapeHtml(size)}">${new Intl.NumberFormat("ar-EG-u-nu-latn").format(colors.reduce((sum, entry) => sum + Number(existingByColor.get(entry.color.toUpperCase())?.[size] || 0), 0))}</td>`).join("")}<td data-worker-grand-total>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(existingColors.reduce((sum, entry) => sum + Object.values(entry?.sizes || {}).reduce((subtotal, count) => subtotal + Number(count || 0), 0), 0))}</td></tr></tfoot></table></div>`;
+  }).join("")}</tbody><tfoot><tr><th>الإجمالي</th>${selectedSizes.map((size) => `<td data-label="${escapeHtml(size)}" data-worker-size-total="${escapeHtml(size)}">${new Intl.NumberFormat("ar-EG-u-nu-latn").format(colors.reduce((sum, entry) => sum + Number(existingByColor.get(entry.color.toUpperCase())?.[size] || 0), 0))}</td>`).join("")}<td data-worker-grand-total>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(existingColors.reduce((sum, entry) => sum + Object.values(entry?.sizes || {}).reduce((subtotal, count) => subtotal + Number(count || 0), 0), 0))}</td></tr></tfoot></table></div>`;
 }
 
 function workerProductionSelectedColors(form) {
