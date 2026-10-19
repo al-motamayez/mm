@@ -539,8 +539,7 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .sidebar-collapsed .sidebar-developer-footer .developer-avatar { display: none; }
 .sidebar-collapsed .sidebar-developer-footer .developer-name { font-size: 10px; }
 .sidebar-collapsed .sidebar-developer-footer .developer-whatsapp { width: auto; }
-.sidebar-collapsed .sidebar-developer-footer .developer-whatsapp > span { width: 44px; overflow-wrap: anywhere; font-size: 0; text-align: center; }
-.sidebar-collapsed .sidebar-developer-footer .developer-whatsapp bdi { font-size: 8px; }
+.sidebar-collapsed .sidebar-developer-footer .developer-contact-copy { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
 .sidebar-collapsed .sidebar-developer-footer .developer-whatsapp svg { width: 20px; height: 20px; }
 
 .toast-region { position: fixed; z-index: 1100; top: 20px; left: 20px; display: grid; width: min(390px, calc(100vw - 40px)); gap: 10px; direction: rtl; }
