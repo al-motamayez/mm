@@ -29,6 +29,7 @@ const roleNames = {
   worker: "عامل / عاملة",
   client: "عميل"
 };
+const WORKER_JOB_TITLES = ["إمبلاج", "خياطة", "قص", "تشطيب", "مكواة", "تكييس", "عامل إنتاج", "أخرى"];
 const SIZE_OPTIONS = {
   men: ["S", "M", "L", "XL", "2XL", "3XL", "4XL"],
   women: ["S", "M", "L", "XL", "2XL", "3XL", "4XL"],
@@ -87,7 +88,9 @@ async function readSession() {
     role: account.role,
     username: account.username,
     fullName: account.name,
-    roleName: roleNames[account.role]
+    roleName: roleNames[account.role],
+    jobTitle: account.job_title || "",
+    canSubmitProduction: account.role === "worker" && account.can_submit_production === true
   };
   return session;
 }
@@ -113,7 +116,10 @@ function emptyDashboardData() {
     personalAdvances: [],
     personalPayroll: [],
     workerAdvances: [],
-    workerPayroll: []
+    workerPayroll: [],
+    workerExpenses: [],
+    productionSubmissions: [],
+    finishedGoods: []
   };
 }
 
@@ -181,6 +187,16 @@ async function readDashboardData(session) {
       .order("occurred_at", { ascending: false })
       .limit(100)
     : Promise.resolve({ data: [], error: null });
+  const productionSubmissionsPromise = ["admin", "worker"].includes(session.role)
+    ? supabaseClient.from("factory_worker_production_submissions")
+      .select("id, worker_id, worker_name, job_title, model_name, quantity, colors, image_path, notes, status, created_at, updated_at")
+      .order("created_at", { ascending: false })
+    : Promise.resolve({ data: [], error: null });
+  const finishedGoodsPromise = ["admin", "client"].includes(session.role)
+    ? supabaseClient.from("factory_finished_goods")
+      .select("id, submission_id, order_id, customer_id, model_name, quantity, colors, image_path, worker_name, confirmed_at")
+      .order("confirmed_at", { ascending: false })
+    : Promise.resolve({ data: [], error: null });
   const deliveriesPromise = ["admin", "client"].includes(session.role)
     ? supabaseClient.from("factory_deliveries")
       .select("id, order_id, customer_id, quantity, price_per_piece, amount, recipient_name, expected_delivery_date, delivered_at, legacy_import")
@@ -193,20 +209,23 @@ async function readDashboardData(session) {
     : session.role === "client"
       ? supabaseClient.rpc("read_factory_client_cash_transactions")
       : Promise.resolve({ data: [], error: null });
-  const [payments, leaves, tasks, settlements, deliveriesResult, cashTransactionsResult, personalAttendance, personalAdvances, personalPayroll, workerAdvances, workerPayroll, fabricsResult, fabricTransactionsResult, authEventsResult] = await Promise.all([
+  const [payments, leaves, tasks, settlements, deliveriesResult, cashTransactionsResult, personalAttendance, personalAdvances, personalPayroll, workerAdvances, workerPayroll, workerExpenses, fabricsResult, fabricTransactionsResult, authEventsResult, productionSubmissionsResult, finishedGoodsResult] = await Promise.all([
     readFlexibleRecords("payments"),
     readFlexibleRecords("leaves"),
     readFlexibleRecords("tasks"),
     readFlexibleRecords("settlements"),
     deliveriesPromise,
     cashTransactionsPromise,
-    ["cutting", "sewing"].includes(session.role) ? readFlexibleRecords("attendance") : Promise.resolve([]),
-    ["cutting", "sewing"].includes(session.role) ? readFlexibleRecords("advances") : Promise.resolve([]),
-    ["cutting", "sewing"].includes(session.role) ? readFlexibleRecords("payroll") : Promise.resolve([]),
+    ["cutting", "sewing", "worker"].includes(session.role) ? readFlexibleRecords("attendance") : Promise.resolve([]),
+    ["cutting", "sewing", "worker"].includes(session.role) ? readFlexibleRecords("advances") : Promise.resolve([]),
+    ["cutting", "sewing", "worker"].includes(session.role) ? readFlexibleRecords("payroll") : Promise.resolve([]),
     session.role === "admin" ? readFlexibleRecords("advances") : Promise.resolve([]),
     session.role === "admin" ? readFlexibleRecords("payroll") : Promise.resolve([]),
+    session.role === "worker" ? readFlexibleRecords("worker_expenses") : Promise.resolve([]),
     ...fabricPromises,
-    authEventsPromise
+    authEventsPromise,
+    productionSubmissionsPromise,
+    finishedGoodsPromise
   ]);
   if (["42P01", "PGRST205"].includes(deliveriesResult.error?.code)) {
     throw new Error("سجل التسليمات غير موجود في قاعدة البيانات. شغّل supabase/schema.sql كاملًا في SQL Editor.");
@@ -223,6 +242,12 @@ async function readDashboardData(session) {
   if (fabricsResult.error) throw fabricsResult.error;
   if (fabricTransactionsResult.error) throw fabricTransactionsResult.error;
   if (authEventsResult.error) throw authEventsResult.error;
+  if (["42P01", "PGRST205"].includes(productionSubmissionsResult.error?.code)
+      || ["42P01", "PGRST205"].includes(finishedGoodsResult.error?.code)) {
+    throw new Error("جداول تسليم إنتاج العمال غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+  }
+  if (productionSubmissionsResult.error) throw productionSubmissionsResult.error;
+  if (finishedGoodsResult.error) throw finishedGoodsResult.error;
   data.payments = payments;
   data.settlements = settlements;
   data.deliveries = deliveriesResult.data || [];
@@ -230,11 +255,24 @@ async function readDashboardData(session) {
   data.fabrics = fabricsResult.data || [];
   data.fabricTransactions = fabricTransactionsResult.data || [];
   data.authEvents = authEventsResult.data || [];
+  data.productionSubmissions = (productionSubmissionsResult.data || []).map((submission) => ({
+    ...submission,
+    imageUrl: submission.image_path
+      ? supabaseClient.storage.from("factory-model-images").getPublicUrl(submission.image_path).data.publicUrl
+      : ""
+  }));
+  data.finishedGoods = (finishedGoodsResult.data || []).map((item) => ({
+    ...item,
+    imageUrl: item.image_path
+      ? supabaseClient.storage.from("factory-model-images").getPublicUrl(item.image_path).data.publicUrl
+      : ""
+  }));
   data.personalAttendance = personalAttendance;
   data.personalAdvances = personalAdvances;
   data.personalPayroll = personalPayroll;
   data.workerAdvances = workerAdvances;
   data.workerPayroll = workerPayroll;
+  data.workerExpenses = workerExpenses;
   if (session.role === "cutting") {
     const { data: cuttingClients, error: cuttingClientsError } = await supabaseClient.rpc("read_factory_cutting_clients");
     if (cuttingClientsError?.code === "PGRST202") {
@@ -469,7 +507,7 @@ async function readDashboardData(session) {
 async function readUsers() {
   let { data, error } = await supabaseClient
     .from("users")
-    .select("id, name, username, phone, role, status, created_at")
+    .select("id, name, username, phone, role, status, job_title, can_submit_production, created_at")
     .order("created_at", { ascending: false });
   usersTableHasStatus = !error;
   if (error?.code === "42703") {
@@ -498,7 +536,9 @@ async function readUsers() {
       phone: account.phone || "",
       role: roleNames[account.role] || account.role,
       roleKey: account.role,
-      status: account.status || "active"
+      status: account.status || "active",
+      jobTitle: account.job_title || "",
+      canSubmitProduction: account.can_submit_production === true
     }));
 }
 
@@ -536,9 +576,16 @@ async function readAccounts(session) {
 async function findAccountByUsername(username) {
   let { data, error } = await supabaseClient
     .from("users")
-    .select("id, name, username, role, status")
+    .select("id, name, username, role, status, job_title, can_submit_production")
     .ilike("username", username)
     .maybeSingle();
+  if (error?.code === "42703") {
+    ({ data, error } = await supabaseClient
+      .from("users")
+      .select("id, name, username, role, status")
+      .ilike("username", username)
+      .maybeSingle());
+  }
   if (error?.code === "42703") {
     ({ data, error } = await supabaseClient
       .from("users")
@@ -625,7 +672,7 @@ function cuttingColorPlyMarkup(colorPlyData, legacyColors, fallbackPlys, prefix)
 function cuttingColorPlyRow(color, plys, name = "") {
   return `<div class="color-ply-row" data-color-ply-row>
     <label class="field"><span>اسم اللون</span><input type="text" data-ply-name maxlength="64" value="${escapeHtml(name)}"></label>
-    <label class="field"><span>درجة اللون</span><input type="color" data-ply-color value="${/^#[0-9A-F]{6}$/i.test(color) ? escapeHtml(color) : "#000000"}"></label>
+    <label class="field"><span>درجة اللون</span>${customColorControlMarkup(color, "data-ply-color")}</label>
     <label class="field"><span>عدد الراقات لهذا اللون</span><input type="number" data-ply-count min="1" step="1" value="${escapeHtml(plys)}"></label>
     <button class="row-action color-ply-remove" type="button" data-remove-ply-color aria-label="حذف اللون">حذف اللون</button>
   </div>`;
@@ -684,15 +731,20 @@ function parseColorNames(value) {
     .map(([color, name]) => [color.toUpperCase(), name.trim().slice(0, 64)]));
 }
 
-function colorPickerMarkup(value, prefix) {
+function colorPickerMarkup(value, prefix, colorNames = {}) {
   const selected = String(value || "").split(",").map((color) => color.trim()).filter(Boolean);
-  const choices = [...new Set(selected)].map((color) => colorPickerChoice(color)).join("");
+  const normalizedNames = Object.fromEntries(Object.entries(colorNames)
+    .filter(([color, name]) => /^#[0-9A-F]{6}$/i.test(color) && typeof name === "string")
+    .map(([color, name]) => [color.toUpperCase(), name.trim().slice(0, 64)]));
+  const choices = [...new Set(selected)].map((color) =>
+    colorPickerChoice(color, normalizedNames[color.toUpperCase()] || "")
+  ).join("");
   return `<div class="field color-picker" data-color-picker="${prefix}">
     <label>اختيار درجات الألوان</label>
-    <div class="color-picker-controls"><input type="color" data-color-input value="#000000" aria-label="اختر درجة لون"><button class="row-action" type="button" data-add-color>إضافة لون آخر</button></div>
+    <div class="color-picker-controls">${customColorControlMarkup("#000000", "data-color-input")}<button class="row-action" type="button" data-add-color>إضافة لون آخر</button></div>
     <div class="color-swatch-list" data-color-list>${choices || '<span class="muted">لم يتم اختيار ألوان بعد.</span>'}</div>
     <input type="hidden" name="colors" data-color-value value="${escapeHtml(value || "")}">
-    <input type="hidden" name="colorNames" data-color-names-value value="{}">
+    <input type="hidden" name="colorNames" data-color-names-value value="${escapeHtml(JSON.stringify(normalizedNames))}">
   </div>`;
 }
 
@@ -1000,6 +1052,21 @@ async function uploadModelImage(orderId, file) {
   return supabaseClient.storage.from("factory-model-images").getPublicUrl(path).data.publicUrl;
 }
 
+async function uploadWorkerProductionImage(workerId, file) {
+  if (!file) return null;
+  if (!["image/jpeg", "image/png", "image/webp"].includes(file.type) || file.size > 5 * 1024 * 1024) {
+    throw new Error("اختر صورة JPG أو PNG أو WEBP لا يتجاوز حجمها 5 ميجابايت.");
+  }
+  const extension = file.type === "image/jpeg" ? "jpg" : file.type.split("/")[1];
+  const path = `worker-submissions/${workerId}/${crypto.randomUUID()}.${extension}`;
+  const { error } = await supabaseClient.storage.from("factory-model-images").upload(path, file, {
+    contentType: file.type,
+    upsert: false
+  });
+  if (error) throw error;
+  return path;
+}
+
 async function deleteFactoryModelImages() {
   const bucket = supabaseClient.storage.from("factory-model-images");
   const paths = [];
@@ -1064,6 +1131,97 @@ function formatRecordDate(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(String(value || ""))
     ? formatDateOnly(value)
     : formatDateTime(value);
+}
+
+function customColorControlMarkup(color, attributes) {
+  const selectedColor = /^#[0-9A-F]{6}$/i.test(color) ? color.toUpperCase() : "#000000";
+  return `<button class="custom-color-trigger" type="button" data-custom-color-trigger aria-label="اختيار درجة اللون"><i data-color-preview style="--swatch-color:${selectedColor}"></i><span data-custom-color-label>${selectedColor}</span></button><input type="hidden" ${attributes} value="${selectedColor}">`;
+}
+
+function syncCustomColorTrigger(field) {
+  const color = /^#[0-9A-F]{6}$/i.test(field.value) ? field.value.toUpperCase() : "#000000";
+  field.value = color;
+  const trigger = field.parentElement.querySelector("[data-custom-color-trigger]");
+  if (!trigger) return;
+  trigger.querySelector("[data-color-preview]").style.setProperty("--swatch-color", color);
+  trigger.querySelector("[data-custom-color-label]").textContent = color;
+}
+
+const CUSTOM_COLOR_PALETTE = [
+  "#000000", "#FFFFFF", "#808080", "#C0C0C0", "#800000", "#FF0000", "#800080", "#FF00FF",
+  "#008000", "#00FF00", "#808000", "#FFFF00", "#000080", "#0000FF", "#008080", "#00FFFF",
+  "#7C2D12", "#C2410C", "#D97706", "#EAB308", "#4D7C0F", "#16A34A", "#0F766E", "#0891B2",
+  "#1D4ED8", "#6D28D9", "#A21CAF", "#BE123C", "#FCA5A5", "#FED7AA", "#FEF08A", "#BBF7D0",
+  "#A5F3FC", "#BFDBFE", "#DDD6FE", "#FBCFE8"
+];
+
+function bindCustomColorPickers() {
+  if (document.querySelector("[data-custom-color-modal]")) return;
+  document.body.insertAdjacentHTML("beforeend", `<div class="modal-backdrop custom-color-modal" data-custom-color-modal hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="custom-color-title"><button class="modal-close" type="button" data-close-custom-color aria-label="إغلاق">×</button><h2 id="custom-color-title">اختيار اللون</h2><p>اختر من الألوان الجاهزة أو أدخل رمز HEX.</p><div class="custom-color-palette">${CUSTOM_COLOR_PALETTE.map((color) => `<button type="button" data-palette-color="${color}" style="--swatch-color:${color}" aria-label="${color}"></button>`).join("")}</div><label class="field"><span>رمز اللون</span><input type="text" data-custom-color-hex maxlength="7" pattern="#[0-9A-Fa-f]{6}" placeholder="#RRGGBB"></label><p class="custom-color-error" data-custom-color-error hidden>أدخل رمز لون بصيغة #RRGGBB.</p><div class="form-actions"><button class="button button-primary" type="button" data-confirm-custom-color>اختيار اللون</button><button class="row-action" type="button" data-close-custom-color>إلغاء</button></div></section></div>`);
+  const modal = document.querySelector("[data-custom-color-modal]");
+  let activeTrigger = null;
+  let selectedColor = "#000000";
+  const hexInput = modal.querySelector("[data-custom-color-hex]");
+  const close = () => {
+    modal.hidden = true;
+    activeTrigger = null;
+  };
+  document.addEventListener("click", (event) => {
+    const trigger = event.target.closest("[data-custom-color-trigger]");
+    if (trigger) {
+      activeTrigger = trigger;
+      const field = trigger.parentElement.querySelector('input[type="hidden"]');
+      selectedColor = /^#[0-9A-F]{6}$/i.test(field?.value || "") ? field.value.toUpperCase() : "#000000";
+      hexInput.value = selectedColor;
+      modal.querySelector("[data-custom-color-error]").hidden = true;
+      modal.querySelectorAll("[data-palette-color]").forEach((button) => {
+        button.classList.toggle("selected", button.dataset.paletteColor === selectedColor);
+      });
+      modal.hidden = false;
+      hexInput.focus();
+      return;
+    }
+    const paletteButton = event.target.closest("[data-palette-color]");
+    if (paletteButton && modal.contains(paletteButton)) {
+      selectedColor = paletteButton.dataset.paletteColor;
+      hexInput.value = selectedColor;
+      modal.querySelectorAll("[data-palette-color]").forEach((button) => button.classList.toggle("selected", button === paletteButton));
+      return;
+    }
+    if (event.target.closest("[data-close-custom-color]") || event.target === modal) {
+      close();
+      return;
+    }
+    if (event.target.closest("[data-confirm-custom-color]")) {
+      const color = hexInput.value.trim().toUpperCase();
+      if (!/^#[0-9A-F]{6}$/.test(color) || !activeTrigger) {
+        modal.querySelector("[data-custom-color-error]").hidden = false;
+        return;
+      }
+      const field = activeTrigger.parentElement.querySelector('input[type="hidden"]');
+      if (!field) return;
+      field.value = color;
+      activeTrigger.querySelector("[data-color-preview]").style.setProperty("--swatch-color", color);
+      activeTrigger.querySelector("[data-custom-color-label]").textContent = color;
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+      field.dispatchEvent(new Event("change", { bubbles: true }));
+      close();
+    }
+  });
+  hexInput.addEventListener("input", () => {
+    const color = hexInput.value.trim().toUpperCase();
+    if (/^#[0-9A-F]{6}$/.test(color)) {
+      selectedColor = color;
+      modal.querySelectorAll("[data-palette-color]").forEach((button) => button.classList.toggle("selected", button.dataset.paletteColor === color));
+      modal.querySelector("[data-custom-color-error]").hidden = true;
+    }
+  });
+  modal.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") close();
+  });
+  document.addEventListener("reset", (event) => {
+    window.setTimeout(() => event.target.querySelectorAll('input[type="hidden"][name="colorHex"]').forEach(syncCustomColorTrigger));
+  }, true);
 }
 
 function statusClass(value) {
@@ -1756,7 +1914,7 @@ function fabricSelectOptions(fabrics, selectedId = "", clients = [], allowExtern
 function incomingFabricColorRowMarkup() {
   return `<div class="incoming-fabric-color-row" data-incoming-fabric-color-row>
     <label class="field"><span>اسم اللون</span><input name="colorName" maxlength="64"></label>
-    <label class="field"><span>درجة اللون</span><input name="colorHex" type="color" value="#ffffff" required></label>
+    <label class="field"><span>درجة اللون</span>${customColorControlMarkup("#FFFFFF", 'name="colorHex"')}</label>
     <label class="field"><span>الكمية</span><input name="quantity" type="number" min="0.001" step="0.001" required></label>
     <label class="field"><span>الوحدة</span><select name="unit" required><option value="متر">متر</option><option value="توب">توب</option></select></label>
     <button type="button" class="row-action" data-remove-incoming-color>حذف اللون</button>
@@ -1846,7 +2004,7 @@ function fabricStockView(data, isAdmin) {
   const ownerSection = `<section id="owner-fabric" class="dashboard-section">
     <div class="stats-grid">${stat("أصناف قماش الإدارة", ownerFabrics.length, "إدارة خاصة بالأدمن")}${stat("أثواب الإدارة", totalForUnit(ownerFabrics, "توب"))}${stat("أمتار الإدارة", totalForUnit(ownerFabrics, "متر"))}${stat("حركات المخزون", totalTransactions, "وارد وسحب")}</div>
     <div class="fabric-admin-tools">
-      ${panel("أنواع القماش", `<form class="form-grid fabric-form" id="fabric-form"><input type="hidden" name="fabricId"><div class="field"><label for="fabric-name">اسم القماش</label><input id="fabric-name" name="name" maxlength="120" required></div><div class="field fabric-color-name-field"><label for="fabric-color-name">اسم اللون</label><input id="fabric-color-name" name="colorName" maxlength="64"></div><div class="field fabric-color-picker-field"><label for="fabric-color-hex">درجة اللون</label><input id="fabric-color-hex" name="colorHex" type="color" value="#ffffff" required></div><div class="field"><label for="fabric-unit">وحدة القياس</label><select id="fabric-unit" name="unit" required><option value="متر">متر</option><option value="توب">توب</option></select></div><div class="form-actions"><button class="button button-primary" type="submit">حفظ بيانات القماش</button><button class="row-action" type="button" data-cancel-fabric-edit hidden>إلغاء التعديل</button></div></form>`, "تغيير الوحدة غير متاح بعد تسجيل حركات على الصنف")}
+      ${panel("أنواع القماش", `<form class="form-grid fabric-form" id="fabric-form"><input type="hidden" name="fabricId"><div class="field"><label for="fabric-name">اسم القماش</label><input id="fabric-name" name="name" maxlength="120" required></div><div class="field fabric-color-name-field"><label for="fabric-color-name">اسم اللون</label><input id="fabric-color-name" name="colorName" maxlength="64"></div><label class="field fabric-color-picker-field"><span>درجة اللون</span>${customColorControlMarkup("#FFFFFF", 'name="colorHex"')}</label><div class="field"><label for="fabric-unit">وحدة القياس</label><select id="fabric-unit" name="unit" required><option value="متر">متر</option><option value="توب">توب</option></select></div><div class="form-actions"><button class="button button-primary" type="submit">حفظ بيانات القماش</button><button class="row-action" type="button" data-cancel-fabric-edit hidden>إلغاء التعديل</button></div></form>`, "تغيير الوحدة غير متاح بعد تسجيل حركات على الصنف")}
       ${panel("القماش الداخل", `<form class="form-grid fabric-form" id="fabric-receipt-form"><div class="field"><label for="fabric-receipt-date">تاريخ الإدخال</label><input id="fabric-receipt-date" name="receivedAt" type="datetime-local" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}" required></div><div class="field"><label for="fabric-receipt-notes">ملاحظات / مرجع</label><input id="fabric-receipt-notes" name="notes" maxlength="500"></div><div class="wide fabric-entry-list" data-fabric-entry-list>${ownerFabricReceiptLineMarkup(ownerFabrics)}</div><div class="form-actions"><button class="button button-secondary" type="button" data-add-fabric-row>＋ إضافة صنف</button><button class="button button-primary" type="submit">＋ تسجيل الكميات الداخلة</button></div></form>`, "هذا رصيد الإدارة فقط، ولا يظهر في سجل القماش الداخل الخاص بمشرف القص")}
       ${panel("تعديل المخزون", `<form class="form-grid fabric-form" id="fabric-adjustment-form"><div class="field"><label for="fabric-adjustment-item">صنف قماش الإدارة</label><select id="fabric-adjustment-item" name="fabricId" required>${fabricSelectOptions(ownerFabrics)}</select></div><div class="field"><label for="fabric-adjustment-quantity">فرق الكمية (+ زيادة / − نقص)</label><input id="fabric-adjustment-quantity" name="adjustment" type="number" step="0.001" required></div><div class="field"><label for="fabric-adjustment-date">تاريخ التعديل</label><input id="fabric-adjustment-date" name="adjustedAt" type="datetime-local" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}" required></div><div class="field"><label for="fabric-adjustment-notes">سبب التعديل</label><input id="fabric-adjustment-notes" name="notes" maxlength="500" required></div><div class="form-actions"><button class="button button-secondary" type="submit">حفظ التعديل</button></div></form>`, "يُسجل الفرق كحركة تدقيقية ولا يمكن أن يخفض الرصيد إلى أقل من صفر")}
     </div>
@@ -1854,6 +2012,57 @@ function fabricStockView(data, isAdmin) {
     ${panel("سجل حركات مخزون الإدارة", table(["القماش","نوع الحركة","الكمية","رقم الطلب","ملاحظات","التاريخ والوقت"], transactionRows.filter((transaction) => ownerFabrics.some((fabric) => fabric.id === transaction.fabric_id))))}
   </section>`;
   return `${ownerSection}${incomingSection}`;
+}
+
+function workerPermissionsView(users) {
+  const workers = users.filter((user) => user.roleKey === "worker");
+  const rows = workers.map((worker) => `<tr data-worker-permissions="${escapeHtml(worker.id)}">
+    <td>${escapeHtml(worker.name)}</td><td>${escapeHtml(worker.username)}</td>
+    <td><select name="jobTitle" aria-label="المسمى الوظيفي للعامل">${WORKER_JOB_TITLES.map((title) => `<option value="${escapeHtml(title)}" ${title === (worker.jobTitle || "عامل إنتاج") ? "selected" : ""}>${escapeHtml(title)}</option>`).join("")}</select></td>
+    <td><label class="permission-toggle"><input name="canSubmitProduction" type="checkbox" ${worker.canSubmitProduction ? "checked" : ""}><span>السماح بإضافة تسليمات إنتاج</span></label></td>
+    <td><button class="row-action" type="button" data-save-worker-permissions="${escapeHtml(worker.id)}">حفظ الصلاحيات</button></td>
+  </tr>`);
+  return panel("أدوار العمال وصلاحياتهم", workers.length
+    ? table(["العامل","اسم المستخدم","المسمى الوظيفي","الصلاحية","إجراء"], rows)
+    : '<div class="empty-state">لا توجد حسابات عمال مفعّلة لإدارة صلاحياتها.</div>',
+  "تفعيل الإذن يتيح للعامل إرسال تسليمات إنتاج للمراجعة فقط، ولا يعتمدها أو يربطها بعميل.");
+}
+
+function workerProductionReviewView(data) {
+  const pending = data.productionSubmissions.filter((item) => item.status === "pending");
+  const confirmedRows = data.finishedGoods.map((item) =>
+    `<tr><td>${escapeHtml(item.model_name)}</td><td>${escapeHtml(data.clients.find((client) => client.id === item.customer_id)?.name || "—")}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.quantity)} قطعة</td><td>${workerProductionColorMarkup(item.colors)}</td><td>${item.imageUrl ? `<a href="${escapeHtml(item.imageUrl)}" target="_blank" rel="noopener">عرض الصورة</a>` : "—"}</td><td>${escapeHtml(item.worker_name)}</td><td>${formatDateTime(item.confirmed_at)}</td></tr>`
+  );
+  const orderOptions = data.models.map((order) =>
+    `<option value="${escapeHtml(order.id)}" data-customer="${escapeHtml(order.clientId || "")}">${escapeHtml(order.name)} · ${escapeHtml(order.client || "بدون عميل")}</option>`
+  ).join("");
+  const cards = pending.map((item) => {
+    const colors = Array.isArray(item.colors) ? item.colors : [];
+    const initialColors = colors.map((entry) => typeof entry === "string" ? entry : entry.hex || entry.color || "")
+      .filter((color) => /^#[0-9A-F]{6}$/i.test(color)).join(", ");
+    const initialColorNames = Object.fromEntries(colors
+      .filter((entry) => entry && typeof entry === "object" && /^#[0-9A-F]{6}$/i.test(entry.hex || entry.color || ""))
+      .map((entry) => [(entry.hex || entry.color).toUpperCase(), String(entry.name || "")]));
+    const clientOptions = data.clients.map((client) =>
+      `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)}${client.brand_name ? ` · ${escapeHtml(client.brand_name)}` : ""}</option>`
+    ).join("");
+    return `<form class="worker-submission-review" data-worker-submission="${escapeHtml(item.id)}">
+      <header>${item.imageUrl ? `<a href="${escapeHtml(item.imageUrl)}" target="_blank" rel="noopener"><img src="${escapeHtml(item.imageUrl)}" alt="صورة ${escapeHtml(item.model_name)}" loading="lazy"></a>` : ""}<div><h3>${escapeHtml(item.model_name)}</h3><p>${escapeHtml(item.worker_name)} · ${escapeHtml(item.job_title || "عامل")} · ${formatDateTime(item.created_at)}</p></div></header>
+      <div class="form-grid">
+        <label class="field"><span>الموديل / الوصف</span><input name="modelName" maxlength="160" value="${escapeHtml(item.model_name)}" required></label>
+        <label class="field"><span>العدد المسلّم</span><input name="quantity" type="number" min="1" step="1" value="${Number(item.quantity)}" required></label>
+        ${colorPickerMarkup(initialColors, `worker-review-${item.id}`, initialColorNames)}
+        <label class="field"><span>العميل</span><select name="customerId" required><option value="">اختر العميل</option>${clientOptions}</select></label>
+        <label class="field"><span>ربط بطلبية مسجلة (اختياري)</span><select name="orderId"><option value="">بدون ربط بطلبية</option>${orderOptions}</select></label>
+        <label class="field wide"><span>ملاحظات العامل</span><textarea name="notes" rows="2" maxlength="1000">${escapeHtml(item.notes || "")}</textarea></label>
+      </div>
+      <div class="form-actions"><button class="row-action" type="button" data-save-production-submission="${escapeHtml(item.id)}">حفظ التعديلات</button><button class="button button-primary" type="button" data-confirm-production-submission="${escapeHtml(item.id)}">تأكيد واستلام النهائي</button></div>
+    </form>`;
+  });
+  return `${panel("موديلات تم تسليمها من الإمبلاج", cards.length
+    ? `<div class="worker-submission-list">${cards.join("")}</div>`
+    : '<div class="empty-state">لا توجد تسليمات إنتاج بانتظار مراجعة الإدارة.</div>',
+  "بعد التأكيد يظهر رصيد الإنتاج في حساب العميل المختار.")}${panel("سجل الإنتاج المستلم نهائياً", table(["الموديل","العميل","الكمية","الألوان","الصورة","العامل","تاريخ الاستلام"], confirmedRows))}`;
 }
 
 function adminView(data, accounts) {
@@ -1935,7 +2144,7 @@ function adminView(data, accounts) {
       </div>
       <div data-finance-panel="ledger"${activeFinanceTab === "ledger" ? "" : " hidden"}>${cashLedgerView(data)}</div>
     </section>
-    <section id="workers-production" class="dashboard-section">${panel("طلبات وأذونات الانصراف", table(["الموظف","التاريخ","السبب","الحالة","إجراء"], data.leaves.map((item, index) => `<tr><td>${escapeHtml(item.name)}</td><td>${formatRecordDate(item.date)}</td><td>${escapeHtml(item.reason)}</td><td>${statusTag(item.status)}</td><td>${item.status === "قيد المراجعة" ? `<button class="row-action" data-action="approve-leave" data-index="${index}" type="button">اعتماد</button> <button class="row-action" data-action="deny-leave" data-index="${index}" type="button">رفض</button>` : "—"}</td></tr>`)))}</section>
+    <section id="workers-production" class="dashboard-section">${workerPermissionsView(data.users)}${workerProductionReviewView(data)}${panel("طلبات وأذونات الانصراف", table(["الموظف","التاريخ","السبب","الحالة","إجراء"], data.leaves.map((item, index) => `<tr><td>${escapeHtml(item.name)}</td><td>${formatRecordDate(item.date)}</td><td>${escapeHtml(item.reason)}</td><td>${statusTag(item.status)}</td><td>${item.status === "قيد المراجعة" ? `<button class="row-action" data-action="approve-leave" data-index="${index}" type="button">اعتماد</button> <button class="row-action" data-action="deny-leave" data-index="${index}" type="button">رفض</button>` : "—"}</td></tr>`)))}</section>
     ${fabricStockView(data, true)}
     <section id="clients" class="dashboard-section">
       <div class="client-management-tabs" role="tablist" aria-label="إدارة العملاء">
@@ -2111,9 +2320,58 @@ function adminCuttingTransferView(data) {
   "لا تبدأ الخياطة تلقائياً عند الإتاحة؛ يستلم المشرف القصّة من لوحته لبدء العمل.");
 }
 
+function workerProductionColorMarkup(colors) {
+  const entries = Array.isArray(colors) ? colors : [];
+  return entries.length
+    ? `<span class="model-color-list">${entries.map((entry) => {
+      const rawColor = typeof entry === "string" ? entry : entry.hex || entry.color || "";
+      const color = /^#[0-9A-F]{6}$/i.test(rawColor) ? rawColor.toUpperCase() : "";
+      const name = typeof entry === "string" ? "" : entry.name || "";
+      return `<span class="model-color-chip">${color ? `<span class="color-breakdown-swatch" style="--swatch-color:${color}"></span>` : ""}<strong>${escapeHtml(name || "لون")}</strong>${color ? `<small>${color}</small>` : ""}</span>`;
+    }).join("")}</span>`
+    : "—";
+}
+
+function workerProductionSubmissionForm() {
+  return `<form id="worker-production-form" class="form-grid worker-production-form">
+    <label class="field"><span>اسم الموديل / وصف الإنتاج</span><input name="modelName" maxlength="160" required></label>
+    <label class="field"><span>الكمية المسلّمة (قطعة)</span><input name="quantity" type="number" min="1" step="1" required></label>
+    ${colorPickerMarkup("", "worker-production")}
+    <label class="field wide"><span>صورة الموديل (رفع صورة أو التقاط بالكاميرا)</span><input name="modelImage" type="file" accept="image/jpeg,image/png,image/webp" capture="environment"><small>اختياري · JPG أو PNG أو WEBP حتى 5 ميجابايت.</small></label>
+    <label class="field wide"><span>ملاحظات</span><textarea name="notes" rows="2" maxlength="1000"></textarea></label>
+    <div class="form-actions"><button class="button button-primary" type="submit">إرسال للإدارة للمراجعة</button></div>
+  </form>`;
+}
+
 function workerView(data, session) {
   const tasks = data.tasks.filter((item) => item.worker === session.username);
-  return `<div class="stats-grid">${stat("المهام المسندة إليّ", tasks.length, "حسب حساب العامل")}${stat("قيد التنفيذ", tasks.filter((item) => item.status === "قيد التنفيذ").length)}${stat("مهام جديدة", tasks.filter((item) => item.status === "جديدة").length)}</div>${panel("مهامي", table(["المهمة","الموديل","الكمية","موعد التسليم","الحالة"], tasks.map((item) => `<tr><td>${escapeHtml(item.task)}</td><td>${escapeHtml(item.model)}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.quantity)}</td><td>${escapeHtml(item.due)}</td><td>${statusTag(item.status)}</td></tr>`)))}`;
+  const formatAmount = (record) => Number(record.amount ?? record.value ?? record.netAmount ?? record.salary ?? 0);
+  const datedRows = (records, renderColumns) => records.map((record) =>
+    `<tr>${renderColumns(record).map((value) => `<td>${escapeHtml(value)}</td>`).join("")}<td>${formatDateTime(record._createdAt || record.created_at || record.date)}</td></tr>`
+  );
+  const productionRows = data.productionSubmissions.map((submission) =>
+    `<tr><td>${escapeHtml(submission.model_name)}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(submission.quantity)} قطعة</td><td>${workerProductionColorMarkup(submission.colors)}</td><td>${submission.imageUrl ? `<a href="${escapeHtml(submission.imageUrl)}" target="_blank" rel="noopener">عرض الصورة</a>` : "—"}</td><td>${statusTag(submission.status === "pending" ? "قيد مراجعة الإدارة" : submission.status === "confirmed" ? "تم الاستلام النهائي" : "مرفوض")}</td><td>${formatDateTime(submission.created_at)}</td></tr>`
+  );
+  const personalAccount = `<section id="personal-account" class="dashboard-section">
+    <div class="stats-grid">${stat("سجلات الحضور", data.personalAttendance.length)}${stat("إجمالي السلف", money(data.personalAdvances.reduce((sum, item) => sum + formatAmount(item), 0)))}${stat("إجمالي المصروفات", money(data.workerExpenses.reduce((sum, item) => sum + formatAmount(item), 0)))}${stat("آخر مرتب مسجل", data.personalPayroll[0] ? money(formatAmount(data.personalPayroll[0])) : "—")}</div>
+    ${panel("سجل الحضور والغياب", data.personalAttendance.length
+      ? table(["التاريخ","الحالة","ملاحظات","تاريخ التسجيل"], datedRows(data.personalAttendance, (item) => [formatRecordDate(item.date || item.day || item._createdAt), item.status || item.type || "—", item.notes || item.note || "—"]))
+      : '<div class="empty-state">لا توجد سجلات حضور أو غياب مرتبطة بحسابك.</div>')}
+    ${panel("طلبات الانصراف والغياب", data.leaves.length
+      ? table(["التاريخ","السبب","الحالة","تاريخ التسجيل"], data.leaves.map((item) => `<tr><td>${formatRecordDate(item.date || item.day)}</td><td>${escapeHtml(item.reason || item.notes || "—")}</td><td>${statusTag(item.status || "قيد المراجعة")}</td><td>${formatDateTime(item._createdAt || item.created_at)}</td></tr>`))
+      : '<div class="empty-state">لا توجد طلبات انصراف أو غياب مسجلة.</div>')}
+    ${panel("السلفيات والمصروفات الخاصة بي", table(["النوع","البيان","المبلغ","تاريخ التسجيل"], [
+      ...data.personalAdvances.map((item) => `<tr><td>سلفة</td><td>${escapeHtml(item.description || item.reason || item.reference || "—")}</td><td>${money(formatAmount(item))}</td><td>${formatDateTime(item._createdAt || item.created_at || item.date)}</td></tr>`),
+      ...data.workerExpenses.map((item) => `<tr><td>مصروف</td><td>${escapeHtml(item.description || item.reason || item.category || "—")}</td><td>${money(formatAmount(item))}</td><td>${formatDateTime(item._createdAt || item.created_at || item.date)}</td></tr>`)
+    ]))}
+    ${panel("سجل المرتب", data.personalPayroll.length
+      ? table(["الفترة","المرتب","المدفوع","المتبقي","التاريخ"], data.personalPayroll.map((item) => `<tr><td>${escapeHtml(item.period || item.month || item.date || "—")}</td><td>${money(Number(item.salary ?? item.amount ?? 0))}</td><td>${money(Number(item.paidAmount ?? item.paid ?? 0))}</td><td>${money(Number(item.remainingAmount ?? item.remaining ?? 0))}</td><td>${formatDateTime(item._createdAt || item.created_at || item.date)}</td></tr>`))
+      : '<div class="empty-state">لا توجد سجلات مرتب مسجلة لحسابك.</div>')}
+  </section>`;
+  const production = session.canSubmitProduction
+    ? `<section id="worker-production" class="dashboard-section worker-production-section">${panel("إضافة تسليم قسط / إنتاج", workerProductionSubmissionForm(), "يُرسل التسليم إلى الإدارة ولا يظهر في حساب العميل قبل التأكيد النهائي.")}${panel("تسليماتي للإدارة", table(["الموديل","الكمية","الألوان","الصورة","الحالة","وقت الإرسال"], productionRows))}</section>`
+    : "";
+  return `<section id="dashboard" class="dashboard-section"><div class="stats-grid">${stat("المهام المسندة إليّ", tasks.length, "حسب حساب العامل")}${stat("قيد التنفيذ", tasks.filter((item) => item.status === "قيد التنفيذ").length)}${stat("مهام جديدة", tasks.filter((item) => item.status === "جديدة").length)}${session.jobTitle ? stat("المسمى الوظيفي", escapeHtml(session.jobTitle)) : ""}</div>${panel("مهامي", table(["المهمة","الموديل","الكمية","موعد التسليم","الحالة"], tasks.map((item) => `<tr><td>${escapeHtml(item.task)}</td><td>${escapeHtml(item.model)}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.quantity)}</td><td>${escapeHtml(item.due)}</td><td>${statusTag(item.status)}</td></tr>`)))}</section>${personalAccount}${production}`;
 }
 
 function clientView(data, session) {
@@ -2156,14 +2414,17 @@ function clientView(data, session) {
       data.cashTransactions.map((entry) => `<tr><td>${escapeHtml(entry.category)}</td><td>${escapeHtml(entry.description || "—")}</td><td>${money(entry.amount)}</td><td>${formatDateTime(entry.occurred_at)}</td></tr>`)
     ))
     : "";
-  return `<section id="dashboard" class="dashboard-section"><div class="stats-grid">${stat("موديلاتي الحالية", currentOrders.length, "ضمن الفترة الحالية")}${stat("العدد الفعلي", new Intl.NumberFormat("ar-EG-u-nu-latn").format(deliveredUnits), "قطعة بعد القص")}${latestSettlement ? stat("الرصيد السابق المرحّل المتبقي", money(remainingOpeningBalance), "بعد احتساب المدفوعات الحالية") : ""}${stat("الإجمالي المتوقع للطلبات", money(expectedTotal), "يشمل مصاريف التشغيل")}${stat("المطلوب بعد التسليم", money(totalAmount), "قيمة الشغل المسلّم ومصاريفه")}${stat("مصروفات وعهد على الحساب", money(clientExpensesTotal))}${stat("إجمالي المطلوب بعد خصم المدفوع", money(due), "الرصيد المرحّل + المستحق + المصروفات − المدفوع")}${stat("إجمالي المدفوع", money(totalPaid))}${stat("الرصيد المتبقي", money(remaining), remaining === 0 ? "تم السداد بالكامل" : remaining < 0 ? "رصيد دائن للعميل" : "مستحق على العميل")}</div></section><section id="orders" class="dashboard-section">${panel("موديلاتي والطلبيات الحالية", clientOrderCards(currentOrders))}${archivedOrders.length ? panel("الطلبات المؤرشفة", clientOrderCards(archivedOrders)) : ""}</section><section id="finance" class="dashboard-section">${paymentPanel}${expensePanel}</section>`;
+  const finishedGoodsRows = data.finishedGoods.map((item) =>
+    `<tr><td>${escapeHtml(item.model_name)}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.quantity)} قطعة</td><td>${workerProductionColorMarkup(item.colors)}</td><td>${item.imageUrl ? `<a href="${escapeHtml(item.imageUrl)}" target="_blank" rel="noopener"><img class="model-thumbnail" src="${escapeHtml(item.imageUrl)}" alt="صورة ${escapeHtml(item.model_name)}" loading="lazy"></a>` : "—"}</td><td>${escapeHtml(item.worker_name)}</td><td>${formatDateTime(item.confirmed_at)}</td></tr>`
+  );
+  return `<section id="dashboard" class="dashboard-section"><div class="stats-grid">${stat("موديلاتي الحالية", currentOrders.length, "ضمن الفترة الحالية")}${stat("العدد الفعلي", new Intl.NumberFormat("ar-EG-u-nu-latn").format(deliveredUnits), "قطعة بعد القص")}${latestSettlement ? stat("الرصيد السابق المرحّل المتبقي", money(remainingOpeningBalance), "بعد احتساب المدفوعات الحالية") : ""}${stat("الإجمالي المتوقع للطلبات", money(expectedTotal), "يشمل مصاريف التشغيل")}${stat("المطلوب بعد التسليم", money(totalAmount), "قيمة الشغل المسلّم ومصاريفه")}${stat("مصروفات وعهد على الحساب", money(clientExpensesTotal))}${stat("إجمالي المطلوب بعد خصم المدفوع", money(due), "الرصيد المرحّل + المستحق + المصروفات − المدفوع")}${stat("إجمالي المدفوع", money(totalPaid))}${stat("الرصيد المتبقي", money(remaining), remaining === 0 ? "تم السداد بالكامل" : remaining < 0 ? "رصيد دائن للعميل" : "مستحق على العميل")}</div></section><section id="orders" class="dashboard-section">${panel("موديلاتي والطلبيات الحالية", clientOrderCards(currentOrders))}${archivedOrders.length ? panel("الطلبات المؤرشفة", clientOrderCards(archivedOrders)) : ""}</section><section id="finished-goods" class="dashboard-section">${panel("مخزون الإنتاج المستلم للإمبلاج", table(["الموديل","الكمية","الألوان","الصورة","العامل","تاريخ الاستلام"], finishedGoodsRows))}</section><section id="finance" class="dashboard-section">${paymentPanel}${expensePanel}</section>`;
 }
 
 let sidebarCollapsed = false;
 let activeDashboardView = "";
 let activeOrdersTab = "models";
 
-function navigationItems(role, info) {
+function navigationItems(role, info, session = null) {
   if (role === "admin") {
     return [
       { id: "dashboard", icon: "▦", label: "لوحة التحكم" },
@@ -2182,6 +2443,7 @@ function navigationItems(role, info) {
     return [
       { id: "dashboard", icon: "▦", label: "لوحة التحكم" },
       { id: "orders", icon: "▤", label: "موديلاتي والطلبيات" },
+      { id: "finished-goods", icon: "▣", label: "مخزون الإنتاج المستلم" },
       { id: "finance", icon: "ج.م", label: "الدفعات المالية" }
     ];
   }
@@ -2200,6 +2462,13 @@ function navigationItems(role, info) {
       { id: "personal-account", icon: "◷", label: "متابعة الحساب والراتب", last: true }
     ];
   }
+  if (role === "worker") {
+    return [
+      { id: "dashboard", icon: info.icon, label: "مهامي" },
+      { id: "personal-account", icon: "◷", label: "حسابي الشخصي" },
+      ...(session?.canSubmitProduction ? [{ id: "worker-production", icon: "✓", label: "تسليم الإنتاج", last: true }] : [])
+    ];
+  }
   return [{ id: "dashboard", icon: info.icon, label: "لوحة التحكم" }];
 }
 
@@ -2208,7 +2477,7 @@ function render(session, data, accounts) {
   document.querySelectorAll("body > #order-modal").forEach((modal) => modal.remove());
   const info = roleInfo[session.role];
   const username = escapeHtml(session.username);
-  const navigation = navigationItems(session.role, info).map((item, index) =>
+  const navigation = navigationItems(session.role, info, session).map((item, index) =>
     `<a class="nav-link${index === 0 ? " active" : ""}${item.last ? " nav-link-last" : ""}" href="#${item.id}" data-sidebar-link aria-current="${index === 0 ? "page" : "false"}"><span class="nav-icon">${item.icon}</span><span class="nav-text">${item.label}</span></a>`
   ).join("");
   const collapsedClass = sidebarCollapsed ? " sidebar-collapsed" : "";
@@ -2220,7 +2489,7 @@ function render(session, data, accounts) {
         ? `<section id="dashboard" class="dashboard-section">${cuttingDashboardView(data)}</section>${cuttingRequestsView(data)}${fabricStockView(data, false)}<section id="personal-account" class="dashboard-section">${cuttingPersonalAccountView(data)}</section>`
       : session.role === "sewing"
         ? `<section id="dashboard" class="dashboard-section">${sewingView(data)}</section><section id="personal-account" class="dashboard-section">${cuttingPersonalAccountView(data)}</section>`
-        : `<section id="dashboard" class="dashboard-section">${workerView(data, session)}</section>`;
+        : workerView(data, session);
   document.querySelector("#app").innerHTML = `
     <div class="app-shell${collapsedClass}">
       <button class="sidebar-backdrop" type="button" data-sidebar-close aria-label="إغلاق القائمة الجانبية"></button>
@@ -2606,6 +2875,7 @@ function subscribeToFactoryUpdates(session) {
   channel = channel
     .on("postgres_changes", { event: "*", schema: "public", table: "factory_records" }, (payload) => scheduleRealtimeRefresh(session, "السجلات", payload))
     .on("postgres_changes", { event: "*", schema: "public", table: "factory_deliveries" }, (payload) => scheduleRealtimeRefresh(session, "التسليمات", payload))
+    .on("postgres_changes", { event: "*", schema: "public", table: "factory_worker_production_submissions" }, (payload) => scheduleRealtimeRefresh(session, "تسليمات الإنتاج", payload))
     .on("postgres_changes", { event: "*", schema: "public", table: "users" }, (payload) => {
       if (session.role === "admin") {
         scheduleRealtimeRefresh(session, "الحسابات", payload);
@@ -2613,6 +2883,9 @@ function subscribeToFactoryUpdates(session) {
         void revalidateSessionAfterAccountChange(session);
       }
     });
+  if (["admin", "client"].includes(session.role)) {
+    channel = channel.on("postgres_changes", { event: "*", schema: "public", table: "factory_finished_goods" }, (payload) => scheduleRealtimeRefresh(session, "مخزون الإنتاج المستلم", payload));
+  }
   if (["admin", "cutting"].includes(session.role)) {
     channel = channel.on("postgres_changes", { event: "*", schema: "public", table: "factory_fabrics" }, (payload) => scheduleRealtimeRefresh(session, "مخزون القماش", payload));
   }
@@ -3272,7 +3545,10 @@ function bindIncomingFabricActions(session) {
       registered = true;
       form.reset();
       form.querySelector("[data-incoming-fabric-groups]").innerHTML = incomingFabricGroupMarkup(dashboardData.fabrics);
-      form.querySelectorAll('[name="colorHex"]').forEach((input) => { input.value = "#ffffff"; });
+      form.querySelectorAll('[name="colorHex"]').forEach((input) => {
+        input.value = "#FFFFFF";
+        syncCustomColorTrigger(input);
+      });
       form.elements.receivedAt.value = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16);
       await refreshDashboard(session);
       window.factoryUI.toast("تم تسجيل أصناف القماش الداخل وتحديث سجل القص.");
@@ -3493,6 +3769,7 @@ function bindFabricAdminActions(session) {
     fabricForm.elements.name.value = fabric.name;
     fabricForm.elements.colorName.value = fabric.color_name;
     fabricForm.elements.colorHex.value = fabric.color_hex;
+    syncCustomColorTrigger(fabricForm.elements.colorHex);
     fabricForm.elements.unit.value = fabric.unit;
     fabricForm.querySelector('[type="submit"]').textContent = "حفظ التعديلات";
     fabricForm.querySelector("[data-cancel-fabric-edit]").hidden = false;
@@ -3606,6 +3883,168 @@ function bindSewingStageActions(session) {
   }));
 }
 
+function productionColorsFromForm(form) {
+  return [...form.querySelectorAll("[data-color-choice]")].map((choice) => ({
+    hex: choice.dataset.colorChoice,
+    name: String(choice.querySelector("[data-color-name]")?.value || "").trim()
+  }));
+}
+
+function bindWorkerProductionActions(session) {
+  const form = document.querySelector("#worker-production-form");
+  if (!form || !session.canSubmitProduction) return;
+  bindPickers(form);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = form.querySelector('[type="submit"]');
+    const modelName = String(form.elements.modelName.value).trim();
+    const quantity = Number(form.elements.quantity.value);
+    const colors = productionColorsFromForm(form);
+    if (!modelName || !Number.isSafeInteger(quantity) || quantity < 1 || !colors.length) {
+      window.factoryUI.toast("أدخل وصف الموديل والكمية واختر لوناً واحداً على الأقل.", "error");
+      return;
+    }
+    button.disabled = true;
+    let imagePath = null;
+    let submissionSaved = false;
+    try {
+      imagePath = await uploadWorkerProductionImage(session.accountId, form.elements.modelImage.files[0]);
+      const { error } = await supabaseClient.from("factory_worker_production_submissions").insert({
+        worker_id: session.accountId,
+        worker_name: session.fullName,
+        job_title: session.jobTitle || "عامل إنتاج",
+        model_name: modelName,
+        quantity,
+        colors,
+        image_path: imagePath,
+        notes: String(form.elements.notes.value).trim()
+      });
+      if (error) throw error;
+      submissionSaved = true;
+      form.reset();
+      await refreshDashboard(session);
+      window.factoryUI.toast("تم إرسال التسليم للإدارة للمراجعة.");
+    } catch (error) {
+      if (imagePath && !submissionSaved) {
+        const { error: cleanupError } = await supabaseClient.storage.from("factory-model-images").remove([imagePath]);
+        if (cleanupError) console.warn("تعذر حذف صورة تسليم العامل بعد فشل الحفظ.", cleanupError);
+      }
+      reportDashboardFailure(session, submissionSaved
+        ? "تم إرسال التسليم، لكن تعذر تحديث البيانات"
+        : "تعذر إرسال تسليم الإنتاج", error);
+    } finally {
+      button.disabled = false;
+    }
+  });
+}
+
+function bindWorkerProductionReview(session) {
+  document.querySelectorAll("[data-worker-submission]").forEach((form) => {
+    bindPickers(form);
+    const customerSelect = form.elements.customerId;
+    const orderSelect = form.elements.orderId;
+    customerSelect.addEventListener("change", () => {
+      [...orderSelect.options].forEach((option) => {
+        if (!option.value) return;
+        option.hidden = option.dataset.customer !== customerSelect.value;
+        if (option.selected && option.hidden) orderSelect.value = "";
+      });
+    });
+    customerSelect.dispatchEvent(new Event("change"));
+  });
+  document.querySelectorAll("[data-save-production-submission]").forEach((button) => button.addEventListener("click", async () => {
+    const form = button.closest("[data-worker-submission]");
+    if (!form) return;
+    const quantity = Number(form.elements.quantity.value);
+    const modelName = String(form.elements.modelName.value).trim();
+    const colors = productionColorsFromForm(form);
+    if (!modelName || !Number.isSafeInteger(quantity) || quantity < 1) {
+      window.factoryUI.toast("تحقق من اسم الموديل والكمية قبل الحفظ.", "error");
+      return;
+    }
+    button.disabled = true;
+    try {
+      const { data, error } = await supabaseClient.from("factory_worker_production_submissions")
+        .update({ model_name: modelName, quantity, colors, notes: String(form.elements.notes.value).trim(), updated_at: new Date().toISOString() })
+        .eq("id", form.dataset.workerSubmission)
+        .eq("status", "pending")
+        .select("id")
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) throw new Error("لم تعد هذه التسليمة بانتظار المراجعة.");
+      await refreshDashboard(session);
+      window.factoryUI.toast("تم حفظ تعديلات التسليمة.");
+    } catch (error) {
+      button.disabled = false;
+      reportDashboardFailure(session, "تعذر حفظ تعديلات التسليمة", error);
+    }
+  }));
+  document.querySelectorAll("[data-confirm-production-submission]").forEach((button) => button.addEventListener("click", async () => {
+    const form = button.closest("[data-worker-submission]");
+    if (!form) return;
+    const modelName = String(form.elements.modelName.value).trim();
+    const quantity = Number(form.elements.quantity.value);
+    const customerId = form.elements.customerId.value;
+    const orderId = form.elements.orderId.value || null;
+    const colors = productionColorsFromForm(form);
+    if (!modelName || !Number.isSafeInteger(quantity) || quantity < 1 || !customerId) {
+      window.factoryUI.toast("أدخل الموديل والكمية واختر العميل قبل التأكيد.", "error");
+      return;
+    }
+    if (!await window.factoryUI.confirmAction({
+      title: "تأكيد واستلام الإنتاج النهائي",
+      message: `سيُضاف ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(quantity)} قطعة من «${modelName}» إلى مخزون العميل المختار.`,
+      confirmLabel: "تأكيد واستلام"
+    })) return;
+    button.disabled = true;
+    try {
+      const { error } = await supabaseClient.rpc("confirm_factory_worker_production", {
+        requested_submission_id: form.dataset.workerSubmission,
+        requested_model_name: modelName,
+        requested_quantity: quantity,
+        requested_colors: colors,
+        requested_customer_id: customerId,
+        requested_order_id: orderId
+      });
+      if (error?.code === "PGRST202") throw new Error("دالة اعتماد تسليمات العامل غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+      if (error) throw error;
+      await refreshDashboard(session);
+      window.factoryUI.toast("تم اعتماد الإنتاج وإضافته إلى مخزون حساب العميل.");
+    } catch (error) {
+      button.disabled = false;
+      reportDashboardFailure(session, "تعذر اعتماد تسليم الإنتاج", error);
+    }
+  }));
+}
+
+function bindWorkerPermissionActions(session) {
+  document.querySelectorAll("[data-save-worker-permissions]").forEach((button) => button.addEventListener("click", async () => {
+    const row = button.closest("[data-worker-permissions]");
+    const jobTitle = row?.querySelector('[name="jobTitle"]').value;
+    const canSubmitProduction = Boolean(row?.querySelector('[name="canSubmitProduction"]').checked);
+    if (!row || !WORKER_JOB_TITLES.includes(jobTitle)) {
+      window.factoryUI.toast("اختر مسمى وظيفياً صالحاً للعامل.", "error");
+      return;
+    }
+    button.disabled = true;
+    try {
+      const { data, error } = await supabaseClient.from("users")
+        .update({ job_title: jobTitle, can_submit_production: canSubmitProduction, updated_at: new Date().toISOString() })
+        .eq("id", button.dataset.saveWorkerPermissions)
+        .eq("role", "worker")
+        .select("id")
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) throw new Error("لم يتم العثور على حساب العامل.");
+      await refreshDashboard(session);
+      window.factoryUI.toast("تم تحديث مسمى العامل وصلاحيات تسليم الإنتاج.");
+    } catch (error) {
+      button.disabled = false;
+      reportDashboardFailure(session, "تعذر تحديث صلاحيات العامل", error);
+    }
+  }));
+}
+
 function bindActions(session) {
   document.querySelector("#logout").addEventListener("click", async () => {
     const { error } = await supabaseClient.auth.signOut();
@@ -3618,6 +4057,7 @@ function bindActions(session) {
 
   bindFabricEntryRows();
   bindIncomingFabricActions(session);
+  bindCustomColorPickers();
   if (session.role === "cutting") {
     bindPickers(document.querySelector("#app"));
     bindCuttingActions(session);
@@ -3627,7 +4067,16 @@ function bindActions(session) {
     bindSewingStageActions(session);
     return;
   }
+  if (session.role === "worker") {
+    bindWorkerProductionActions(session);
+    return;
+  }
   if (session.role !== "admin") return;
+  bindWorkerPermissionActions(session);
+  bindWorkerProductionReview(session);
+  document.querySelectorAll("[data-confirm-custom-color], [data-custom-color-trigger]").forEach((item) => {
+    item.setAttribute("aria-haspopup", "dialog");
+  });
   bindFabricAdminActions(session);
   bindSewingStageActions(session);
   document.querySelectorAll("[data-orders-tab]").forEach((button) => button.addEventListener("click", () => {

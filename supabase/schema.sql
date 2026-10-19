@@ -1282,6 +1282,21 @@ as $$
   );
 $$;
 
+create or replace function public.owns_factory_client_profile(requested_customer_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.factory_clients
+    where id = requested_customer_id
+      and user_id = auth.uid()
+  );
+$$;
+
 -- Flexible application records keep evolving optional fields in JSONB so
 -- ordinary UI field additions do not require new SQL columns.
 create table if not exists public.factory_records (
@@ -1561,6 +1576,75 @@ alter table public.factory_deliveries
   add column if not exists recipient_name text not null default '',
   add column if not exists expected_delivery_date date;
 
+alter table public.users
+  add column if not exists job_title text not null default 'عامل إنتاج',
+  add column if not exists can_submit_production boolean not null default false;
+
+create or replace function public.is_valid_factory_production_colors(color_list jsonb)
+returns boolean
+language sql
+immutable
+parallel safe
+set search_path = public
+as $$
+  select case
+    when color_list is null or jsonb_typeof(color_list) <> 'array' then false
+    else jsonb_array_length(color_list) > 0
+      and not exists (
+        select 1
+        from jsonb_array_elements(color_list) as color_entry(value)
+        where jsonb_typeof(color_entry.value) <> 'object'
+          or jsonb_typeof(color_entry.value -> 'hex') <> 'string'
+          or coalesce(color_entry.value ->> 'hex', '') !~ '^#[0-9A-Fa-f]{6}$'
+          or (color_entry.value ? 'name' and jsonb_typeof(color_entry.value -> 'name') <> 'string')
+          or length(coalesce(color_entry.value ->> 'name', '')) > 64
+      )
+  end;
+$$;
+
+create table if not exists public.factory_worker_production_submissions (
+  id uuid primary key default gen_random_uuid(),
+  worker_id uuid references auth.users (id) on delete set null,
+  worker_name text not null,
+  job_title text not null default 'عامل إنتاج',
+  model_name text not null check (length(trim(model_name)) between 1 and 160),
+  quantity integer not null check (quantity > 0),
+  colors jsonb not null default '[]'::jsonb,
+  image_path text,
+  notes text not null default '',
+  status text not null default 'pending' check (status in ('pending', 'confirmed', 'rejected')),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+alter table public.factory_worker_production_submissions
+  drop constraint if exists factory_worker_production_submissions_colors_check,
+  add constraint factory_worker_production_submissions_colors_check
+    check (public.is_valid_factory_production_colors(colors));
+
+create table if not exists public.factory_finished_goods (
+  id uuid primary key default gen_random_uuid(),
+  submission_id uuid not null unique references public.factory_worker_production_submissions (id) on delete restrict,
+  order_id uuid references public.orders (id) on delete set null,
+  customer_id uuid not null references public.factory_clients (id) on delete restrict,
+  model_name text not null check (length(trim(model_name)) between 1 and 160),
+  quantity integer not null check (quantity > 0),
+  colors jsonb not null default '[]'::jsonb,
+  image_path text,
+  worker_name text not null,
+  confirmed_by uuid references auth.users (id) on delete set null,
+  confirmed_at timestamptz not null default now()
+);
+alter table public.factory_finished_goods
+  drop constraint if exists factory_finished_goods_colors_check,
+  add constraint factory_finished_goods_colors_check
+    check (public.is_valid_factory_production_colors(colors));
+create index if not exists factory_worker_production_submissions_worker_created_idx
+  on public.factory_worker_production_submissions (worker_id, created_at desc);
+create index if not exists factory_worker_production_submissions_status_created_idx
+  on public.factory_worker_production_submissions (status, created_at desc);
+create index if not exists factory_finished_goods_customer_confirmed_idx
+  on public.factory_finished_goods (customer_id, confirmed_at desc);
+
 create table if not exists public.factory_fabrics (
   id uuid primary key default gen_random_uuid(),
   stock_scope text not null default 'owner' check (stock_scope in ('owner', 'incoming')),
@@ -1692,6 +1776,8 @@ begin
 
   perform set_config('factory.reset_in_progress', 'on', true);
   delete from public.factory_auth_events where id is not null;
+  delete from public.factory_finished_goods where id is not null;
+  delete from public.factory_worker_production_submissions where id is not null;
   delete from public.factory_fabric_transactions where id is not null;
   delete from public.factory_deliveries where id is not null;
   delete from public.factory_cash_transactions where id is not null;
@@ -3853,7 +3939,7 @@ create policy "Users read their own factory records"
       or (collection = 'settlements' and public.has_active_factory_role(array['client']))
       or (collection = 'leaves' and public.has_active_factory_role(array['worker', 'cutting', 'sewing']))
       or (collection = 'tasks' and public.has_active_factory_role(array['worker']))
-      or (collection in ('attendance', 'advances', 'payroll') and public.has_active_factory_role(array['cutting', 'sewing']))
+      or (collection in ('attendance', 'advances', 'payroll', 'worker_expenses') and public.has_active_factory_role(array['cutting', 'sewing', 'worker']))
     )
   );
 
@@ -3923,6 +4009,8 @@ revoke all on public.orders, public.production_stages, public.factory_records, p
   public.factory_fabrics, public.factory_fabric_transactions, public.factory_live_signals,
   public.factory_auth_events from public, anon, authenticated;
 alter table public.factory_clients enable row level security;
+alter table public.factory_worker_production_submissions enable row level security;
+alter table public.factory_finished_goods enable row level security;
 drop policy if exists "Admins manage factory clients" on public.factory_clients;
 create policy "Admins manage factory clients"
   on public.factory_clients for all to authenticated
@@ -3932,6 +4020,79 @@ revoke all on public.factory_clients from public, anon, authenticated;
 grant select on public.factory_clients to authenticated;
 grant insert (name, brand_name, client_number, phone, cash_phone, instagram, whatsapp, notes) on public.factory_clients to authenticated;
 grant update (name, brand_name, client_number, phone, cash_phone, instagram, whatsapp, notes, updated_at) on public.factory_clients to authenticated;
+drop policy if exists "Admins manage worker production submissions" on public.factory_worker_production_submissions;
+create policy "Admins manage worker production submissions"
+  on public.factory_worker_production_submissions for all to authenticated
+  using (public.is_active_factory_admin())
+  with check (public.is_active_factory_admin());
+drop policy if exists "Workers read own production submissions" on public.factory_worker_production_submissions;
+create policy "Workers read own production submissions"
+  on public.factory_worker_production_submissions for select to authenticated
+  using (worker_id = auth.uid() and public.has_active_factory_role(array['worker']));
+drop policy if exists "Permitted workers submit own production" on public.factory_worker_production_submissions;
+create policy "Permitted workers submit own production"
+  on public.factory_worker_production_submissions for insert to authenticated
+  with check (
+    worker_id = auth.uid()
+    and status = 'pending'
+    and (image_path is null or image_path like ('worker-submissions/' || auth.uid()::text || '/%'))
+    and exists (
+      select 1 from public.users
+      where id = auth.uid()
+        and role = 'worker'
+        and status = 'active'
+        and can_submit_production
+        and name = factory_worker_production_submissions.worker_name
+        and job_title = factory_worker_production_submissions.job_title
+    )
+  );
+drop policy if exists "Permitted workers update own pending production" on public.factory_worker_production_submissions;
+create policy "Permitted workers update own pending production"
+  on public.factory_worker_production_submissions for update to authenticated
+  using (
+    worker_id = auth.uid()
+    and status = 'pending'
+    and (image_path is null or image_path like ('worker-submissions/' || auth.uid()::text || '/%'))
+    and exists (
+      select 1 from public.users
+      where id = auth.uid()
+        and role = 'worker'
+        and status = 'active'
+        and can_submit_production
+        and name = factory_worker_production_submissions.worker_name
+        and job_title = factory_worker_production_submissions.job_title
+    )
+  )
+  with check (
+    worker_id = auth.uid()
+    and status = 'pending'
+    and (image_path is null or image_path like ('worker-submissions/' || auth.uid()::text || '/%'))
+    and exists (
+      select 1 from public.users
+      where id = auth.uid()
+        and role = 'worker'
+        and status = 'active'
+        and can_submit_production
+        and name = factory_worker_production_submissions.worker_name
+        and job_title = factory_worker_production_submissions.job_title
+    )
+  );
+revoke all on public.factory_worker_production_submissions from public, anon, authenticated;
+grant select, insert, update on public.factory_worker_production_submissions to authenticated;
+drop policy if exists "Admins manage factory finished goods" on public.factory_finished_goods;
+create policy "Admins manage factory finished goods"
+  on public.factory_finished_goods for all to authenticated
+  using (public.is_active_factory_admin())
+  with check (public.is_active_factory_admin());
+drop policy if exists "Clients read their own finished goods" on public.factory_finished_goods;
+create policy "Clients read their own finished goods"
+  on public.factory_finished_goods for select to authenticated
+  using (
+    public.has_active_factory_role(array['client'])
+    and public.owns_factory_client_profile(customer_id)
+  );
+revoke all on public.factory_finished_goods from public, anon, authenticated;
+grant select on public.factory_finished_goods to authenticated;
 alter table public.factory_cash_transactions enable row level security;
 revoke all on public.factory_cash_transactions from public, anon, authenticated;
 drop policy if exists "Admins read factory cash transactions" on public.factory_cash_transactions;
@@ -4199,6 +4360,80 @@ begin
 end;
 $$;
 
+create or replace function public.confirm_factory_worker_production(
+  requested_submission_id uuid,
+  requested_model_name text,
+  requested_quantity integer,
+  requested_colors jsonb,
+  requested_customer_id uuid,
+  requested_order_id uuid
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  current_submission public.factory_worker_production_submissions%rowtype;
+  linked_order_customer uuid;
+  finished_goods_id uuid;
+begin
+  if not public.is_active_factory_admin() then
+    raise exception 'Only active admins can confirm worker production.';
+  end if;
+  if length(trim(coalesce(requested_model_name, ''))) not between 1 and 160
+     or requested_quantity is null
+     or requested_quantity < 1
+     or not public.is_valid_factory_production_colors(requested_colors) then
+    raise exception 'Enter valid production model, quantity, and colors.';
+  end if;
+
+  select *
+    into current_submission
+  from public.factory_worker_production_submissions
+  where id = requested_submission_id
+  for update;
+  if not found or current_submission.status <> 'pending' then
+    raise exception 'The worker production submission is not pending review.';
+  end if;
+  if not exists (
+    select 1 from public.factory_clients where id = requested_customer_id
+  ) then
+    raise exception 'Choose a valid customer for the finished goods.';
+  end if;
+
+  if requested_order_id is not null then
+    select customer_id
+      into linked_order_customer
+    from public.orders
+    where id = requested_order_id;
+    if not found or linked_order_customer is distinct from requested_customer_id then
+      raise exception 'The selected order does not belong to the selected customer.';
+    end if;
+  end if;
+
+  insert into public.factory_finished_goods (
+    submission_id, order_id, customer_id, model_name, quantity,
+    colors, image_path, worker_name, confirmed_by
+  )
+  values (
+    current_submission.id, requested_order_id, requested_customer_id,
+    trim(requested_model_name), requested_quantity, requested_colors,
+    current_submission.image_path, current_submission.worker_name, auth.uid()
+  )
+  returning id into finished_goods_id;
+
+  update public.factory_worker_production_submissions
+  set status = 'confirmed',
+      model_name = trim(requested_model_name),
+      quantity = requested_quantity,
+      colors = requested_colors,
+      updated_at = now()
+  where id = current_submission.id;
+  return finished_goods_id;
+end;
+$$;
+
 revoke all on function public.delete_factory_payment(uuid) from public, anon, authenticated;
 grant execute on function public.delete_factory_payment(uuid) to authenticated;
 revoke all on function public.delete_factory_cash_transaction(uuid) from public, anon, authenticated;
@@ -4209,8 +4444,14 @@ revoke all on function public.delete_factory_fabric_transaction(uuid) from publi
 grant execute on function public.delete_factory_fabric_transaction(uuid) to authenticated;
 revoke all on function public.transition_factory_sewing_stage(uuid, text) from public, anon, authenticated;
 grant execute on function public.transition_factory_sewing_stage(uuid, text) to authenticated;
+revoke all on function public.confirm_factory_worker_production(uuid, text, integer, jsonb, uuid, uuid) from public, anon, authenticated;
+grant execute on function public.confirm_factory_worker_production(uuid, text, integer, jsonb, uuid, uuid) to authenticated;
+revoke all on function public.is_valid_factory_production_colors(jsonb) from public, anon, authenticated;
+grant execute on function public.is_valid_factory_production_colors(jsonb) to authenticated;
 
 grant execute on function public.has_active_factory_role(text[]) to authenticated;
+revoke all on function public.owns_factory_client_profile(uuid) from public, anon, authenticated;
+grant execute on function public.owns_factory_client_profile(uuid) to authenticated;
 revoke all on function public.create_factory_order_stages() from public, anon, authenticated;
 revoke all on function public.sync_factory_client_profile() from public, anon, authenticated;
 revoke all on function public.read_factory_orders_admin() from public, anon, authenticated;
@@ -4285,7 +4526,19 @@ create policy "Factory staff upload model images"
   on storage.objects for insert to authenticated
   with check (
     bucket_id = 'factory-model-images'
-    and public.has_active_factory_role(array['admin', 'cutting'])
+    and (
+      public.has_active_factory_role(array['admin', 'cutting'])
+      or (
+        name like ('worker-submissions/' || auth.uid()::text || '/%')
+        and exists (
+          select 1 from public.users
+          where id = auth.uid()
+            and role = 'worker'
+            and status = 'active'
+            and can_submit_production
+        )
+      )
+    )
   );
 
 drop policy if exists "Factory admins delete model images" on storage.objects;
@@ -4374,7 +4627,9 @@ begin
       'users',
       'factory_clients',
       'factory_records',
-      'factory_deliveries'
+      'factory_deliveries',
+      'factory_worker_production_submissions',
+      'factory_finished_goods'
     ] loop
       if not exists (
         select 1
@@ -4397,5 +4652,7 @@ alter table public.factory_fabric_transactions replica identity full;
 alter table public.factory_auth_events replica identity full;
 alter table public.users replica identity full;
 alter table public.factory_cash_transactions replica identity full;
+alter table public.factory_worker_production_submissions replica identity full;
+alter table public.factory_finished_goods replica identity full;
 
 notify pgrst, 'reload schema';
