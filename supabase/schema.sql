@@ -2044,6 +2044,95 @@ alter table public.factory_live_signals
   add constraint factory_live_signals_signal_type_check
     check (signal_type in ('order', 'stage', 'client'));
 
+create or replace function public.admin_link_factory_staff_account(
+  requested_profile_user_id uuid,
+  requested_pending_user_id uuid
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  staff_profile public.users%rowtype;
+  pending_profile public.users%rowtype;
+begin
+  if not public.is_active_factory_admin() then
+    raise exception 'Only an active factory admin may link staff accounts.';
+  end if;
+  if requested_profile_user_id is null
+    or requested_pending_user_id is null
+    or requested_profile_user_id = requested_pending_user_id then
+    raise exception 'Choose two different staff profiles.';
+  end if;
+
+  select *
+    into staff_profile
+  from public.users
+  where id = requested_profile_user_id
+  for update;
+  if not found
+    or staff_profile.status <> 'active'
+    or staff_profile.role not in ('worker', 'cutting', 'sewing') then
+    raise exception 'The selected staff profile is not active.';
+  end if;
+
+  select *
+    into pending_profile
+  from public.users
+  where id = requested_pending_user_id
+  for update;
+  if not found
+    or pending_profile.status <> 'pending'
+    or pending_profile.role is not null then
+    raise exception 'The new login is no longer pending.';
+  end if;
+
+  update public.production_stages
+  set worker_id = requested_pending_user_id,
+      updated_at = now()
+  where worker_id = requested_profile_user_id;
+
+  update public.factory_records
+  set owner_id = requested_pending_user_id,
+      updated_at = now()
+  where owner_id = requested_profile_user_id;
+
+  update public.factory_worker_production_submissions
+  set worker_id = requested_pending_user_id,
+      updated_at = now()
+  where worker_id = requested_profile_user_id;
+
+  update public.factory_live_signals
+  set worker_id = requested_pending_user_id
+  where worker_id = requested_profile_user_id;
+
+  update public.users
+  set name = staff_profile.name,
+      role = staff_profile.role,
+      status = 'active',
+      job_title = staff_profile.job_title,
+      can_submit_production = staff_profile.can_submit_production,
+      updated_at = now()
+  where id = requested_pending_user_id
+    and status = 'pending'
+    and role is null;
+  if not found then
+    raise exception 'The new login changed before the staff profile could be linked.';
+  end if;
+
+  update public.users
+  set role = null,
+      status = 'suspended',
+      can_submit_production = false,
+      updated_at = now()
+  where id = requested_profile_user_id;
+end;
+$$;
+
+revoke all on function public.admin_link_factory_staff_account(uuid, uuid) from public, anon, authenticated;
+grant execute on function public.admin_link_factory_staff_account(uuid, uuid) to authenticated;
+
 create table if not exists public.factory_auth_events (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users (id) on delete cascade,

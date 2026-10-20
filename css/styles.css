@@ -175,6 +175,21 @@ input:focus, select:focus { border-color: #5e9b83; box-shadow: 0 0 0 3px #5e9b83
 .panel-heading h2 { margin: 0; font-size: 15px; }
 .panel-heading p { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
 .panel-body { padding: 12px 15px; }
+.pending-approval-list { display: grid; gap: 12px; padding: 14px; }
+.pending-approval-card { display: grid; min-width: 0; gap: 14px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
+.pending-approval-heading { display: flex; min-width: 0; align-items: flex-start; justify-content: space-between; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid #edf1ed; }
+.pending-approval-heading > div:first-child { min-width: 0; }
+.pending-approval-heading h3, .pending-approval-heading p { margin: 0; overflow-wrap: anywhere; }
+.pending-approval-heading h3 { color: var(--green-dark); font-size: 16px; }
+.pending-approval-heading p, .pending-approval-date { color: var(--muted); font-size: 12px; }
+.pending-approval-date { max-width: 45%; text-align: left; }
+.pending-role-field { display: grid; max-width: 480px; gap: 6px; }
+.pending-role-field > span, .pending-approval-options .field > span { color: #465651; font-size: 13px; font-weight: 600; }
+.pending-approval-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; gap: 12px; padding: 14px; border: 1px solid #e1eae3; border-radius: 10px; background: #f8faf8; }
+.pending-approval-options h4 { grid-column: 1 / -1; margin: 0; color: var(--green-dark); font-size: 14px; }
+.pending-approval-options .field { display: grid; min-width: 0; gap: 6px; }
+.pending-approval-options .button { width: 100%; min-width: 0; white-space: normal; }
+.pending-approval-note { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: 12px; }
 .table-wrap { max-width: 100%; overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; white-space: nowrap; text-align: right; }
 th { padding: 8px 12px; color: #86918b; background: #fafbf9; font-size: 11px; font-weight: 500; }
@@ -668,6 +683,12 @@ input, select, .modal-form textarea { color: #1d3028; font-size: 16px; }
   .form-grid .wide { grid-column: auto; }
   .form-grid .field { min-width: 0; }
   .form-grid .button, .form-grid .row-action { min-height: 44px; }
+  .pending-approval-list { padding: 10px; }
+  .pending-approval-card { gap: 12px; padding: 13px; }
+  .pending-approval-heading { flex-direction: column; gap: 5px; }
+  .pending-approval-date { max-width: 100%; text-align: right; }
+  .pending-approval-options { grid-template-columns: minmax(0, 1fr); padding: 12px; }
+  .pending-approval-options h4, .pending-approval-note { grid-column: 1; }
   .form-actions { width: 100%; }
   .form-actions > * { flex: 1 1 auto; }
   .form-section { padding: 15px; }

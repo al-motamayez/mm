@@ -1592,8 +1592,10 @@ function userRows(users, withActions = false) {
     const suspended = item.status === "suspended";
     const actions = item.roleKey === "admin"
       ? "حساب إدارة محمي"
-      : `${withActions && item.roleKey === "client" ? `<button class="row-action" type="button" data-edit-client="${escapeHtml(item.id)}">تعديل البيانات</button> ` : ""}<button class="row-action" type="button" data-action="toggle-user-status" data-account-id="${escapeHtml(item.id)}" data-next-status="${suspended ? "active" : "suspended"}">${suspended ? "إعادة تفعيل" : "توقيف / تعطيل"}</button> <button class="row-action" type="button" data-action="delete-user" data-account-id="${escapeHtml(item.id)}">حذف الحساب</button>`;
-    return `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.username)}</td><td>${escapeHtml(item.role)}</td><td>${suspended ? "متوقف" : "نشط"}</td><td>${actions}</td></tr>`;
+      : !item.roleKey
+        ? "تم نقل الملف إلى حساب دخول آخر"
+        : `${withActions && item.roleKey === "client" ? `<button class="row-action" type="button" data-edit-client="${escapeHtml(item.id)}">تعديل البيانات</button> ` : ""}<button class="row-action" type="button" data-action="toggle-user-status" data-account-id="${escapeHtml(item.id)}" data-next-status="${suspended ? "active" : "suspended"}">${suspended ? "إعادة تفعيل" : "توقيف / تعطيل"}</button> <button class="row-action" type="button" data-action="delete-user" data-account-id="${escapeHtml(item.id)}">حذف الحساب</button>`;
+    return `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.username)}</td><td>${escapeHtml(item.role || "ملف منقول")}</td><td>${suspended ? "متوقف" : "نشط"}</td><td>${actions}</td></tr>`;
   });
 }
 
@@ -2021,21 +2023,35 @@ function clientDetailsView(client, data) {
 
 function pendingAccountRows(accounts, clients) {
   const pending = accounts.filter((account) => account.status === "pending");
-  return pending.map((account) => {
-    const availableClients = clients.filter((client) => !client.user_id);
-    const clientOptions = clients.map((client) => {
-      const linkedAccount = client.user_id
-        ? [...accounts, ...dashboardData.users].find((candidate) => candidate.id === client.user_id)
-        : null;
-      const linkStatus = linkedAccount ? ` · مرتبط بـ${linkedAccount.username}` : "";
-      return `<option value="${escapeHtml(client.id)}"${client.user_id ? " disabled" : ""}>${escapeHtml(client.name)}${client.brand_name ? ` · ${escapeHtml(client.brand_name)}` : ""}${escapeHtml(linkStatus)}</option>`;
-    }
-    ).join("");
-    return `<tr><td>${escapeHtml(account.name)}</td><td>${escapeHtml(account.username)}${account.phone ? `<small>${escapeHtml(account.phone)}</small>` : ""}</td><td>${formatDateTime(account.created_at)}</td>
-      <td><select aria-label="عميل موجود لربط طلب التسجيل" data-pending-client-map="${escapeHtml(account.id)}"><option value="">اختر ملف عميل موجود</option>${clientOptions}</select><button class="row-action" type="button" data-action="approve-client-existing" data-account-id="${escapeHtml(account.id)}"${availableClients.length ? "" : " disabled"}>ربط بعميل موجود</button></td>
-      <td><button class="button button-secondary" type="button" data-action="approve-client-new" data-account-id="${escapeHtml(account.id)}">اعتماد كعميل جديد</button></td>
-      <td><select aria-label="الدور الوظيفي" data-pending-role="${escapeHtml(account.id)}"><option value="">موظف / مشرف</option><option value="worker">عامل</option><option value="cutting">مشرف قص</option><option value="sewing">مشرف خياطة</option></select><button class="row-action" type="button" data-action="activate-account" data-account-id="${escapeHtml(account.id)}">تفعيل كموظف</button></td></tr>`;
-  });
+  const availableClients = clients.filter((client) => !client.user_id);
+  const clientOptions = availableClients.map((client) =>
+    `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)}${client.brand_name ? ` · ${escapeHtml(client.brand_name)}` : ""}</option>`
+  ).join("");
+  const staffAccounts = dashboardData.users.filter((account) =>
+    account.status === "active" && ["worker", "cutting", "sewing"].includes(account.roleKey)
+  );
+  const staffOptions = (roles) => staffAccounts.filter((account) => roles.includes(account.roleKey))
+    .map((account) => {
+      const roleLabel = account.roleKey === "worker" ? "عامل" : account.roleKey === "cutting" ? "مشرف قص" : "مشرف خياطة";
+      return `<option value="${escapeHtml(account.id)}">${escapeHtml(account.name)} · ${escapeHtml(account.username)} · ${roleLabel}</option>`;
+    }).join("");
+  if (!pending.length) return '<div class="empty-state">لا توجد طلبات تسجيل بانتظار الموافقة.</div>';
+  return `<div class="pending-approval-list">${pending.map((account) => `<article class="pending-approval-card" data-pending-account="${escapeHtml(account.id)}">
+    <header class="pending-approval-heading"><div><h3>${escapeHtml(account.name || "حساب جديد")}</h3><p>${escapeHtml(account.username)}${account.phone ? ` · ${escapeHtml(account.phone)}` : ""}</p></div><div class="pending-approval-date">${formatDateTime(account.created_at)}</div></header>
+    <label class="field pending-role-field"><span>الخطوة 1 · نوع الحساب</span><select data-pending-account-type="${escapeHtml(account.id)}"><option value="">اختر نوع الحساب</option><option value="client">عميل</option><option value="worker">عامل</option><option value="supervisor">مشرف / موظف</option></select></label>
+    <section class="pending-approval-options" data-pending-options="client" hidden><h4>الخطوة 2 · اعتماد العميل</h4>
+      ${availableClients.length ? `<label class="field"><span>ملف عميل مسجل مسبقاً</span><select data-pending-client-map="${escapeHtml(account.id)}"><option value="">اختر ملف العميل</option>${clientOptions}</select></label><button class="button button-primary" type="button" data-action="approve-client-existing" data-account-id="${escapeHtml(account.id)}">ربط الحساب بالعميل</button>` : '<p class="pending-approval-note">لا توجد ملفات عملاء غير مرتبطة حالياً؛ يمكنك اعتماد ملف جديد.</p>'}
+      <button class="button button-secondary" type="button" data-action="approve-client-new" data-account-id="${escapeHtml(account.id)}">اعتماد كعميل جديد</button>
+    </section>
+    <section class="pending-approval-options" data-pending-options="worker" hidden><h4>الخطوة 2 · اعتماد العامل</h4>
+      ${staffOptions(["worker"]) ? `<label class="field"><span>ملف عامل مسجل مسبقاً</span><select data-pending-staff-map="${escapeHtml(account.id)}"><option value="">اختر ملف العامل</option>${staffOptions(["worker"])}</select></label><button class="button button-primary" type="button" data-action="approve-staff-existing" data-account-id="${escapeHtml(account.id)}">ربط بملف العامل</button>` : '<p class="pending-approval-note">لا توجد ملفات عمال مسجلة مسبقاً.</p>'}
+      <button class="button button-secondary" type="button" data-action="approve-worker-new" data-account-id="${escapeHtml(account.id)}">اعتماد كعامل جديد</button>
+    </section>
+    <section class="pending-approval-options" data-pending-options="supervisor" hidden><h4>الخطوة 2 · اعتماد المشرف / الموظف</h4>
+      ${staffOptions(["cutting", "sewing"]) ? `<label class="field"><span>ملف موظف مسجل مسبقاً</span><select data-pending-staff-map="${escapeHtml(account.id)}"><option value="">اختر ملف الموظف</option>${staffOptions(["cutting", "sewing"])}</select></label><button class="button button-primary" type="button" data-action="approve-staff-existing" data-account-id="${escapeHtml(account.id)}">ربط بملف الموظف</button>` : '<p class="pending-approval-note">لا توجد ملفات مشرفين / موظفين مسجلة مسبقاً.</p>'}
+      <label class="field"><span>نوع الموظف الجديد</span><select data-pending-supervisor-role="${escapeHtml(account.id)}"><option value="">اختر الدور</option><option value="cutting">مشرف قص</option><option value="sewing">مشرف خياطة</option></select></label><button class="button button-secondary" type="button" data-action="approve-supervisor-new" data-account-id="${escapeHtml(account.id)}">تفعيل كموظف جديد</button>
+    </section>
+  </article>`).join("")}</div>`;
 }
 
 function modelDetailsModalView(order, showPricingBreakdown = false) {
@@ -2439,7 +2455,7 @@ function adminView(data, accounts) {
     </section>
     <section id="client-details" class="dashboard-section">${data.clients.some((client) => client.id === selectedClientId) ? clientDetailsView(data.clients.find((client) => client.id === selectedClientId), data) : '<div class="empty-state">اختر عميلاً لعرض تفاصيل حسابه.</div>'}</section>
     <section id="accounts" class="dashboard-section">
-        ${panel("طلبات تسجيل العملاء والمستخدمين الجدد", table(["الاسم الكامل","اسم المستخدم / الهاتف","تاريخ الطلب","ربط بعميل موجود","اعتماد ملف جديد","اعتماد كموظف / مشرف"], pendingAccountRows(accounts, data.clients)))}
+        ${panel("طلبات إنشاء الحسابات والموافقة", pendingAccountRows(accounts, data.clients), "اختر نوع الحساب أولاً، ثم اربطه بملف مسجل أو اعتمده كملف جديد.")}
         ${panel("حسابات المستخدمين", table(["الاسم","اسم المستخدم","الدور الوظيفي","الحالة","إجراء"], userRows(data.users)))}
         ${panel("سجل تسجيل الدخول وطلبات التسجيل", table(["الحساب","نوع الحدث","وقت الحدث"], data.authEvents.map((entry) => {
           const account = data.users.find((user) => user.id === entry.user_id)
@@ -4556,6 +4572,12 @@ function bindActions(session) {
   });
   bindFabricAdminActions(session);
   bindSewingStageActions(session);
+  document.querySelectorAll("[data-pending-account-type]").forEach((select) => select.addEventListener("change", () => {
+    const card = select.closest("[data-pending-account]");
+    card.querySelectorAll("[data-pending-options]").forEach((section) => {
+      section.hidden = section.dataset.pendingOptions !== select.value;
+    });
+  }));
   document.querySelectorAll("[data-orders-tab]").forEach((button) => button.addEventListener("click", () => {
     activeOrdersTab = button.dataset.ordersTab;
     document.querySelectorAll("[data-orders-tab]").forEach((tab) => {
@@ -5656,6 +5678,45 @@ function bindActions(session) {
     }
   }));
   document.querySelectorAll("[data-action]").forEach((button) => button.addEventListener("click", async () => {
+    if (button.dataset.action === "approve-staff-existing") {
+      const accountId = button.dataset.accountId;
+      const card = button.closest("[data-pending-account]");
+      const selectedSection = button.closest("[data-pending-options]");
+      const profileId = selectedSection?.querySelector("[data-pending-staff-map]")?.value;
+      const profile = dashboardData.users.find((user) => user.id === profileId);
+      const account = (dashboardData.pendingAccounts || []).find((user) => user.id === accountId);
+      if (!profileId || !profile) {
+        window.factoryUI.toast("اختر ملف موظف مسجلاً مسبقاً أولاً.", "error");
+        return;
+      }
+      if (!await window.factoryUI.confirmAction({
+        title: "ربط تسجيل الدخول بملف الموظف",
+        message: `سيُنقل ملف ${profile.name} إلى بيانات الدخول ${account?.username || "للحساب الجديد"}، وتُوقف بيانات الدخول القديمة للموظف. ستبقى المهام والسجلات مرتبطة بملفه.`,
+        confirmLabel: "ربط الحساب",
+        danger: true
+      })) return;
+      button.disabled = true;
+      let mappingSaved = false;
+      try {
+        const { error } = await supabaseClient.rpc("admin_link_factory_staff_account", {
+          requested_profile_user_id: profileId,
+          requested_pending_user_id: accountId
+        });
+        if (error?.code === "PGRST202") {
+          throw new Error("دالة ربط حساب الموظف غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+        }
+        if (error) throw error;
+        mappingSaved = true;
+        await refreshDashboard(session);
+        window.factoryUI.toast("تم ربط بيانات الدخول بملف الموظف ونقل مهامه وسجلاته.");
+      } catch (error) {
+        button.disabled = false;
+        reportDashboardFailure(session, mappingSaved
+          ? "تم ربط الحساب لكن تعذر تحديث اللوحة"
+          : "تعذر ربط تسجيل الدخول بملف الموظف", error);
+      }
+      return;
+    }
     if (["approve-client-existing", "approve-client-new", "link-client-account"].includes(button.dataset.action)) {
       const isManualLink = button.dataset.action === "link-client-account";
       const isExistingProfileApproval = button.dataset.action === "approve-client-existing";
@@ -5708,6 +5769,52 @@ function bindActions(session) {
         reportDashboardFailure(session, mappingSaved
           ? "تم اعتماد / ربط الحساب لكن تعذر تحديث اللوحة"
           : "تعذر اعتماد / ربط حساب العميل", error);
+      }
+      return;
+    }
+    if (["approve-worker-new", "approve-supervisor-new"].includes(button.dataset.action)) {
+      const isWorker = button.dataset.action === "approve-worker-new";
+      const card = button.closest("[data-pending-account]");
+      const accountId = button.dataset.accountId;
+      const selectedRole = isWorker ? "worker" : card?.querySelector("[data-pending-supervisor-role]")?.value;
+      if (!selectedRole || (isWorker ? selectedRole !== "worker" : !["cutting", "sewing"].includes(selectedRole))) {
+        window.factoryUI.toast(isWorker ? "تعذر تحديد دور العامل." : "اختر نوع الموظف: مشرف قص أو مشرف خياطة.", "error");
+        return;
+      }
+      const account = (dashboardData.pendingAccounts || []).find((user) => user.id === accountId);
+      const jobTitle = selectedRole === "cutting" ? "مشرف قص"
+        : selectedRole === "sewing" ? "مشرف خياطة" : "عامل إنتاج";
+      if (!await window.factoryUI.confirmAction({
+        title: isWorker ? "اعتماد عامل جديد" : "تفعيل موظف جديد",
+        message: `سيتم تفعيل حساب ${account?.name || "المستخدم"} بدور ${jobTitle}.`,
+        confirmLabel: isWorker ? "اعتماد العامل" : "تفعيل الموظف"
+      })) return;
+      button.disabled = true;
+      let accountActivated = false;
+      try {
+        const { data, error } = await supabaseClient.from("users")
+          .update({
+            role: selectedRole,
+            status: "active",
+            job_title: jobTitle,
+            can_submit_production: false,
+            updated_at: new Date().toISOString()
+          })
+          .eq("id", accountId)
+          .eq("status", "pending")
+          .is("role", null)
+          .select("id")
+          .maybeSingle();
+        if (error) throw error;
+        if (!data) throw new Error("لم يعد طلب الحساب معلقاً. حدّث الصفحة وحاول مجدداً.");
+        accountActivated = true;
+        await refreshDashboard(session);
+        window.factoryUI.toast(isWorker ? "تم اعتماد العامل الجديد." : "تم تفعيل الموظف الجديد.");
+      } catch (error) {
+        button.disabled = false;
+        reportDashboardFailure(session, accountActivated
+          ? "تم تفعيل الحساب لكن تعذر تحديث اللوحة"
+          : "تعذر تفعيل الحساب", error);
       }
       return;
     }
