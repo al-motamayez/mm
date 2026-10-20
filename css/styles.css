@@ -278,6 +278,13 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .model-thumbnail { display: block; width: 68px; height: 68px; border: 1px solid var(--line); border-radius: 9px; background: #f5f7f4; object-fit: contain; }
 .model-image-field { grid-column: 1 / -1; }
 .model-image-field [data-model-image-preview] { margin-top: 8px; }
+.model-image-preview { display: block; width: min(100%, 280px); max-height: 280px; margin: 10px 0; border: 1px solid var(--line); border-radius: 9px; background: #f5f7f4; object-fit: contain; }
+.cutting-request-list { display: grid; gap: 12px; }
+.cutting-draft-card { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--white); }
+.cutting-draft-card > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.cutting-draft-card h3, .cutting-draft-card p { margin: 0; }
+.cutting-draft-card p { color: var(--muted); }
+.cutting-draft-card .form-actions { margin-top: 4px; }
 .size-picker, .color-picker { min-width: 0; }
 .size-option-group { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 9px; }
 .size-choice { display: grid; min-width: 62px; justify-items: center; gap: 5px; }
@@ -433,6 +440,15 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .client-balance-primary { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-top: 12px; padding: 11px 13px; border-radius: 9px; color: var(--green-dark); background: var(--green-pale); }
 .client-balance-primary span, .client-balance-primary small { font-size: 12px; }
 .client-balance-primary strong { font-size: 19px; }
+.client-balance-spotlight { display: grid; width: 100%; min-height: 126px; justify-items: center; align-content: center; gap: 6px; margin: 0 0 18px; padding: 20px; border: 1px solid; border-radius: 16px; text-align: center; animation: client-balance-glow 2.8s ease-in-out infinite alternate; }
+.client-balance-spotlight > span { font-size: 15px; font-weight: 700; }
+.client-balance-spotlight > strong { font-size: clamp(28px, 5vw, 42px); line-height: 1.2; direction: ltr; }
+.client-balance-spotlight > small { font-size: 13px; }
+.client-balance-spotlight.is-debit { border-color: #e17070; color: #8f2020; background: linear-gradient(135deg, #fff7f6, #ffe6e3); box-shadow: 0 0 10px #c73b3b4d, inset 0 0 16px #f4b2aa55; }
+.client-balance-spotlight.is-credit { border-color: #49a77a; color: #145e3b; background: linear-gradient(135deg, #f4fff8, #dff6e8); box-shadow: 0 0 10px #21834c4d, inset 0 0 16px #a5dfba55; }
+.client-balance-spotlight.is-settled { border-color: #9caea3; color: #34483f; background: #f3f7f4; box-shadow: 0 0 8px #79938333; }
+@keyframes client-balance-glow { from { filter: brightness(.99); } to { filter: brightness(1.04); } }
+@media (prefers-reduced-motion: reduce) { .client-balance-spotlight { animation: none; } }
 .modal-subheading { margin: 14px 0 7px; color: var(--green-dark); font-size: 13px; }
 .compact-model-list { display: grid; gap: 5px; }
 .compact-model-item { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 9px; width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; color: inherit; background: #fff; text-align: start; }

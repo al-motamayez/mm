@@ -103,12 +103,14 @@ function emptyDashboardData() {
     fabricTransactions: [],
     authEvents: [],
     cashTransactions: [],
+    clientFabricStock: [],
     payments: [],
     settlements: [],
     deliveries: [],
     users: [],
     leaves: [],
     cutting: [],
+    cuttingDrafts: [],
     sewing: [],
     tasks: [],
     clientNotes: [],
@@ -209,13 +211,17 @@ async function readDashboardData(session) {
     : session.role === "client"
       ? supabaseClient.rpc("read_factory_client_cash_transactions")
       : Promise.resolve({ data: [], error: null });
-  const [payments, leaves, tasks, settlements, deliveriesResult, cashTransactionsResult, personalAttendance, personalAdvances, personalPayroll, workerAdvances, workerPayroll, workerExpenses, fabricsResult, fabricTransactionsResult, authEventsResult, productionSubmissionsResult, finishedGoodsResult] = await Promise.all([
+  const clientFabricStockPromise = session.role === "client"
+    ? supabaseClient.rpc("read_factory_client_fabric_stock")
+    : Promise.resolve({ data: [], error: null });
+  const [payments, leaves, tasks, settlements, deliveriesResult, cashTransactionsResult, clientFabricStockResult, personalAttendance, personalAdvances, personalPayroll, workerAdvances, workerPayroll, workerExpenses, fabricsResult, fabricTransactionsResult, authEventsResult, productionSubmissionsResult, finishedGoodsResult] = await Promise.all([
     readFlexibleRecords("payments"),
     readFlexibleRecords("leaves"),
     readFlexibleRecords("tasks"),
     readFlexibleRecords("settlements"),
     deliveriesPromise,
     cashTransactionsPromise,
+    clientFabricStockPromise,
     ["cutting", "sewing", "worker"].includes(session.role) ? readFlexibleRecords("attendance") : Promise.resolve([]),
     ["cutting", "sewing", "worker"].includes(session.role) ? readFlexibleRecords("advances") : Promise.resolve([]),
     ["cutting", "sewing", "worker"].includes(session.role) ? readFlexibleRecords("payroll") : Promise.resolve([]),
@@ -235,6 +241,10 @@ async function readDashboardData(session) {
     throw new Error("دالة قراءة مصروفات حساب العميل غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
   }
   if (cashTransactionsResult.error) throw cashTransactionsResult.error;
+  if (session.role === "client" && clientFabricStockResult.error?.code === "PGRST202") {
+    throw new Error("دالة قراءة مخزون قماش العميل غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+  }
+  if (clientFabricStockResult.error) throw clientFabricStockResult.error;
   if (["42P01", "PGRST205"].includes(fabricsResult.error?.code)
       || ["42P01", "PGRST205"].includes(fabricTransactionsResult.error?.code)) {
     throw new Error("جداول مخزون القماش غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
@@ -255,6 +265,7 @@ async function readDashboardData(session) {
   data.settlements = settlements;
   data.deliveries = deliveriesResult.data || [];
   data.cashTransactions = cashTransactionsResult.data || [];
+  data.clientFabricStock = clientFabricStockResult.data || [];
   data.fabrics = fabricsResult.data || [];
   data.fabricTransactions = fabricTransactionsResult.data || [];
   data.authEvents = authEventsResult.data || [];
@@ -279,12 +290,23 @@ async function readDashboardData(session) {
   data.workerPayroll = workerPayroll;
   data.workerExpenses = workerExpenses;
   if (session.role === "cutting") {
-    const { data: cuttingClients, error: cuttingClientsError } = await supabaseClient.rpc("read_factory_cutting_clients");
+    const [
+      { data: cuttingClients, error: cuttingClientsError },
+      { data: cuttingDrafts, error: cuttingDraftsError }
+    ] = await Promise.all([
+      supabaseClient.rpc("read_factory_cutting_clients"),
+      supabaseClient.rpc("read_factory_cutting_drafts")
+    ]);
     if (cuttingClientsError?.code === "PGRST202") {
       throw new Error("دالة قراءة قائمة العملاء لمشرف القص غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
     }
     if (cuttingClientsError) throw cuttingClientsError;
+    if (cuttingDraftsError?.code === "PGRST202") {
+      throw new Error("دوال مسودات القص غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+    }
+    if (cuttingDraftsError) throw cuttingDraftsError;
     data.clients = cuttingClients || [];
+    data.cuttingDrafts = cuttingDrafts || [];
   }
   data.leaves = leaves;
   data.tasks = tasks;
@@ -2427,6 +2449,31 @@ function cuttingDashboardView(data) {
   return `<div class="stats-grid">${stat("طلبات الإدارة", active.length, "بانتظار استكمال القص")}${stat("العدد المطلوب لطلبات الإدارة", new Intl.NumberFormat("ar-EG-u-nu-latn").format(activeTotal), "قطعة")}${stat("عمليات قص مكتملة", completed.length, "مسجلة على أوامر الإنتاج")}${stat("أصناف القماش المتاحة", data.fabrics.length, "متابعة مباشرة للمخزون")}</div>${panel("ملخص العمل الحالي", `<div class="empty-state">استخدم «طلبات الإدارة» لمراجعة الأوامر وتسجيل بيانات الفرشة والقص، أو «قصة جديدة» لإنشاء قصة مباشرة.</div>`)}`;
 }
 
+function cuttingDraftsView(data) {
+  if (!data.cuttingDrafts.length) {
+    return panel("المسودات المحفوظة", '<div class="empty-state">لا توجد مسودات محفوظة حاليًا. يمكنك حفظ القصة بأي قدر متاح من المعلومات واستكمالها لاحقًا.</div>');
+  }
+  const cards = data.cuttingDrafts.map((draft) => {
+    const payload = draft.payload || {};
+    const model = payload.modelName || payload.modelNumber || "قصة بدون اسم";
+    const customer = data.clients.find((client) => client.id === payload.customerId)?.name || "عميل غير محدد";
+    const sizeMultiplicities = Object.entries(payload.sizes?.multiplicities || {})
+      .map(([size, count]) => `${size}${Number(count) > 1 ? ` ×${count}` : ""}`);
+    const sizes = sizeMultiplicities.join("، ") || (payload.sizes ? sizeSummary(JSON.stringify(payload.sizes)) : "—");
+    const image = payload.modelImageUrl
+      ? `<img class="model-image-preview" src="${escapeHtml(payload.modelImageUrl)}" alt="صورة ${escapeHtml(model)}" loading="lazy">`
+      : "";
+    return `<article class="cutting-request-card cutting-draft-card">
+      <header><div><h3>${escapeHtml(model)}</h3><p>${escapeHtml(customer)} · حُفظت ${formatDateTime(draft.updated_at || draft.created_at)}</p></div><span class="status-tag">مسودة</span></header>
+      ${image}
+      <p>المقاسات: ${escapeHtml(sizes)} · القماش: ${escapeHtml(payload.fabric || payload.externalFabricSource || "غير محدد")}</p>
+      ${payload.technicalNotes ? `<p>${escapeHtml(payload.technicalNotes)}</p>` : ""}
+      <div class="form-actions"><button type="button" class="button button-secondary" data-load-cutting-draft="${escapeHtml(draft.id)}">استكمال المسودة</button><button type="button" class="button button-danger" data-delete-cutting-draft="${escapeHtml(draft.id)}">حذف المسودة</button></div>
+    </article>`;
+  }).join("");
+  return panel("المسودات المحفوظة", `<div class="cutting-request-list">${cards}</div>`, "تظل المسودة منفصلة عن أوامر الإنتاج حتى اعتمادها مكتملة");
+}
+
 function cuttingRequestsView(data) {
   const clientOptions = data.clients.map((client) =>
     `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)}</option>`
@@ -2435,16 +2482,19 @@ function cuttingRequestsView(data) {
     .map((client) => `<option value="${escapeHtml(client.id)}">${escapeHtml(client.brand_name)}</option>`)
     .join("");
   return `<section id="admin-requests" class="dashboard-section">${cuttingView(data)}</section>
+    <section id="cutting-drafts" class="dashboard-section">${cuttingDraftsView(data)}</section>
     <section id="new-cutting" class="dashboard-section">${panel("قصة جديدة", `<form class="cutting-submit-form modal-form" id="cutting-submit-form">
-      <section class="form-section"><h3>تسجيل القصة بعد الفرش <span>أدخل التفاصيل كاملة مرة واحدة</span></h3><div class="form-section-grid">
+      <input type="hidden" name="draftId" value="">
+      <input type="hidden" name="existingModelImageUrl" value="">
+      <section class="form-section"><h3>تسجيل القصة <span>يمكن حفظ المعلومات المتاحة كمسودة واستكمالها لاحقًا</span></h3><div class="form-section-grid">
         <input type="hidden" name="customerId">
         <label class="field"><span>اسم العميل</span><select name="customerSelection"><option value="">اختر العميل</option>${clientOptions}</select></label>
         <label class="field"><span>اسم البراند</span><select name="brandSelection"><option value="">اختر البراند</option>${brandOptions}</select></label>
         <label class="field model-name-field"><span>اسم الموديل</span><input name="modelName" autocomplete="off"></label>
         <label class="field model-number-field"><span>رقم الموديل</span><input name="modelNumber" autocomplete="off"></label>
-        <label class="field"><span>اختيار قماش الفرشة</span><select name="fabricId" data-fabric-select required>${fabricSelectOptions(data.fabrics, "", data.clients, true)}</select><small data-fabric-stock-hint></small></label>
+        <label class="field"><span>اختيار قماش الفرشة</span><select name="fabricId" data-fabric-select>${fabricSelectOptions(data.fabrics, "", data.clients, true)}</select><small data-fabric-stock-hint></small></label>
         <label class="field"><span>وحدة السحب</span><select name="fabricUnit" data-fabric-unit-select><option value="توب">عدد التوب</option><option value="متر">الكمية بالمتر</option></select></label>
-        <label class="field"><span>الكمية المستخدمة</span><input name="fabricQuantity" type="number" min="0.001" step="0.001" placeholder="الكمية" required></label>
+        <label class="field"><span>الكمية المستخدمة</span><input name="fabricQuantity" type="number" min="0.001" step="0.001" placeholder="الكمية"></label>
         <input type="hidden" name="boltCount" value="0">
         <label class="field" data-external-fabric-source-field hidden><span>مصدر الخامة الخارجية</span><input name="externalFabricSource" maxlength="160" placeholder="مثال: بواقي قماش قديم من المخزن"></label>
         <input type="hidden" name="externalFabricUnit" value="">
@@ -2453,10 +2503,10 @@ function cuttingRequestsView(data) {
       ${cuttingColorPlyMarkup(null, "", 0, "new-cutting")}
       <p class="cutting-calculated-total">إجمالي الراقات: <strong data-cutting-plys>0</strong> · إجمالي قطع القصة: <strong data-cutting-total>0</strong> قطعة</p>
       <div class="cutting-breakdown" data-cutting-breakdown></div>
-      <label class="field"><span>صورة الموديل (اختياري)</span><input type="file" name="modelImage" accept="image/*"><small>يمكن رفع صيغ الصور الشائعة حتى 25 ميجابايت.</small></label>
+      <label class="field"><span>صورة الموديل (اختياري)</span><input type="file" name="modelImage" accept="image/*"><small>يمكن رفع صيغ الصور الشائعة حتى 25 ميجابايت.</small><span data-cutting-draft-image-preview></span></label>
       <label class="field"><span>ملاحظات فنية للفرشة والقص</span><textarea name="technicalNotes" rows="3"></textarea></label>
-      <div class="form-actions"><button type="submit" class="button button-primary">حفظ القصة واعتمادها جاهزة للقص</button></div>
-    </form>`, "بعد إتمام الفرش، سجّل كمية القماش والألوان والمقاسات وعدد الراقات دفعة واحدة. تُحفظ القصة جاهزة للقص عند الإرسال.")}</section>`;
+      <div class="form-actions"><button type="submit" class="button button-secondary" data-cutting-submit-action="draft">حفظ كمسودة</button><button type="submit" class="button button-primary" data-cutting-submit-action="complete">اعتماد قصة مكتملة</button></div>
+    </form>`, "حقول النموذج اختيارية عند حفظ المسودة. اعتماد القصة كأمر إنتاج يتطلب بيانات القص كاملة.")}</section>`;
 }
 
 function cuttingPersonalAccountView(data) {
@@ -2752,9 +2802,13 @@ function clientView(data, session) {
   const openingBalance = roundMoney(latestSettlement?.balance || 0);
   const currentOrders = data.models.filter((item) => !item.archivedAt);
   const archivedOrders = data.models.filter((item) => item.archivedAt);
-  const payments = data.payments.filter((item) =>
-    ((item.clientId || item._ownerId) === session.accountId || item.client === session.username)
-    && (!latestSettlement || new Date(item._createdAt || item.created_at).getTime() >= new Date(latestSettlement.date || latestSettlement._createdAt).getTime())
+  const allClientPayments = data.payments.filter((item) =>
+    (item.clientId || item._ownerId) === session.accountId || item.client === session.username
+  );
+  const payments = allClientPayments.filter((item) =>
+    !latestSettlement
+    || new Date(item._createdAt || item.created_at || item.date).getTime()
+      >= new Date(latestSettlement.date || latestSettlement._createdAt).getTime()
   );
   const totalAmount = sumMoney(currentOrders.map((item) => Number(item.totalAmount)));
   const expectedTotal = sumMoney(currentOrders.map((item) => item.expectedAmount));
@@ -2770,24 +2824,75 @@ function clientView(data, session) {
   const grossDue = addMoney(addMoney(openingBalance, totalAmount), clientExpensesTotal);
   const remaining = subtractMoney(grossDue, totalPaid);
   const due = remaining;
+  const balanceState = due > 0 ? "is-debit" : due < 0 ? "is-credit" : "is-settled";
+  const balanceCaption = due > 0
+    ? "مبلغ مستحق على الحساب"
+    : due < 0
+      ? "رصيد دائن متبقٍ لصالحك"
+      : "الحساب متوازن ولا يوجد مبلغ مستحق";
   const remainingOpeningBalance = openingBalance > 0
     ? Math.max(0, subtractMoney(openingBalance, totalPaid))
     : openingBalance;
   const deliveredUnits = currentOrders.reduce((sum, item) => sum + Number(item.quantity), 0);
-  const paymentPanel = panel("دفعاتي المالية", table(
-    ["المبلغ", "تاريخ ووقت التسجيل", "طريقة الدفع"],
-    payments.map((item) => `<tr><td>${money(item.amount)}</td><td>${formatDateTime(item._createdAt || item.created_at || item.date)}</td><td>${escapeHtml(item.method)}</td></tr>`)
-  ));
-  const expensePanel = data.cashTransactions.length
-    ? panel("مصروفات وعهد مسجلة على الحساب", table(
-      ["البند", "البيان", "المبلغ", "التاريخ"],
-      data.cashTransactions.map((entry) => `<tr><td>${escapeHtml(entry.category)}</td><td>${escapeHtml(entry.description || "—")}</td><td>${money(entry.amount)}</td><td>${formatDateTime(entry.occurred_at)}</td></tr>`)
+  const financialEntries = [
+    ...data.deliveries.map((entry) => ({
+      type: "تسليم بضاعة",
+      reference: currentOrders.concat(archivedOrders).find((order) => order.id === entry.order_id)?.name || "طلبية",
+      detail: `${new Intl.NumberFormat("ar-EG-u-nu-latn").format(entry.quantity)} قطعة · ${escapeHtml(entry.recipient_name || "المستلم غير محدد")}`,
+      amount: Number(entry.amount),
+      date: entry.delivered_at
+    })),
+    ...allClientPayments.map((entry) => ({
+      type: "دفعة مستلمة من العميل",
+      reference: entry.reference || "دفعة مالية",
+      detail: `${escapeHtml(entry.method || "طريقة الدفع غير محددة")}${entry.notes ? ` · ${escapeHtml(entry.notes)}` : ""}`,
+      amount: -Number(entry.amount || 0),
+      date: entry._createdAt || entry.created_at || entry.date
+    })),
+    ...currentOrders.filter((order) => Number(order.paidAmount) > 0).map((order) => ({
+      type: "دفعة مثبتة على الموديل",
+      reference: order.name || order.modelNumber || "موديل",
+      detail: `الموديل ${escapeHtml(order.modelNumber || "—")}`,
+      amount: -Number(order.paidAmount),
+      date: order.created_at
+    })),
+    ...data.cashTransactions.map((entry) => ({
+      type: entry.direction === "expense" ? "مبلغ مدفوع على الحساب (مصروف / عهدة)" : "مبلغ وارد للحساب",
+      reference: entry.category || "حركة مالية",
+      detail: `${escapeHtml(entry.description || "—")} · ${escapeHtml(entry.payment_method || "غير محدد")}`,
+      amount: entry.direction === "expense" ? Number(entry.amount) : -Number(entry.amount),
+      date: entry.occurred_at
+    })),
+    ...settlements.map((entry) => ({
+      type: "رصيد مُرحّل",
+      reference: "تصفية حساب",
+      detail: `الرصيد الختامي للفترة ${money(entry.balance)}`,
+      amount: Number(entry.balance),
+      date: entry.date || entry._createdAt
+    }))
+  ].sort((left, right) => new Date(right.date).getTime() - new Date(left.date).getTime());
+  const financialLedger = panel("السجل المالي الزمني", financialEntries.length
+    ? table(["الحركة","المرجع","التفاصيل","الأثر على الحساب","التاريخ والوقت"], financialEntries.map((entry) =>
+      `<tr><td>${escapeHtml(entry.type)}</td><td>${escapeHtml(entry.reference)}</td><td>${entry.detail}</td><td class="${entry.amount < 0 ? "financial-credit" : "financial-debit"}">${entry.amount < 0 ? "−" : "+"}${money(Math.abs(entry.amount))}</td><td>${formatDateTime(entry.date)}</td></tr>`
     ))
-    : "";
+    : '<div class="empty-state">لا توجد حركات مالية مسجلة حتى الآن.</div>');
   const finishedGoodsRows = data.finishedGoods.map((item) =>
     `<tr><td>${escapeHtml(item.model_name)}${item.model_number ? `<small class="worker-model-number">${escapeHtml(item.model_number)}</small>` : ""}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.quantity)} قطعة</td><td>${workerProductionColorMarkup(item.colors)}</td><td>${item.imageUrl ? `<a href="${escapeHtml(item.imageUrl)}" target="_blank" rel="noopener"><img class="model-thumbnail" src="${escapeHtml(item.imageUrl)}" alt="صورة ${escapeHtml(item.model_name)}" loading="lazy"></a>` : "—"}</td><td>${escapeHtml(item.worker_name)}</td><td>${formatDateTime(item.confirmed_at)}</td></tr>`
   );
-  return `<section id="dashboard" class="dashboard-section"><div class="stats-grid">${stat("موديلاتي الحالية", currentOrders.length, "ضمن الفترة الحالية")}${stat("العدد الفعلي", new Intl.NumberFormat("ar-EG-u-nu-latn").format(deliveredUnits), "قطعة بعد القص")}${latestSettlement ? stat("الرصيد السابق المرحّل المتبقي", money(remainingOpeningBalance), "بعد احتساب المدفوعات الحالية") : ""}${stat("الإجمالي المتوقع للطلبات", money(expectedTotal), "يشمل مصاريف التشغيل")}${stat("المطلوب بعد التسليم", money(totalAmount), "قيمة الشغل المسلّم ومصاريفه")}${stat("مصروفات وعهد على الحساب", money(clientExpensesTotal))}${stat("إجمالي المطلوب بعد خصم المدفوع", money(due), "الرصيد المرحّل + المستحق + المصروفات − المدفوع")}${stat("إجمالي المدفوع", money(totalPaid))}${stat("الرصيد المتبقي", money(remaining), remaining === 0 ? "تم السداد بالكامل" : remaining < 0 ? "رصيد دائن للعميل" : "مستحق على العميل")}</div></section><section id="orders" class="dashboard-section">${panel("موديلاتي والطلبيات الحالية", clientOrderCards(currentOrders))}${archivedOrders.length ? panel("الطلبات المؤرشفة", clientOrderCards(archivedOrders)) : ""}</section><section id="finished-goods" class="dashboard-section">${panel("مخزون الإنتاج المستلم للإمبلاج", table(["الموديل","الكمية","الألوان","الصورة","العامل","تاريخ الاستلام"], finishedGoodsRows))}</section><section id="finance" class="dashboard-section">${paymentPanel}${expensePanel}</section>`;
+  const fabricStockRows = [...new Map(data.clientFabricStock.map((item) => [item.fabric_id, item])).values()];
+  const fabricMovementRows = data.clientFabricStock.filter((item) => item.movement_id);
+  const fabricQuantity = (value) => new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(Number(value || 0));
+  const fabricSection = `<section id="fabrics" class="dashboard-section">${panel("القماشي · رصيد القماش المسجل باسمك", fabricStockRows.length
+    ? table(["نوع القماش","اللون","الرصيد المتاح","الوحدة","آخر تحديث"], fabricStockRows.map((item) =>
+      `<tr><td>${escapeHtml(item.fabric_name)}</td><td>${escapeHtml(item.color_name || "—")}</td><td>${fabricQuantity(item.quantity_available)}</td><td>${escapeHtml(item.unit)}</td><td>${formatDateTime(item.updated_at || item.received_at)}</td></tr>`
+    ))
+    : '<div class="empty-state">لا يوجد رصيد قماش مسجل على ملفك حالياً.</div>')}
+    ${panel("حركات القماش", fabricMovementRows.length
+      ? table(["القماش / اللون","الحركة","الكمية","ملاحظات","التاريخ"], fabricMovementRows.map((item) =>
+        `<tr><td>${escapeHtml(item.fabric_name)} · ${escapeHtml(item.color_name || "—")}</td><td>${escapeHtml(item.transaction_type)}</td><td>${fabricQuantity(item.movement_quantity)} ${escapeHtml(item.unit)}</td><td>${escapeHtml(item.movement_notes || "—")}</td><td>${formatDateTime(item.movement_created_at)}</td></tr>`
+      ))
+      : '<div class="empty-state">لا توجد حركات قماش مسجلة.</div>')}</section>`;
+  return `<section id="dashboard" class="dashboard-section"><article class="client-balance-spotlight ${balanceState}" role="status" aria-live="polite"><span>إجمالي المطلوب بعد خصم المدفوعات</span><strong>${money(Math.abs(due))}</strong><small>${balanceCaption}</small></article><div class="stats-grid">${stat("موديلاتي الحالية", currentOrders.length, "ضمن الفترة الحالية")}${stat("العدد الفعلي", new Intl.NumberFormat("ar-EG-u-nu-latn").format(deliveredUnits), "قطعة بعد القص")}${latestSettlement ? stat("الرصيد السابق المرحّل المتبقي", money(remainingOpeningBalance), "بعد احتساب المدفوعات الحالية") : ""}${stat("الإجمالي المتوقع للطلبات", money(expectedTotal), "يشمل مصاريف التشغيل")}${stat("المطلوب بعد التسليم", money(totalAmount), "قيمة الشغل المسلّم ومصاريفه")}${stat("مصروفات وعهد على الحساب", money(clientExpensesTotal))}${stat("إجمالي المدفوع", money(totalPaid))}${stat("الرصيد المتبقي", money(remaining), remaining === 0 ? "تم السداد بالكامل" : remaining < 0 ? "رصيد دائن للعميل" : "مستحق على العميل")}</div></section><section id="orders" class="dashboard-section">${panel("موديلاتي والطلبيات الحالية", clientOrderCards(currentOrders))}${archivedOrders.length ? panel("الطلبات المؤرشفة", clientOrderCards(archivedOrders)) : ""}</section><section id="finished-goods" class="dashboard-section">${panel("المخزني · مخزون الإنتاج المستلم", table(["الموديل","الكمية","الألوان","الصورة","العامل","تاريخ الاستلام"], finishedGoodsRows))}</section>${fabricSection}<section id="finance" class="dashboard-section">${financialLedger}</section>`;
 }
 
 let sidebarCollapsed = false;
@@ -2813,14 +2918,16 @@ function navigationItems(role, info, session = null) {
     return [
       { id: "dashboard", icon: "▦", label: "لوحة التحكم" },
       { id: "orders", icon: "▤", label: "موديلاتي والطلبيات" },
-      { id: "finished-goods", icon: "▣", label: "مخزون الإنتاج المستلم" },
-      { id: "finance", icon: "ج.م", label: "الدفعات المالية" }
+      { id: "finished-goods", icon: "▣", label: "المخزني" },
+      { id: "fabrics", icon: "▧", label: "القماشي" },
+      { id: "finance", icon: "ج.م", label: "السجل المالي" }
     ];
   }
   if (role === "cutting") {
     return [
       { id: "dashboard", icon: info.icon, label: "لوحة التحكم" },
       { id: "admin-requests", icon: "✂", label: "طلبات الإدارة" },
+      { id: "cutting-drafts", icon: "▤", label: "المسودات المحفوظة" },
       { id: "new-cutting", icon: "＋", label: "قصة جديدة" },
       { id: "incoming-fabric", icon: "↘", label: "القماش الداخل" },
       { id: "personal-account", icon: "◷", label: "متابعة الحساب والراتب", last: true }
@@ -3286,6 +3393,7 @@ function bindCuttingActions(session) {
       } else {
         unitSelect.disabled = false;
       }
+      const requiresFabric = form.classList.contains("cutting-finish-form");
       const quantityInput = form.elements.fabricQuantity;
       quantityInput.step = selectedUnit === "توب" ? "1" : "0.001";
       quantityInput.min = selectedUnit === "توب" ? "1" : "0.001";
@@ -3299,13 +3407,13 @@ function bindCuttingActions(session) {
       if (form.elements.externalFabricUnit) form.elements.externalFabricUnit.value = external ? selectedUnit : "";
       if (select.value === "external") {
         externalFields.forEach((field) => { field.hidden = false; });
-        if (externalInput) externalInput.required = true;
+        if (externalInput) externalInput.required = requiresFabric;
         if (select.required) select.required = false;
         if (hint) hint.textContent = "الخامة الخارجية لا تخصم من مخزون القماش.";
       } else {
         externalFields.forEach((field) => { field.hidden = true; });
         if (externalInput) externalInput.required = false;
-        if (!select.required) select.required = true;
+        select.required = requiresFabric;
         if (hint) hint.textContent = select.value
           ? `المتاح حاليًا: ${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(Number(available || 0))} ${selected.dataset.unit || ""}`
           : "اختر صنفًا من مخزون القماش، أو سجّل مصدر خامة خارجية.";
@@ -3407,6 +3515,7 @@ function bindCuttingActions(session) {
     const button = form.querySelector('[type="submit"]');
     button.disabled = true;
     let imageUploaded = false;
+    let recordSaved = false;
     try {
       const file = form.elements.modelImage.files[0];
       const imageUrl = await uploadModelImage(form.dataset.finishCutting, file);
@@ -3453,56 +3562,184 @@ function bindCuttingActions(session) {
     };
     submitForm.elements.customerSelection.addEventListener("change", () => setSelectedCustomer("customerSelection"));
     submitForm.elements.brandSelection.addEventListener("change", () => setSelectedCustomer("brandSelection"));
+    document.querySelectorAll("[data-load-cutting-draft]").forEach((button) => button.addEventListener("click", () => {
+      const draft = dashboardData.cuttingDrafts.find((item) => item.id === button.dataset.loadCuttingDraft);
+      if (!draft) {
+        window.factoryUI.toast("تعذر العثور على المسودة المطلوبة.", "error");
+        return;
+      }
+      const payload = draft.payload || {};
+      submitForm.elements.draftId.value = draft.id;
+      submitForm.elements.customerSelection.value = payload.customerSelection || "";
+      submitForm.elements.brandSelection.value = payload.brandSelection || "";
+      if (!submitForm.elements.customerSelection.value && !submitForm.elements.brandSelection.value && payload.customerId) {
+        submitForm.elements.customerSelection.value = payload.customerId;
+      }
+      (submitForm.elements.customerSelection.value ? submitForm.elements.customerSelection : submitForm.elements.brandSelection)
+        .dispatchEvent(new Event("change", { bubbles: true }));
+      submitForm.elements.modelName.value = payload.modelName || "";
+      submitForm.elements.modelNumber.value = payload.modelNumber || "";
+      submitForm.elements.fabricId.value = payload.fabricId || "";
+      submitForm.elements.fabricUnit.value = payload.fabricUnit || "متر";
+      submitForm.elements.fabricQuantity.value = payload.fabricQuantity ?? "";
+      submitForm.elements.externalFabricSource.value = payload.externalFabricSource || "";
+      submitForm.elements.technicalNotes.value = payload.technicalNotes || "";
+      submitForm.elements.existingModelImageUrl.value = payload.modelImageUrl || "";
+      submitForm.elements.modelImage.value = "";
+      submitForm.querySelector("[data-cutting-draft-image-preview]").innerHTML = payload.modelImageUrl
+        ? `<img class="model-image-preview" src="${escapeHtml(payload.modelImageUrl)}" alt="صورة الموديل المحفوظة">`
+        : "";
+      submitForm.elements.fabricId.dispatchEvent(new Event("change", { bubbles: true }));
+      const sizePicker = submitForm.querySelector("[data-size-picker]");
+      setSizePicker(sizePicker, payload.sizes ? JSON.stringify(payload.sizes) : "");
+      const parsedSizes = parseSizeData(payload.sizes ? JSON.stringify(payload.sizes) : "");
+      if (sizePicker.dataset.sizeDuplicates === "true") {
+        sizePicker.querySelectorAll("[data-size-occurrences]").forEach((choice) => {
+          const occurrences = Number(parsedSizes.multiplicities[choice.dataset.sizeOccurrences] || 0);
+          choice.dataset.occurrences = String(occurrences);
+          choice.querySelector("[data-size-occurrence-count]").textContent = String(occurrences);
+          choice.querySelector("[data-size-occurrence-remove]").disabled = occurrences === 0;
+        });
+        updateSizePicker(sizePicker);
+      }
+      let colorPlyData = payload.colorPlyData || {};
+      if (typeof colorPlyData === "string") {
+        try { colorPlyData = JSON.parse(colorPlyData); } catch { colorPlyData = {}; }
+      }
+      const colors = Array.isArray(colorPlyData.colors) ? colorPlyData.colors : [];
+      submitForm.querySelector("[data-color-ply-rows]").innerHTML = colors.length
+        ? colors.map((entry) => cuttingColorPlyRow(entry.color, entry.plys, entry.name)).join("")
+        : cuttingColorPlyRow("#000000", "", "");
+      updateCuttingCalculation(submitForm);
+      activateDashboardView("new-cutting");
+      submitForm.scrollIntoView({ behavior: "smooth", block: "start" });
+    }));
+    document.querySelectorAll("[data-delete-cutting-draft]").forEach((button) => button.addEventListener("click", async () => {
+      button.disabled = true;
+      try {
+        const { error } = await supabaseClient.rpc("delete_factory_cutting_draft", {
+          requested_draft_id: button.dataset.deleteCuttingDraft
+        });
+        if (error?.code === "PGRST202") throw new Error("دوال مسودات القص غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+        if (error) throw error;
+        recordSaved = true;
+        await refreshDashboard(session);
+        window.factoryUI.toast("تم حذف المسودة.");
+      } catch (error) {
+        button.disabled = false;
+        reportDashboardFailure(session, "تعذر حذف المسودة", error);
+      }
+    }));
     submitForm.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const modelName = String(submitForm.elements.modelName.value).trim();
-    const modelNumber = String(submitForm.elements.modelNumber.value).trim();
-    const customerId = submitForm.elements.customerId.value;
-    if (!modelName && !modelNumber) {
-      window.factoryUI.toast("أدخل اسم الموديل أو رقمه على الأقل.", "error");
-      return;
-    }
-    if (!customerId) {
-      window.factoryUI.toast("اختر العميل الذي ستُسجل القصة على حسابه.", "error");
-      return;
-    }
-    const cuttingData = readCuttingInputs(submitForm, true);
-    if (!cuttingData) return;
-    const button = submitForm.querySelector('[type="submit"]');
-    button.disabled = true;
-    let imageUploaded = false;
-    let storySaved = false;
-    try {
-      const orderId = crypto.randomUUID();
-      const imageUrl = await uploadModelImage(orderId, submitForm.elements.modelImage.files[0]);
-      imageUploaded = Boolean(imageUrl);
-      const { data, error } = await supabaseClient.rpc("submit_factory_cutting", {
-        requested_order_id: orderId,
-        requested_customer_id: customerId,
-        requested_model_name: modelName,
-        requested_model_number: modelNumber,
-        requested_size_data: cuttingData.sizeData,
-        requested_color_ply_data: cuttingData.colorPlyData,
-        requested_model_image_url: imageUrl,
-        requested_fabric: cuttingData.fabric,
-        requested_bolt_count: cuttingData.boltCount,
-        requested_technical_notes: cuttingData.technicalNotes,
-        requested_fabric_id: cuttingData.fabricId,
-        requested_fabric_quantity: cuttingData.fabricQuantity,
-        requested_external_fabric_unit: cuttingData.externalFabricUnit
-      });
-      if (error?.code === "PGRST202") throw new Error("دالة تسجيل القصة بالدفعة الواحدة غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
-      if (error) throw error;
-      storySaved = true;
-      await refreshDashboard(session);
-      activateDashboardView("admin-requests");
-      const activeSession = document.querySelector(`[data-finish-cutting="${orderId}"]`);
-      activeSession?.scrollIntoView({ behavior: "smooth", block: "center" });
-      window.factoryUI.toast(`تم تسجيل ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(data)} قطعة وأصبحت القصة جاهزة للقص.`);
-    } catch (error) {
-      button.disabled = false;
-      reportDashboardFailure(session, imageUploaded && !storySaved ? "رُفعت الصورة لكن لم تُسجل القصة" : "تعذر حفظ القصة", error);
-    }
+      event.preventDefault();
+      if (submitForm.dataset.saving === "true") return;
+      const action = event.submitter?.dataset.cuttingSubmitAction || "complete";
+      const submitButtons = [...submitForm.querySelectorAll("[data-cutting-submit-action]")];
+      const modelName = String(submitForm.elements.modelName.value).trim();
+      const modelNumber = String(submitForm.elements.modelNumber.value).trim();
+      const customerId = submitForm.elements.customerId.value;
+      let completeCuttingData = null;
+      if (action !== "draft") {
+        if (!modelName && !modelNumber) {
+          window.factoryUI.toast("أدخل اسم الموديل أو رقمه لاعتماد القصة المكتملة.", "error");
+          return;
+        }
+        if (!customerId) {
+          window.factoryUI.toast("اختر العميل لاعتماد القصة المكتملة.", "error");
+          return;
+        }
+        completeCuttingData = readCuttingInputs(submitForm, true);
+        if (!completeCuttingData) return;
+      }
+      submitForm.dataset.saving = "true";
+      submitButtons.forEach((submitButton) => { submitButton.disabled = true; });
+      let imageUploaded = false;
+      try {
+        const draftId = submitForm.elements.draftId.value || crypto.randomUUID();
+        const uploadedImageUrl = await uploadModelImage(draftId, submitForm.elements.modelImage.files[0]);
+        imageUploaded = Boolean(uploadedImageUrl);
+        const imageUrl = uploadedImageUrl || submitForm.elements.existingModelImageUrl.value || "";
+        if (action === "draft") {
+          const cuttingData = updateCuttingCalculation(submitForm);
+          const selectedFabric = submitForm.elements.fabricId.selectedOptions[0];
+          const colorPlyData = {
+            ...cuttingData.colorPlyData,
+            colors: [...submitForm.querySelectorAll("[data-color-ply-row]")].map((row) => ({
+              color: row.querySelector("[data-ply-color]").value.toUpperCase(),
+              name: String(row.querySelector("[data-ply-name]").value).trim(),
+              plys: row.querySelector("[data-ply-count]").value
+            }))
+          };
+          const payload = {
+            customerId,
+            customerSelection: submitForm.elements.customerSelection.value,
+            brandSelection: submitForm.elements.brandSelection.value,
+            modelName,
+            modelNumber,
+            fabricId: submitForm.elements.fabricId.value,
+            fabric: submitForm.elements.fabricId.value === "external"
+              ? String(submitForm.elements.externalFabricSource.value).trim()
+              : selectedFabric?.dataset.name || "",
+            fabricUnit: submitForm.elements.fabricUnit.value || "",
+            fabricQuantity: submitForm.elements.fabricQuantity.value || "",
+            externalFabricSource: String(submitForm.elements.externalFabricSource.value).trim(),
+            sizes: cuttingData.sizeData.type ? cuttingData.sizeData : null,
+            colorPlyData,
+            technicalNotes: String(submitForm.elements.technicalNotes.value).trim(),
+            modelImageUrl: imageUrl
+          };
+          const { error } = await supabaseClient.rpc("save_factory_cutting_draft", {
+            requested_draft_id: draftId,
+            requested_payload: payload
+          });
+          if (error?.code === "PGRST202") throw new Error("دوال مسودات القص غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+          if (error) throw error;
+          await refreshDashboard(session);
+          activateDashboardView("cutting-drafts");
+          window.factoryUI.toast("تم حفظ المسودة. يمكنك استكمالها أو اعتمادها لاحقًا.");
+          return;
+        }
+        const orderId = crypto.randomUUID();
+        const { data, error } = await supabaseClient.rpc("submit_factory_cutting", {
+          requested_order_id: orderId,
+          requested_customer_id: customerId,
+          requested_model_name: modelName,
+          requested_model_number: modelNumber,
+          requested_size_data: completeCuttingData.sizeData,
+          requested_color_ply_data: completeCuttingData.colorPlyData,
+          requested_model_image_url: imageUrl,
+          requested_fabric: completeCuttingData.fabric,
+          requested_bolt_count: completeCuttingData.boltCount,
+          requested_technical_notes: completeCuttingData.technicalNotes,
+          requested_fabric_id: completeCuttingData.fabricId,
+          requested_fabric_quantity: completeCuttingData.fabricQuantity,
+          requested_external_fabric_unit: completeCuttingData.externalFabricUnit
+        });
+        if (error?.code === "PGRST202") throw new Error("دالة تسجيل القصة بالدفعة الواحدة غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+        if (error) throw error;
+        recordSaved = true;
+        let draftCleanupFailed = false;
+        if (submitForm.elements.draftId.value) {
+          const { error: deleteError } = await supabaseClient.rpc("delete_factory_cutting_draft", {
+            requested_draft_id: submitForm.elements.draftId.value
+          });
+          if (deleteError) {
+            console.error("تم اعتماد القصة لكن تعذر حذف مسودتها.", deleteError);
+            draftCleanupFailed = true;
+          }
+        }
+        await refreshDashboard(session);
+        activateDashboardView("admin-requests");
+        const activeSession = document.querySelector(`[data-finish-cutting="${orderId}"]`);
+        activeSession?.scrollIntoView({ behavior: "smooth", block: "center" });
+        const totalMessage = `تم تسجيل ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(data)} قطعة وأصبحت القصة جاهزة للقص.`;
+        window.factoryUI.toast(draftCleanupFailed ? `${totalMessage} تعذر حذف نسخة المسودة.` : totalMessage, draftCleanupFailed ? "error" : undefined);
+      } catch (error) {
+        reportDashboardFailure(session, recordSaved ? "تم حفظ القصة لكن تعذر تحديث الشاشة" : imageUploaded ? "رُفعت الصورة لكن تعذر حفظ بيانات القصة" : "تعذر حفظ القصة", error);
+      } finally {
+        submitForm.dataset.saving = "false";
+        submitButtons.forEach((submitButton) => { submitButton.disabled = false; });
+      }
     });
   }
 }

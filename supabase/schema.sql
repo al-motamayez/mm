@@ -521,6 +521,17 @@ alter table public.production_stages
   add column if not exists target_quantity integer not null default 0,
   add column if not exists completed_quantity integer not null default 0;
 
+create table if not exists public.factory_cutting_drafts (
+  id uuid primary key,
+  owner_id uuid not null references auth.users (id) on delete cascade,
+  payload jsonb not null check (jsonb_typeof(payload) = 'object'),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table public.factory_cutting_drafts enable row level security;
+revoke all on public.factory_cutting_drafts from public, anon, authenticated;
+
 create schema if not exists private;
 revoke all on schema private from public, anon, authenticated;
 
@@ -1507,6 +1518,52 @@ begin
       where customer.user_id = auth.uid()
     )
     order by transaction.occurred_at desc;
+end;
+$$;
+
+create or replace function public.read_factory_client_fabric_stock()
+returns table (
+  fabric_id uuid,
+  fabric_name text,
+  color_name text,
+  unit text,
+  quantity_available numeric,
+  received_at timestamptz,
+  updated_at timestamptz,
+  movement_id uuid,
+  transaction_type text,
+  movement_quantity numeric,
+  movement_notes text,
+  movement_created_at timestamptz
+)
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+begin
+  if not public.has_active_factory_role(array['client']) then
+    raise exception 'Only active clients can read their assigned fabric stock.';
+  end if;
+
+  return query
+    select fabric.id,
+           fabric.name,
+           fabric.color_name,
+           fabric.unit,
+           fabric.quantity_available,
+           fabric.received_at,
+           fabric.updated_at,
+           movement.id,
+           movement.transaction_type,
+           movement.quantity,
+           movement.notes,
+           movement.created_at
+    from public.factory_clients as customer
+    join public.factory_fabrics as fabric on fabric.customer_id = customer.id
+    left join public.factory_fabric_transactions as movement on movement.fabric_id = fabric.id
+    where customer.user_id = auth.uid()
+    order by fabric.name, movement.created_at desc nulls last;
 end;
 $$;
 
@@ -3110,6 +3167,76 @@ begin
 end;
 $$;
 
+create function public.read_factory_cutting_drafts()
+returns table (id uuid, payload jsonb, created_at timestamptz, updated_at timestamptz)
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+begin
+  if not public.has_active_factory_role(array['cutting']) then
+    raise exception 'Only active cutting supervisors can read cutting drafts.';
+  end if;
+
+  return query
+    select draft.id, draft.payload, draft.created_at, draft.updated_at
+    from public.factory_cutting_drafts as draft
+    where draft.owner_id = auth.uid()
+    order by draft.updated_at desc;
+end;
+$$;
+
+create function public.save_factory_cutting_draft(requested_draft_id uuid, requested_payload jsonb)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not public.has_active_factory_role(array['cutting']) then
+    raise exception 'Only active cutting supervisors can save cutting drafts.';
+  end if;
+  if requested_draft_id is null
+     or requested_payload is null
+     or coalesce(jsonb_typeof(requested_payload), '') <> 'object'
+     or octet_length(requested_payload::text) > 1048576 then
+    raise exception 'A valid cutting draft smaller than 1 MB is required.';
+  end if;
+
+  insert into public.factory_cutting_drafts (id, owner_id, payload)
+  values (requested_draft_id, auth.uid(), requested_payload)
+  on conflict (id) do update
+    set payload = excluded.payload,
+        updated_at = now()
+    where factory_cutting_drafts.owner_id = auth.uid();
+  if not found then
+    raise exception 'The cutting draft does not exist or is not owned by this account.';
+  end if;
+  return requested_draft_id;
+end;
+$$;
+
+create function public.delete_factory_cutting_draft(requested_draft_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not public.has_active_factory_role(array['cutting']) then
+    raise exception 'Only active cutting supervisors can delete cutting drafts.';
+  end if;
+
+  delete from public.factory_cutting_drafts
+  where id = requested_draft_id
+    and owner_id = auth.uid();
+  if not found then
+    raise exception 'The cutting draft does not exist or is not owned by this account.';
+  end if;
+end;
+$$;
+
 create function public.submit_factory_cutting(
   requested_order_id uuid,
   requested_customer_id uuid,
@@ -4576,8 +4703,16 @@ revoke all on function public.read_factory_orders_client() from public, anon, au
 grant execute on function public.read_factory_orders_client() to authenticated;
 revoke all on function public.read_factory_client_cash_transactions() from public, anon, authenticated;
 grant execute on function public.read_factory_client_cash_transactions() to authenticated;
+revoke all on function public.read_factory_client_fabric_stock() from public, anon, authenticated;
+grant execute on function public.read_factory_client_fabric_stock() to authenticated;
 revoke all on function public.read_factory_cutting_clients() from public, anon, authenticated;
 grant execute on function public.read_factory_cutting_clients() to authenticated;
+revoke all on function public.read_factory_cutting_drafts() from public, anon, authenticated;
+grant execute on function public.read_factory_cutting_drafts() to authenticated;
+revoke all on function public.save_factory_cutting_draft(uuid, jsonb) from public, anon, authenticated;
+grant execute on function public.save_factory_cutting_draft(uuid, jsonb) to authenticated;
+revoke all on function public.delete_factory_cutting_draft(uuid) from public, anon, authenticated;
+grant execute on function public.delete_factory_cutting_draft(uuid) to authenticated;
 revoke all on function public.save_factory_order(uuid, uuid, text, text, integer, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb, text, jsonb, text[], text, jsonb, numeric) from public, anon, authenticated;
 grant execute on function public.save_factory_order(uuid, uuid, text, text, integer, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb, text, jsonb, text[], text, jsonb, numeric) to authenticated;
 revoke all on function public.record_factory_delivery(uuid, integer, text) from public, anon, authenticated;
