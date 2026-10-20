@@ -178,12 +178,20 @@ set search_path = public
 as $$
 begin
   if new.role = 'client' and new.status = 'active' then
-    insert into public.factory_clients (user_id, name, phone)
-    values (new.id, new.name, coalesce(new.phone, ''))
-    on conflict (user_id) do update
-      set name = excluded.name,
-          phone = excluded.phone,
-      updated_at = now();
+    if tg_op = 'UPDATE' then
+      update public.factory_clients
+      set name = case when name = old.name then new.name else name end,
+          phone = case when phone = coalesce(old.phone, '') then coalesce(new.phone, '') else phone end,
+          updated_at = now()
+      where user_id = new.id;
+    end if;
+    if not exists (
+      select 1 from public.factory_clients where user_id = new.id
+    ) then
+      insert into public.factory_clients (user_id, name, phone)
+      values (new.id, new.name, coalesce(new.phone, ''))
+      on conflict (user_id) do nothing;
+    end if;
   end if;
   return new;
 end;
@@ -203,6 +211,100 @@ on conflict (user_id) do update
   set name = excluded.name,
       phone = excluded.phone,
       updated_at = now();
+
+create or replace function public.admin_link_factory_client_account(
+  requested_customer_id uuid,
+  requested_user_id uuid
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  target_user public.users%rowtype;
+  target_customer public.factory_clients%rowtype;
+  current_customer_id uuid;
+begin
+  if not public.is_active_factory_admin() then
+    raise exception 'Only an active factory admin may link client accounts.';
+  end if;
+  if requested_user_id is null then
+    raise exception 'Choose a login account to link.';
+  end if;
+
+  select *
+    into target_user
+  from public.users
+  where id = requested_user_id
+  for update;
+  if not found then
+    raise exception 'The requested login account does not exist.';
+  end if;
+  if not (
+    (target_user.status = 'pending' and target_user.role is null)
+    or (target_user.status = 'active' and target_user.role = 'client')
+  ) then
+    raise exception 'Only pending registrations or active client accounts can be linked.';
+  end if;
+
+  select id
+    into current_customer_id
+  from public.factory_clients
+  where user_id = requested_user_id
+  for update;
+  if found and current_customer_id is distinct from requested_customer_id then
+    raise exception 'This login is already linked to another client profile.';
+  end if;
+
+  if requested_customer_id is null then
+    if target_user.status <> 'pending' or target_user.role is not null or current_customer_id is not null then
+      raise exception 'A new client profile can only be created for an unlinked pending registration.';
+    end if;
+    update public.users
+    set role = 'client',
+        status = 'active',
+        updated_at = now()
+    where id = requested_user_id
+      and status = 'pending'
+      and role is null;
+    if not found then
+      raise exception 'The registration is no longer pending.';
+    end if;
+    return;
+  end if;
+
+  select *
+    into target_customer
+  from public.factory_clients
+  where id = requested_customer_id
+  for update;
+  if not found then
+    raise exception 'The selected client profile does not exist.';
+  end if;
+  if target_customer.user_id is not null and target_customer.user_id <> requested_user_id then
+    raise exception 'The selected client profile is already linked to another login.';
+  end if;
+
+  update public.factory_clients
+  set user_id = requested_user_id,
+      updated_at = now()
+  where id = requested_customer_id;
+
+  update public.users
+  set role = 'client',
+      status = 'active',
+      updated_at = now()
+  where id = requested_user_id
+    and (
+      (status = 'pending' and role is null)
+      or (status = 'active' and role = 'client')
+    );
+  if not found then
+    raise exception 'The registration changed before it could be linked.';
+  end if;
+end;
+$$;
 
 create or replace function public.delete_user_by_admin(target_user_id uuid)
 returns void
@@ -371,6 +473,8 @@ revoke all on function public.ensure_factory_admin_profile() from public, anon, 
 grant execute on function public.ensure_factory_admin_profile() to authenticated;
 revoke all on function public.delete_user_by_admin(uuid) from public, anon, authenticated;
 grant execute on function public.delete_user_by_admin(uuid) to authenticated;
+revoke all on function public.admin_link_factory_client_account(uuid, uuid) from public, anon, authenticated;
+grant execute on function public.admin_link_factory_client_account(uuid, uuid) to authenticated;
 revoke all on function public.create_pending_factory_user() from public, anon, authenticated;
 revoke all on function public.sync_factory_user_email() from public, anon, authenticated;
 
@@ -3167,7 +3271,7 @@ begin
 end;
 $$;
 
-create function public.read_factory_cutting_drafts()
+create or replace function public.read_factory_cutting_drafts()
 returns table (id uuid, payload jsonb, created_at timestamptz, updated_at timestamptz)
 language plpgsql
 stable
@@ -3187,7 +3291,7 @@ begin
 end;
 $$;
 
-create function public.save_factory_cutting_draft(requested_draft_id uuid, requested_payload jsonb)
+create or replace function public.save_factory_cutting_draft(requested_draft_id uuid, requested_payload jsonb)
 returns uuid
 language plpgsql
 security definer
@@ -3217,7 +3321,7 @@ begin
 end;
 $$;
 
-create function public.delete_factory_cutting_draft(requested_draft_id uuid)
+create or replace function public.delete_factory_cutting_draft(requested_draft_id uuid)
 returns void
 language plpgsql
 security definer

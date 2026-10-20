@@ -225,6 +225,8 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .client-detail-section { max-width: none; }
 .client-profile-compact { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
 .client-profile-compact span { color: #40544b; font-size: 13px; }
+.client-account-link-controls { display: flex; align-items: end; flex-wrap: wrap; gap: 10px; }
+.client-account-link-controls .field { flex: 1 1 260px; max-width: 560px; }
 .client-management-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 16px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
 .client-management-tab { min-height: 40px; padding: 8px 14px; border: 1px solid var(--line); border-radius: 8px; color: #34483f; background: #fff; font-weight: 600; }
 .client-management-tab.active { border-color: var(--green); color: #fff; background: var(--green); }

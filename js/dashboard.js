@@ -1882,6 +1882,28 @@ function modelStatusReviewView(data) {
     }).join("")}</div>` : '<div class="empty-state">لا توجد موديلات لمراجعتها.</div>'}`;
 }
 
+function clientAccountLinkOptions(client, data) {
+  const candidates = new Map();
+  [...data.users, ...(data.pendingAccounts || [])].forEach((account) => {
+    if (account.id) candidates.set(account.id, account);
+  });
+  const linkedUserIds = new Map(data.clients
+    .filter((entry) => entry.user_id)
+    .map((entry) => [entry.user_id, entry.id]));
+  const options = [...candidates.values()].filter((account) => {
+    const pendingRegistration = account.status === "pending" && !account.role && !account.roleKey;
+    const activeClient = account.status === "active"
+      && (account.roleKey === "client" || account.role === "client");
+    const linkedClientId = linkedUserIds.get(account.id);
+    return (pendingRegistration || activeClient)
+      && (!linkedClientId || linkedClientId === client.id);
+  }).sort((left, right) => String(left.name || left.username).localeCompare(String(right.name || right.username), "ar"));
+  return options.map((account) => {
+    const state = account.status === "pending" ? "بانتظار الموافقة" : "حساب عميل نشط";
+    return `<option value="${escapeHtml(account.id)}" ${account.id === client.user_id ? "selected" : ""}>${escapeHtml(account.name || account.username)} · ${escapeHtml(account.username)} · ${state}</option>`;
+  }).join("");
+}
+
 function clientDetailsView(client, data) {
   const summary = clientAccountSummary(client, data);
   const pricedOrders = summary.orders.filter((order) => order.pricePerPiece > 0);
@@ -1970,8 +1992,17 @@ function clientDetailsView(client, data) {
   </article>`;
   };
   const clientNotes = data.clientNotes.filter((note) => note.customerId === client.id);
+  const linkedAccount = data.users.find((account) => account.id === client.user_id)
+    || (data.pendingAccounts || []).find((account) => account.id === client.user_id);
+  const linkOptions = clientAccountLinkOptions(client, data);
+  const accountLinkSection = `<section class="client-detail-section">${panel("ربط حساب تسجيل الدخول", `<p>${linkedAccount
+    ? `الحساب المرتبط: ${escapeHtml(linkedAccount.name || linkedAccount.username)} · ${escapeHtml(linkedAccount.username)} · ${linkedAccount.status === "pending" ? "بانتظار الموافقة" : linkedAccount.status === "suspended" ? "متوقف" : "نشط"}`
+    : "لا يوجد حساب دخول مرتبط بملف العميل."}</p>${linkOptions
+      ? `<div class="client-account-link-controls"><label class="field"><span>اختر حساباً معلقاً أو حساب عميل موجوداً</span><select data-client-link-account="${escapeHtml(client.id)}"><option value="">اختر الحساب</option>${linkOptions}</select></label><button class="button button-secondary" type="button" data-action="link-client-account" data-customer-id="${escapeHtml(client.id)}">ربط بحساب تسجيل الدخول</button></div>`
+      : '<div class="empty-state">لا توجد حسابات معلقة أو حسابات عملاء متاحة للربط.</div>'}`, "يؤدي ربط حساب معلق إلى اعتماده كعميل وربطه بهذا الملف.")}</section>`;
   return `<div class="clients-toolbar client-detail-toolbar"><div><h2>${escapeHtml(client.name)} · تفاصيل الحساب والعمولة</h2><p>${escapeHtml(client.brand_name || "لا يوجد اسم محل/براند")} · رقم العميل: ${escapeHtml(client.client_number || "—")} · واتساب: ${escapeHtml(client.whatsapp || "—")}</p></div><div class="client-detail-actions"><button class="button button-primary" type="button" data-quick-client-payment="${escapeHtml(client.id)}">＋ إضافة دفعة</button><button class="button button-secondary" type="button" data-print-account>طباعة كشف الحساب</button><button class="button button-secondary" type="button" data-print-selected-models>طباعة الموديلات المحددة</button><button class="row-action" type="button" data-return-clients>العودة للعملاء</button></div></div>
     <div class="client-profile-compact"><span>الهاتف: ${escapeHtml(client.phone || "—")}</span><span>كاش: ${escapeHtml(client.cash_phone || "—")}</span><span>إنستا: ${escapeHtml(client.instagram || "—")}</span><span>تاريخ الملف: ${formatDateTime(client.created_at)}</span></div>
+    ${accountLinkSection}
     ${clientFabricBalanceSection}
     <div class="stats-grid client-finance-summary">${summary.latestSettlement ? stat("الرصيد السابق المرحّل", money(summary.remainingOpeningBalance)) : ""}${stat("المطلوب المتوقع غير المسلّم", money(summary.expectedTotal), "الكمية غير المسلّمة + مصاريف التشغيل")}${stat("المبلغ المستحق فعلياً", money(summary.requiredAfterDelivery), "قيمة المسلّم + مصاريف التشغيل")}${stat("مصروفات وعهد العميل", money(summary.clientExpensesTotal))}${stat("إجمالي المطلوب بعد المدفوع", money(summary.due), "الرصيد المرحّل + المستحق + المصروفات − المدفوع")}${stat("إجمالي المدفوع", money(summary.paid))}${stat("الرصيد الحالي", money(summary.balance), summary.balance === 0 ? "تم السداد بالكامل" : summary.balance < 0 ? "رصيد دائن للعميل" : "مستحق على العميل")}</div>
     <section class="client-detail-section"><header class="section-heading"><div><h2>الموديلات التي تم تسعيرها</h2><p>يُحتسب المطلوب المالي على الكمية التي تم تسليمها.</p></div><button class="button button-secondary" type="button" data-open-order-for-client="${escapeHtml(client.id)}">＋ إضافة موديل للعميل</button></header>${pricedOrders.length ? `<div class="order-cards">${pricedOrders.map((order) => orderCard(order)).join("")}</div>` : '<div class="empty-state">لا توجد موديلات مسعّرة في الفترة الحالية.</div>'}</section>
@@ -1986,9 +2017,23 @@ function clientDetailsView(client, data) {
     </section>`;
 }
 
-function pendingAccountRows(accounts) {
+function pendingAccountRows(accounts, clients) {
   const pending = accounts.filter((account) => account.status === "pending");
-  return pending.map((account) => `<tr><td>${escapeHtml(account.name)}</td><td>${escapeHtml(account.username)}</td><td>${formatDateTime(account.created_at)}</td><td><select aria-label="الدور الجديد" data-pending-role="${escapeHtml(account.id)}"><option value="">اختر الدور</option><option value="client">عميل</option><option value="worker">عامل</option><option value="cutting">مشرف قص</option><option value="sewing">مشرف خياطة</option></select></td><td><button class="row-action" type="button" data-action="activate-account" data-account-id="${escapeHtml(account.id)}">تفعيل الحساب</button></td></tr>`);
+  return pending.map((account) => {
+    const availableClients = clients.filter((client) => !client.user_id);
+    const clientOptions = clients.map((client) => {
+      const linkedAccount = client.user_id
+        ? [...accounts, ...dashboardData.users].find((candidate) => candidate.id === client.user_id)
+        : null;
+      const linkStatus = linkedAccount ? ` · مرتبط بـ${linkedAccount.username}` : "";
+      return `<option value="${escapeHtml(client.id)}"${client.user_id ? " disabled" : ""}>${escapeHtml(client.name)}${client.brand_name ? ` · ${escapeHtml(client.brand_name)}` : ""}${escapeHtml(linkStatus)}</option>`;
+    }
+    ).join("");
+    return `<tr><td>${escapeHtml(account.name)}</td><td>${escapeHtml(account.username)}${account.phone ? `<small>${escapeHtml(account.phone)}</small>` : ""}</td><td>${formatDateTime(account.created_at)}</td>
+      <td><select aria-label="عميل موجود لربط طلب التسجيل" data-pending-client-map="${escapeHtml(account.id)}"><option value="">اختر ملف عميل موجود</option>${clientOptions}</select><button class="row-action" type="button" data-action="approve-client-existing" data-account-id="${escapeHtml(account.id)}"${availableClients.length ? "" : " disabled"}>ربط بعميل موجود</button></td>
+      <td><button class="button button-secondary" type="button" data-action="approve-client-new" data-account-id="${escapeHtml(account.id)}">اعتماد كعميل جديد</button></td>
+      <td><select aria-label="الدور الوظيفي" data-pending-role="${escapeHtml(account.id)}"><option value="">موظف / مشرف</option><option value="worker">عامل</option><option value="cutting">مشرف قص</option><option value="sewing">مشرف خياطة</option></select><button class="row-action" type="button" data-action="activate-account" data-account-id="${escapeHtml(account.id)}">تفعيل كموظف</button></td></tr>`;
+  });
 }
 
 function modelDetailsModalView(order, showPricingBreakdown = false) {
@@ -2391,7 +2436,7 @@ function adminView(data, accounts) {
     </section>
     <section id="client-details" class="dashboard-section">${data.clients.some((client) => client.id === selectedClientId) ? clientDetailsView(data.clients.find((client) => client.id === selectedClientId), data) : '<div class="empty-state">اختر عميلاً لعرض تفاصيل حسابه.</div>'}</section>
     <section id="accounts" class="dashboard-section">
-        ${panel("طلبات الحسابات الجديدة", table(["الاسم الكامل","اسم المستخدم","تاريخ الطلب","تحديد الدور","إجراء"], pendingAccountRows(accounts)))}
+        ${panel("طلبات تسجيل العملاء والمستخدمين الجدد", table(["الاسم الكامل","اسم المستخدم / الهاتف","تاريخ الطلب","ربط بعميل موجود","اعتماد ملف جديد","اعتماد كموظف / مشرف"], pendingAccountRows(accounts, data.clients)))}
         ${panel("حسابات المستخدمين", table(["الاسم","اسم المستخدم","الدور الوظيفي","الحالة","إجراء"], userRows(data.users)))}
         ${panel("سجل تسجيل الدخول وطلبات التسجيل", table(["الحساب","نوع الحدث","وقت الحدث"], data.authEvents.map((entry) => {
           const account = data.users.find((user) => user.id === entry.user_id)
@@ -2955,6 +3000,7 @@ function developerFooterMarkup() {
 }
 
 function render(session, data, accounts) {
+  data.pendingAccounts = accounts;
   initializeRealtimeNotifications(session);
   document.querySelectorAll("body > #order-modal").forEach((modal) => modal.remove());
   const info = roleInfo[session.role];
@@ -5670,6 +5716,61 @@ function bindActions(session) {
     }
   }));
   document.querySelectorAll("[data-action]").forEach((button) => button.addEventListener("click", async () => {
+    if (["approve-client-existing", "approve-client-new", "link-client-account"].includes(button.dataset.action)) {
+      const isManualLink = button.dataset.action === "link-client-account";
+      const isExistingProfileApproval = button.dataset.action === "approve-client-existing";
+      const accountId = isManualLink
+        ? document.querySelector(`[data-client-link-account="${button.dataset.customerId}"]`)?.value
+        : button.dataset.accountId;
+      const customerId = isManualLink
+        ? button.dataset.customerId
+        : isExistingProfileApproval
+          ? document.querySelector(`[data-pending-client-map="${button.dataset.accountId}"]`)?.value
+          : null;
+      if (!accountId || (isExistingProfileApproval && !customerId)) {
+        window.factoryUI.toast(isManualLink
+          ? "اختر حساب تسجيل الدخول أولاً."
+          : "اختر ملف العميل الذي تريد ربط طلب التسجيل به.",
+        "error");
+        return;
+      }
+      const account = [...dashboardData.users, ...(dashboardData.pendingAccounts || [])]
+        .find((entry) => entry.id === accountId);
+      if (!await window.factoryUI.confirmAction({
+        title: isManualLink ? "ربط حساب بالعميل" : "اعتماد تسجيل عميل",
+        message: isManualLink
+          ? `هل تريد ربط ${account?.username || "الحساب المحدد"} بملف العميل؟ إذا كان الحساب معلقاً فسيتم اعتماده كعميل.`
+          : isExistingProfileApproval
+            ? `سيتم اعتماد ${account?.name || "الحساب"} كعميل وربطه بملف العميل المحدد.`
+            : `سيتم اعتماد ${account?.name || "الحساب"} وإنشاء ملف عميل جديد مرتبط به.`,
+        confirmLabel: isManualLink ? "ربط الحساب" : "اعتماد العميل"
+      })) return;
+      button.disabled = true;
+      let mappingSaved = false;
+      try {
+        const { error } = await supabaseClient.rpc("admin_link_factory_client_account", {
+          requested_customer_id: customerId,
+          requested_user_id: accountId
+        });
+        if (error?.code === "PGRST202") {
+          throw new Error("دالة ربط حساب العميل غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+        }
+        if (error) throw error;
+        mappingSaved = true;
+        await refreshDashboard(session);
+        window.factoryUI.toast(isManualLink
+          ? "تم ربط حساب الدخول بملف العميل."
+          : isExistingProfileApproval
+            ? "تم اعتماد العميل وربط الحساب بالملف الموجود."
+            : "تم اعتماد الحساب وإنشاء ملف عميل جديد.");
+      } catch (error) {
+        button.disabled = false;
+        reportDashboardFailure(session, mappingSaved
+          ? "تم اعتماد / ربط الحساب لكن تعذر تحديث اللوحة"
+          : "تعذر اعتماد / ربط حساب العميل", error);
+      }
+      return;
+    }
     if (button.dataset.action === "delete-order") {
       const order = dashboardData.models.find((item) => item.id === button.dataset.orderId);
       if (!order) {

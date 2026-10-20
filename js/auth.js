@@ -321,7 +321,7 @@ signupForm.addEventListener("submit", async (event) => {
     if (signOutError) throw signOutError;
     signupForm.reset();
     showAuthMode("login");
-    showMessage("تم إرسال طلب الحساب إلى الأدمن للمراجعة والتفعيل.", false);
+    showMessage("تم إرسال طلب تسجيل العميل إلى الإدارة. لن يتم تفعيل الحساب حتى الموافقة وربطه بملف عميل.", false);
   } catch (error) {
     console.error("تعذر إنشاء طلب الحساب.", error);
     showMessage("تعذر إنشاء الحساب الآن. تحقق من البيانات وحاول مرة أخرى.");
