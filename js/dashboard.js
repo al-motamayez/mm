@@ -31,8 +31,8 @@ const roleNames = {
 };
 const WORKER_JOB_TITLES = ["إمبلاج", "خياطة", "قص", "تشطيب", "مكواة", "تكييس", "عامل إنتاج", "أخرى"];
 const SIZE_OPTIONS = {
-  men: ["SX", "S", "M", "L", "XL", "2XL", "3XL", "4XL"],
-  women: ["SX", "S", "M", "L", "XL", "2XL", "3XL", "4XL"],
+  men: ["XS", "S", "M", "L", "XL", "2XL", "3XL", "4XL"],
+  women: ["XS", "S", "M", "L", "XL", "2XL", "3XL", "4XL"],
   children: Array.from({ length: 16 }, (_, index) => String(index + 1))
 };
 const SIZE_TYPE_LABELS = { men: "رجالي", women: "حريمي", children: "أطفال" };
@@ -337,7 +337,7 @@ async function readDashboardData(session) {
   if (session.role === "admin" || orders.length) {
     let stagesQuery = supabaseClient
       .from("production_stages")
-      .select("id, order_id, stage_name, worker_name, fabric, fabric_id, external_fabric_source, external_fabric_unit, fabric_quantity, bolt_count, layer_count, color_ply_data, technical_notes, line_name, target_quantity, completed_quantity, status, updated_at");
+      .select("id, order_id, stage_name, worker_name, cutter_name, fabric, fabric_id, external_fabric_source, external_fabric_unit, fabric_quantity, bolt_count, layer_count, color_ply_data, technical_notes, line_name, target_quantity, completed_quantity, status, updated_at");
     if (session.role !== "admin") {
       stagesQuery = stagesQuery.in("order_id", orders.map((order) => order.id));
     }
@@ -432,6 +432,7 @@ async function readDashboardData(session) {
       layerCount: Number(cuttingStage?.layer_count || 0),
       colorPlyData: cuttingStage?.color_ply_data || null,
       cuttingNotes: cuttingStage?.technical_notes || "",
+      cutterName: cuttingStage?.cutter_name || "",
       line: sewingStage?.line_name || "",
       created_at: order.created_at
     };
@@ -448,7 +449,7 @@ async function readDashboardData(session) {
       customerId: ordersById.get(stage.order_id)?.client_id || ordersById.get(stage.order_id)?.customer_id || "",
       model: ordersById.get(stage.order_id)?.model_name || ordersById.get(stage.order_id)?.model_number || "موديل غير محدد",
       modelNumber: ordersById.get(stage.order_id)?.model_number || "",
-      sizes: ordersById.get(stage.order_id)?.sizes || "",
+      sizes: cuttingSizePickerValue(ordersById.get(stage.order_id)?.sizes, stage.color_ply_data),
       colors: ordersById.get(stage.order_id)?.colors || "",
       modelImageUrl: ordersById.get(stage.order_id)?.model_image_url || "",
       fabric: stage.fabric || "—",
@@ -461,6 +462,7 @@ async function readDashboardData(session) {
       layerCount: Number(stage.layer_count || 0),
       colorPlyData: stage.color_ply_data || null,
       technicalNotes: stage.technical_notes || "",
+      cutterName: stage.cutter_name || "",
       priority: ordersById.get(stage.order_id)?.priority || "عادي",
       total: stage.target_quantity || ordersById.get(stage.order_id)?.total_pieces || 0,
       cut: stage.completed_quantity || 0,
@@ -614,31 +616,53 @@ function money(value) {
 }
 
 function parseSizeData(value) {
-  if (!value) return { type: "", counts: {}, legacy: "" };
+  if (!value) return { type: "", counts: {}, multiplicities: {}, legacy: "" };
   try {
     const parsed = JSON.parse(value);
     if (parsed && typeof parsed === "object" && parsed.counts && typeof parsed.counts === "object") {
-      return { type: parsed.type || "", counts: parsed.counts, legacy: "" };
+      const counts = { ...parsed.counts };
+      if (Object.hasOwn(counts, "SX")) {
+        counts.XS = Number(counts.XS || 0) + Number(counts.SX || 0);
+        delete counts.SX;
+      }
+      const multiplicities = parsed.multiplicities && typeof parsed.multiplicities === "object"
+        ? { ...parsed.multiplicities }
+        : {};
+      if (Object.hasOwn(multiplicities, "SX")) {
+        multiplicities.XS = Number(multiplicities.XS || 0) + Number(multiplicities.SX || 0);
+        delete multiplicities.SX;
+      }
+      return {
+        type: parsed.type || "",
+        counts,
+        multiplicities,
+        legacy: ""
+      };
     }
   } catch {
-    return { type: "", counts: {}, legacy: String(value) };
+    return { type: "", counts: {}, multiplicities: {}, legacy: String(value) };
   }
-  return { type: "", counts: {}, legacy: String(value) };
+  return { type: "", counts: {}, multiplicities: {}, legacy: String(value) };
 }
 
-function sizePickerMarkup(value, prefix, showCounts = true) {
+function sizePickerMarkup(value, prefix, showCounts = true, allowDuplicates = false) {
   const sizeData = parseSizeData(value);
   const pickerOptions = Object.entries(SIZE_OPTIONS).map(([type, sizes]) => `
     <div class="size-option-group" data-size-group="${type}" ${sizeData.type === type ? "" : "hidden"}>
       ${sizes.map((size) => {
-        const active = Object.hasOwn(sizeData.counts, size);
+        const occurrences = Number(sizeData.multiplicities[size] ?? (Object.hasOwn(sizeData.counts, size) ? 1 : 0));
+        const active = occurrences > 0 || Object.hasOwn(sizeData.counts, size);
         const count = Number(sizeData.counts[size] || 0);
-        return `<div class="size-choice${active ? " active" : ""}"><button type="button" class="size-toggle" data-size-toggle="${size}" aria-pressed="${active}">${size}</button>${showCounts ? `<label class="size-count-label" ${active ? "" : "hidden"}><span class="visually-hidden">عدد مقاس ${size}</span><input data-size-count="${size}" type="number" min="0" step="1" value="${active && count ? count : ""}" placeholder="العدد" ${active ? "" : "disabled"}></label>` : ""}</div>`;
+        const occurrenceControls = allowDuplicates
+          ? `<span class="size-occurrence-count" data-size-occurrence-count="${size}">${occurrences}</span><button type="button" class="size-occurrence-remove" data-size-occurrence-remove="${size}" aria-label="تقليل تكرار مقاس ${size}" ${occurrences ? "" : "disabled"}>−</button>`
+          : "";
+        return `<div class="size-choice${active ? " active" : ""}"${allowDuplicates ? ` data-size-occurrences="${size}" data-occurrences="${occurrences}"` : ""}><button type="button" class="size-toggle" data-size-toggle="${size}" aria-pressed="${active}">${size}</button>${occurrenceControls}${showCounts ? `<label class="size-count-label" ${active ? "" : "hidden"}><span class="visually-hidden">عدد مقاس ${size}</span><input data-size-count="${size}" type="number" min="0" step="1" value="${active && count ? count : ""}" placeholder="العدد" ${active ? "" : "disabled"}></label>` : ""}</div>`;
       }).join("")}
     </div>`).join("");
-  return `<div class="field size-picker" data-size-picker="${prefix}" data-size-legacy="${escapeHtml(sizeData.legacy)}" data-auto-quantity="${showCounts ? "false" : "true"}">
+  return `<div class="field size-picker" data-size-picker="${prefix}" data-size-legacy="${escapeHtml(sizeData.legacy)}" data-auto-quantity="${showCounts ? "false" : "true"}" data-size-duplicates="${allowDuplicates}">
     <label for="${prefix}-type">نوع المقاسات</label>
     <select id="${prefix}-type" data-size-type><option value="">اختر النوع</option>${Object.entries(SIZE_TYPE_LABELS).map(([type, label]) => `<option value="${type}" ${sizeData.type === type ? "selected" : ""}>${label}</option>`).join("")}</select>
+    ${allowDuplicates ? '<small>اضغط على المقاس لإضافته مرة أخرى، واستخدم (−) لتقليل التكرار.</small>' : ""}
     ${pickerOptions}
     ${sizeData.legacy ? `<small>مقاسات محفوظة سابقًا: ${escapeHtml(sizeData.legacy)}</small>` : ""}
     <input type="hidden" name="sizes" data-size-value value="${escapeHtml(value || "")}">
@@ -660,6 +684,22 @@ function parseColorPlyData(value, legacyColors = "", fallbackPlys = 0) {
   return String(legacyColors).split(",").map((color) => color.trim().toUpperCase())
     .filter((color) => /^#[0-9A-F]{6}$/.test(color))
     .map((color) => ({ color, name: "", plys: Number(fallbackPlys) || 0 }));
+}
+
+function cuttingSizePickerValue(orderSizes, colorPlyData) {
+  let cuttingData = colorPlyData;
+  if (typeof cuttingData === "string") {
+    try { cuttingData = JSON.parse(cuttingData); } catch { cuttingData = null; }
+  }
+  if (!cuttingData || !Array.isArray(cuttingData.sizes)) return orderSizes || "";
+  const sizeData = parseSizeData(orderSizes);
+  sizeData.type = cuttingData.type || sizeData.type;
+  sizeData.multiplicities = cuttingData.sizes.reduce((result, size) => {
+    const normalizedSize = size === "SX" ? "XS" : size;
+    result[normalizedSize] = Number(result[normalizedSize] || 0) + 1;
+    return result;
+  }, {});
+  return JSON.stringify(sizeData);
 }
 
 function cuttingColorPlyMarkup(colorPlyData, legacyColors, fallbackPlys, prefix) {
@@ -686,8 +726,11 @@ function cuttingColorPlyRow(color, plys, name = "") {
 function updateCuttingCalculation(form) {
   const sizePicker = form.querySelector("[data-size-picker]");
   const sizeType = sizePicker.querySelector("[data-size-type]").value;
-  const selectedSizes = [...sizePicker.querySelectorAll(".size-option-group:not([hidden]) .size-toggle[aria-pressed='true']")]
-    .map((button) => button.dataset.sizeToggle);
+  const selectedSizes = sizePicker.dataset.sizeDuplicates === "true"
+    ? [...sizePicker.querySelectorAll(".size-option-group:not([hidden]) .size-choice[data-size-occurrences]")]
+      .flatMap((choice) => Array(Number(choice.dataset.occurrences || 0)).fill(choice.dataset.sizeOccurrences))
+    : [...sizePicker.querySelectorAll(".size-option-group:not([hidden]) .size-toggle[aria-pressed='true']")]
+      .map((button) => button.dataset.sizeToggle);
   const colorRows = [...form.querySelectorAll("[data-color-ply-row]")].map((row) => ({
     color: row.querySelector("[data-ply-color]").value.toUpperCase(),
     name: String(row.querySelector("[data-ply-name]").value).trim(),
@@ -695,8 +738,17 @@ function updateCuttingCalculation(form) {
   }));
   const validRows = colorRows.filter((entry) => entry.name && Number.isSafeInteger(entry.plys) && entry.plys > 0);
   const plysPerSize = validRows.reduce((sum, entry) => sum + entry.plys, 0);
-  const counts = Object.fromEntries(selectedSizes.map((size) => [size, String(plysPerSize)]));
+  const counts = selectedSizes.reduce((result, size) => {
+    result[size] = String(Number(result[size] || 0) + plysPerSize);
+    return result;
+  }, {});
   const sizeData = { type: sizeType, counts };
+  if (sizePicker.dataset.sizeDuplicates === "true") {
+    sizeData.multiplicities = selectedSizes.reduce((result, size) => {
+      result[size] = Number(result[size] || 0) + 1;
+      return result;
+    }, {});
+  }
   const total = plysPerSize * selectedSizes.length;
   sizePicker.querySelector("[data-size-value]").value = sizeType ? JSON.stringify(sizeData) : "";
 
@@ -793,7 +845,17 @@ function updateSizePicker(root) {
     group.hidden = group.dataset.sizeGroup !== selectedType;
   });
   const sizeData = { type: selectedType, counts: {} };
+  if (root.dataset.sizeDuplicates === "true") {
+    sizeData.multiplicities = {};
+    root.querySelectorAll(".size-option-group:not([hidden]) .size-choice[data-size-occurrences]").forEach((choice) => {
+      const size = choice.dataset.sizeOccurrences;
+      const occurrences = Number(choice.dataset.occurrences || 0);
+      if (occurrences > 0) sizeData.multiplicities[size] = occurrences;
+      if (occurrences > 0) sizeData.counts[size] = "0";
+    });
+  }
   root.querySelectorAll(".size-option-group:not([hidden]) .size-toggle[aria-pressed='true']").forEach((button) => {
+    if (root.dataset.sizeDuplicates === "true") return;
     if (root.dataset.autoQuantity === "true") {
       sizeData.counts[button.dataset.sizeToggle] = "0";
     } else {
@@ -831,6 +893,17 @@ function bindPickers(form) {
     };
     root.querySelector("[data-size-type]").addEventListener("change", update);
     root.querySelectorAll("[data-size-toggle]").forEach((button) => button.addEventListener("click", () => {
+      if (root.dataset.sizeDuplicates === "true") {
+        const choice = button.closest("[data-size-occurrences]");
+        const occurrences = Math.min(Number(choice.dataset.occurrences || 0) + 1, 99);
+        choice.dataset.occurrences = String(occurrences);
+        choice.querySelector("[data-size-occurrence-count]").textContent = String(occurrences);
+        choice.querySelector("[data-size-occurrence-remove]").disabled = false;
+        button.setAttribute("aria-pressed", "true");
+        choice.classList.add("active");
+        update();
+        return;
+      }
       const pressed = button.getAttribute("aria-pressed") !== "true";
       button.setAttribute("aria-pressed", String(pressed));
       button.closest(".size-choice").classList.toggle("active", pressed);
@@ -841,6 +914,16 @@ function bindPickers(form) {
         countInput.disabled = !pressed;
         if (!pressed) countInput.value = "";
       }
+      update();
+    }));
+    root.querySelectorAll("[data-size-occurrence-remove]").forEach((button) => button.addEventListener("click", () => {
+      const choice = button.closest("[data-size-occurrences]");
+      const occurrences = Math.max(Number(choice.dataset.occurrences || 0) - 1, 0);
+      choice.dataset.occurrences = String(occurrences);
+      choice.querySelector("[data-size-occurrence-count]").textContent = String(occurrences);
+      button.disabled = occurrences === 0;
+      choice.querySelector("[data-size-toggle]").setAttribute("aria-pressed", String(occurrences > 0));
+      choice.classList.toggle("active", occurrences > 0);
       update();
     }));
     root.querySelectorAll("[data-size-count]").forEach((input) => input.addEventListener("input", () => updateSizePicker(root)));
@@ -916,6 +999,12 @@ function bindPickers(form) {
       root.querySelectorAll("[data-size-toggle]").forEach((button) => {
         button.setAttribute("aria-pressed", "false");
         button.closest(".size-choice").classList.remove("active");
+        const choice = button.closest("[data-size-occurrences]");
+        if (choice) {
+          choice.dataset.occurrences = "0";
+          choice.querySelector("[data-size-occurrence-count]").textContent = "0";
+          choice.querySelector("[data-size-occurrence-remove]").disabled = true;
+        }
         const countLabel = button.nextElementSibling;
         if (countLabel?.matches(".size-count-label")) {
           countLabel.hidden = true;
@@ -1446,7 +1535,7 @@ function clientOrderCards(orders) {
   return `<div class="order-cards">${orders.map((item) => `<article class="order-card client-order-card">
     <header class="order-card-heading">${modelImageMarkup(item.modelImageUrl)}<div><p class="order-card-label">الموديل ${item.modelNumber ? `· رقم ${escapeHtml(item.modelNumber)}` : ""}</p><h3>${escapeHtml(item.name || item.modelNumber || "موديل بدون اسم")}</h3></div>${statusTag(item.displayStatus || item.status)}</header>
     <dl class="order-card-details">
-      <div><dt>الألوان</dt><dd>${colorSummaryMarkup(item.colors, item.colorNames, item.colorPlyData)}</dd></div><div><dt>المقاسات / العدد لكل مقاس</dt><dd>${escapeHtml(sizeSummary(item.sizes))}</dd></div>
+      <div><dt>الألوان</dt><dd>${colorSummaryMarkup(item.colors, item.colorNames, item.colorPlyData)}</dd></div><div><dt>المقاسات / العدد لكل مقاس</dt><dd>${escapeHtml(sizeSummary(item.sizes))}</dd></div>${item.cutterName ? `<div><dt>مين اللي قص القصة؟</dt><dd>${escapeHtml(item.cutterName)}</dd></div>` : ""}
       <div><dt>العدد المطلوب الأصلي</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.originalQuantity)}</dd></div><div><dt>العدد الفعلي بعد القص</dt><dd>${item.quantity ? new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.quantity) : "بانتظار الحصر"}</dd></div><div><dt>الكمية المنجزة</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.completedPieces)}</dd></div>
       <div><dt>الكمية المسلّمة</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.deliveredPieces)}</dd></div><div><dt>المتبقي</dt><dd>${item.quantity ? new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.remainingPieces) : "بانتظار الحصر بعد القص"}</dd></div>
       ${["تم التسليم", "تم التسليم بالكامل", "تم التسليم والإغلاق"].includes(item.status) ? `<div><dt>فرق التسليم عن العدد المطلوب الأصلي</dt><dd>${item.quantityDifference > 0 ? `زيادة ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.quantityDifference)} قطعة` : item.quantityDifference < 0 ? `نقص ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(Math.abs(item.quantityDifference))} قطعة` : "مطابق للعدد المطلوب"}</dd></div>` : ""}
@@ -2314,12 +2403,13 @@ function cuttingView(data) {
         <label class="field" data-external-fabric-source-field hidden><span>مصدر الخامة الخارجية</span><input name="externalFabricSource" maxlength="160" value="${escapeHtml(item.externalFabricSource || "")}" placeholder="مثال: بواقي قماش قديم من المخزن"></label>
         <input type="hidden" name="externalFabricUnit" value="متر">
       </div>
-      ${sizePickerMarkup(item.sizes, `cutting-${item.order}`, false)}
+      ${sizePickerMarkup(item.sizes, `cutting-${item.order}`, false, true)}
       ${cuttingColorPlyMarkup(item.colorPlyData, item.colors, item.layerCount, `cutting-${item.order}`)}
       <p class="cutting-calculated-total">إجمالي الراقات: <strong data-cutting-plys>0</strong> · إجمالي قطع القصة الناتجة: <strong data-cutting-total>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.total)}</strong> قطعة</p>
       <div class="cutting-breakdown" data-cutting-breakdown></div>
       <label class="field"><span>صورة الموديل (اختياري)</span><input type="file" name="modelImage" accept="image/jpeg,image/png,image/webp"><small>الحد الأقصى 5 ميجابايت.</small></label>
       <label class="field"><span>ملاحظات فنية للفرشة والقص</span><textarea name="technicalNotes" rows="3">${escapeHtml(item.technicalNotes || "")}</textarea></label>
+      ${bedReady ? `<label class="field"><span>مين اللي قص القصة؟ (اختياري)</span><input name="cutterName" maxlength="120" value="${escapeHtml(item.cutterName || "")}" placeholder="اسم منفذ القص"></label>` : ""}
       <div class="form-actions">${bedReady ? "" : `<button type="button" class="button button-primary" data-ready-cutting="${escapeHtml(item.order)}">حفظ التفاصيل واعتمادها جاهزة للقص</button>`}<button type="submit" class="button button-primary" ${bedReady ? "" : "hidden"}>تأكيد انتهاء القص</button></div>
     </form>
   </article>`;
@@ -2356,7 +2446,7 @@ function cuttingRequestsView(data) {
         <label class="field" data-external-fabric-source-field hidden><span>مصدر الخامة الخارجية</span><input name="externalFabricSource" maxlength="160" placeholder="مثال: بواقي قماش قديم من المخزن"></label>
         <input type="hidden" name="externalFabricUnit" value="">
       </div></section>
-      ${sizePickerMarkup("", "new-cutting", false)}
+      ${sizePickerMarkup("", "new-cutting", false, true)}
       ${cuttingColorPlyMarkup(null, "", 0, "new-cutting")}
       <p class="cutting-calculated-total">إجمالي الراقات: <strong data-cutting-plys>0</strong> · إجمالي قطع القصة: <strong data-cutting-total>0</strong> قطعة</p>
       <div class="cutting-breakdown" data-cutting-breakdown></div>
@@ -3328,7 +3418,8 @@ function bindCuttingActions(session) {
         requested_technical_notes: cuttingData.technicalNotes,
         requested_fabric_id: cuttingData.fabricId,
         requested_fabric_quantity: cuttingData.fabricQuantity,
-        requested_external_fabric_unit: cuttingData.externalFabricUnit
+        requested_external_fabric_unit: cuttingData.externalFabricUnit,
+        requested_cutter_name: String(form.elements.cutterName?.value || "").trim()
       });
       if (error?.code === "PGRST202") throw new Error("دالة إنهاء القص غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
       if (error) throw error;

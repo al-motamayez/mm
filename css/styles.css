@@ -281,6 +281,11 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .size-picker, .color-picker { min-width: 0; }
 .size-option-group { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 9px; }
 .size-choice { display: grid; min-width: 62px; justify-items: center; gap: 5px; }
+.size-picker[data-size-duplicates="true"] .size-choice { grid-template-columns: minmax(46px, 1fr) 22px; align-items: center; gap: 4px; min-width: 94px; padding: 4px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+.size-picker[data-size-duplicates="true"] .size-toggle { grid-column: 1 / -1; width: 100%; }
+.size-occurrence-count { min-width: 22px; color: var(--green-dark); font-size: 12px; font-weight: 700; text-align: center; }
+.size-occurrence-remove { display: grid; width: 24px; height: 24px; place-items: center; padding: 0; border: 1px solid #cbd5ce; border-radius: 6px; color: #7d3834; background: #fff; font-size: 17px; line-height: 1; }
+.size-occurrence-remove:disabled { cursor: default; opacity: .4; }
 .size-toggle { min-width: 52px; min-height: 42px; padding: 7px 10px; border: 1px solid #aebfb3; border-radius: 8px; color: #263930; background: #fff; font-weight: 700; }
 .size-toggle[aria-pressed="true"] { border-color: var(--green); color: #fff; background: var(--green); }
 .size-count-label { width: 72px; }
