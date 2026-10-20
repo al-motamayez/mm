@@ -162,6 +162,25 @@ create table if not exists public.factory_clients (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists public.factory_client_model_requests (
+  id uuid primary key default gen_random_uuid(),
+  client_id uuid not null references public.factory_clients (id) on delete cascade,
+  user_id uuid not null references auth.users (id) on delete cascade,
+  model_name text,
+  model_number text,
+  quantity integer check (quantity is null or quantity >= 0),
+  notes text not null default '',
+  image_path text,
+  status text not null default 'pending' check (status in ('pending', 'reviewed', 'accepted', 'rejected')),
+  created_at timestamptz not null default now(),
+  check (model_name is null or length(model_name) <= 160),
+  check (model_number is null or length(model_number) <= 100),
+  check (length(notes) <= 2000)
+);
+
+create index if not exists factory_client_model_requests_created_at_idx
+  on public.factory_client_model_requests (created_at desc);
+
 alter table public.factory_clients
   add column if not exists brand_name text not null default '',
   add column if not exists client_number text not null default '',
@@ -625,19 +644,20 @@ alter table public.production_stages
   add column if not exists target_quantity integer not null default 0,
   add column if not exists completed_quantity integer not null default 0;
 
-create table if not exists public.factory_cutting_drafts (
-  id uuid primary key,
-  owner_id uuid not null references auth.users (id) on delete cascade,
-  payload jsonb not null check (jsonb_typeof(payload) = 'object'),
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
-
-alter table public.factory_cutting_drafts enable row level security;
-revoke all on public.factory_cutting_drafts from public, anon, authenticated;
-
 create schema if not exists private;
 revoke all on schema private from public, anon, authenticated;
+
+drop function if exists public.read_factory_cutting_drafts();
+drop function if exists public.save_factory_cutting_draft(uuid, jsonb);
+drop function if exists public.delete_factory_cutting_draft(uuid);
+do $$
+begin
+  if to_regclass('public.factory_cutting_drafts') is not null then
+    execute 'revoke all on table public.factory_cutting_drafts from public, anon, authenticated';
+    execute 'alter table public.factory_cutting_drafts enable row level security';
+  end if;
+end;
+$$;
 
 create table if not exists private.orphaned_production_stages (
   stage_id uuid primary key,
@@ -1668,6 +1688,65 @@ begin
     left join public.factory_fabric_transactions as movement on movement.fabric_id = fabric.id
     where customer.user_id = auth.uid()
     order by fabric.name, movement.created_at desc nulls last;
+end;
+$$;
+
+create or replace function public.submit_factory_client_model_request(
+  requested_model_name text,
+  requested_model_number text,
+  requested_quantity integer,
+  requested_notes text,
+  requested_image_path text
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  matched_client_id uuid;
+  request_id uuid := gen_random_uuid();
+begin
+  if not public.has_active_factory_role(array['client']) then
+    raise exception 'Only active clients can submit model requests.';
+  end if;
+
+  select customer.id
+    into matched_client_id
+  from public.factory_clients as customer
+  where customer.user_id = auth.uid();
+
+  if matched_client_id is null then
+    raise exception 'The active client account is not linked to a client profile.';
+  end if;
+  if requested_quantity is not null and requested_quantity < 0 then
+    raise exception 'The requested quantity cannot be negative.';
+  end if;
+  if length(coalesce(requested_model_name, '')) > 160
+     or length(coalesce(requested_model_number, '')) > 100
+     or length(coalesce(requested_notes, '')) > 2000 then
+    raise exception 'The client model request fields exceed their allowed lengths.';
+  end if;
+  if requested_image_path is not null
+     and requested_image_path not like ('client-submissions/' || auth.uid()::text || '/%') then
+    raise exception 'The requested image must be uploaded to the authenticated client folder.';
+  end if;
+
+  insert into public.factory_client_model_requests (
+    id, client_id, user_id, model_name, model_number, quantity, notes, image_path
+  )
+  values (
+    request_id,
+    matched_client_id,
+    auth.uid(),
+    nullif(trim(requested_model_name), ''),
+    nullif(trim(requested_model_number), ''),
+    requested_quantity,
+    coalesce(trim(requested_notes), ''),
+    requested_image_path
+  );
+
+  return request_id;
 end;
 $$;
 
@@ -3271,76 +3350,6 @@ begin
 end;
 $$;
 
-create or replace function public.read_factory_cutting_drafts()
-returns table (id uuid, payload jsonb, created_at timestamptz, updated_at timestamptz)
-language plpgsql
-stable
-security definer
-set search_path = public
-as $$
-begin
-  if not public.has_active_factory_role(array['cutting']) then
-    raise exception 'Only active cutting supervisors can read cutting drafts.';
-  end if;
-
-  return query
-    select draft.id, draft.payload, draft.created_at, draft.updated_at
-    from public.factory_cutting_drafts as draft
-    where draft.owner_id = auth.uid()
-    order by draft.updated_at desc;
-end;
-$$;
-
-create or replace function public.save_factory_cutting_draft(requested_draft_id uuid, requested_payload jsonb)
-returns uuid
-language plpgsql
-security definer
-set search_path = public
-as $$
-begin
-  if not public.has_active_factory_role(array['cutting']) then
-    raise exception 'Only active cutting supervisors can save cutting drafts.';
-  end if;
-  if requested_draft_id is null
-     or requested_payload is null
-     or coalesce(jsonb_typeof(requested_payload), '') <> 'object'
-     or octet_length(requested_payload::text) > 1048576 then
-    raise exception 'A valid cutting draft smaller than 1 MB is required.';
-  end if;
-
-  insert into public.factory_cutting_drafts (id, owner_id, payload)
-  values (requested_draft_id, auth.uid(), requested_payload)
-  on conflict (id) do update
-    set payload = excluded.payload,
-        updated_at = now()
-    where factory_cutting_drafts.owner_id = auth.uid();
-  if not found then
-    raise exception 'The cutting draft does not exist or is not owned by this account.';
-  end if;
-  return requested_draft_id;
-end;
-$$;
-
-create or replace function public.delete_factory_cutting_draft(requested_draft_id uuid)
-returns void
-language plpgsql
-security definer
-set search_path = public
-as $$
-begin
-  if not public.has_active_factory_role(array['cutting']) then
-    raise exception 'Only active cutting supervisors can delete cutting drafts.';
-  end if;
-
-  delete from public.factory_cutting_drafts
-  where id = requested_draft_id
-    and owner_id = auth.uid();
-  if not found then
-    raise exception 'The cutting draft does not exist or is not owned by this account.';
-  end if;
-end;
-$$;
-
 create function public.submit_factory_cutting(
   requested_order_id uuid,
   requested_customer_id uuid,
@@ -4327,6 +4336,7 @@ revoke all on public.orders, public.production_stages, public.factory_records, p
   public.factory_fabrics, public.factory_fabric_transactions, public.factory_live_signals,
   public.factory_auth_events from public, anon, authenticated;
 alter table public.factory_clients enable row level security;
+alter table public.factory_client_model_requests enable row level security;
 alter table public.factory_worker_production_submissions enable row level security;
 alter table public.factory_finished_goods enable row level security;
 drop policy if exists "Admins manage factory clients" on public.factory_clients;
@@ -4338,6 +4348,15 @@ revoke all on public.factory_clients from public, anon, authenticated;
 grant select on public.factory_clients to authenticated;
 grant insert (name, brand_name, client_number, phone, cash_phone, instagram, whatsapp, notes) on public.factory_clients to authenticated;
 grant update (name, brand_name, client_number, phone, cash_phone, instagram, whatsapp, notes, updated_at) on public.factory_clients to authenticated;
+revoke all on public.factory_client_model_requests from public, anon, authenticated;
+grant select on public.factory_client_model_requests to authenticated;
+drop policy if exists "Admins and clients read client model requests" on public.factory_client_model_requests;
+create policy "Admins and clients read client model requests"
+  on public.factory_client_model_requests for select to authenticated
+  using (
+    public.is_active_factory_admin()
+    or (user_id = auth.uid() and public.has_active_factory_role(array['client']))
+  );
 drop policy if exists "Admins manage worker production submissions" on public.factory_worker_production_submissions;
 create policy "Admins manage worker production submissions"
   on public.factory_worker_production_submissions for all to authenticated
@@ -4809,14 +4828,10 @@ revoke all on function public.read_factory_client_cash_transactions() from publi
 grant execute on function public.read_factory_client_cash_transactions() to authenticated;
 revoke all on function public.read_factory_client_fabric_stock() from public, anon, authenticated;
 grant execute on function public.read_factory_client_fabric_stock() to authenticated;
+revoke all on function public.submit_factory_client_model_request(text, text, integer, text, text) from public, anon, authenticated;
+grant execute on function public.submit_factory_client_model_request(text, text, integer, text, text) to authenticated;
 revoke all on function public.read_factory_cutting_clients() from public, anon, authenticated;
 grant execute on function public.read_factory_cutting_clients() to authenticated;
-revoke all on function public.read_factory_cutting_drafts() from public, anon, authenticated;
-grant execute on function public.read_factory_cutting_drafts() to authenticated;
-revoke all on function public.save_factory_cutting_draft(uuid, jsonb) from public, anon, authenticated;
-grant execute on function public.save_factory_cutting_draft(uuid, jsonb) to authenticated;
-revoke all on function public.delete_factory_cutting_draft(uuid) from public, anon, authenticated;
-grant execute on function public.delete_factory_cutting_draft(uuid) to authenticated;
 revoke all on function public.save_factory_order(uuid, uuid, text, text, integer, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb, text, jsonb, text[], text, jsonb, numeric) from public, anon, authenticated;
 grant execute on function public.save_factory_order(uuid, uuid, text, text, integer, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb, text, jsonb, text[], text, jsonb, numeric) to authenticated;
 revoke all on function public.record_factory_delivery(uuid, integer, text) from public, anon, authenticated;
@@ -4893,6 +4908,14 @@ create policy "Factory staff upload model images"
             and can_submit_production
         )
       )
+      or (
+        name like ('client-submissions/' || auth.uid()::text || '/%')
+        and public.has_active_factory_role(array['client'])
+        and exists (
+          select 1 from public.factory_clients
+          where user_id = auth.uid()
+        )
+      )
     )
   );
 
@@ -4917,6 +4940,19 @@ create policy "Factory staff delete eligible model images"
         and not exists (
           select 1 from public.factory_worker_production_submissions
           where worker_id = auth.uid()
+            and image_path = name
+        )
+      )
+      or (
+        public.has_active_factory_role(array['client'])
+        and name like ('client-submissions/' || auth.uid()::text || '/%')
+        and exists (
+          select 1 from public.factory_clients
+          where user_id = auth.uid()
+        )
+        and not exists (
+          select 1 from public.factory_client_model_requests
+          where user_id = auth.uid()
             and image_path = name
         )
       )
@@ -5003,7 +5039,8 @@ begin
       'factory_records',
       'factory_deliveries',
       'factory_worker_production_submissions',
-      'factory_finished_goods'
+      'factory_finished_goods',
+      'factory_client_model_requests'
     ] loop
       if not exists (
         select 1
@@ -5028,5 +5065,6 @@ alter table public.users replica identity full;
 alter table public.factory_cash_transactions replica identity full;
 alter table public.factory_worker_production_submissions replica identity full;
 alter table public.factory_finished_goods replica identity full;
+alter table public.factory_client_model_requests replica identity full;
 
 notify pgrst, 'reload schema';
