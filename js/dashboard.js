@@ -4570,7 +4570,10 @@ function bindActions(session) {
   const updateOrderConditionalFields = () => {
     const isDelivered = orderForm.elements.status.value === "تم التسليم";
     const isEditing = Boolean(orderForm.elements.editIndex.value);
-    orderForm.querySelector("[data-initial-delivery-field]").hidden = !isDelivered || isEditing;
+    const initialDeliveryField = orderForm.querySelector("[data-initial-delivery-field]");
+    const showInitialDelivery = isDelivered && !isEditing;
+    initialDeliveryField.hidden = !showInitialDelivery;
+    orderForm.elements.deliveredPieces.required = showInitialDelivery;
     orderForm.querySelector("[data-expected-delivery-field]").hidden = isDelivered;
     orderForm.querySelector("[data-model-priority-field]").hidden = isDelivered;
     if (!isEditing && !isDelivered) orderForm.elements.deliveredPieces.value = "";
