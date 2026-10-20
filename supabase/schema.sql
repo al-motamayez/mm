@@ -4742,7 +4742,7 @@ begin
       from public.production_stages
       where order_id = requested_order_id
         and stage_name = 'cutting'
-        and status = 'مكتمل'
+        and status in ('مكتمل', 'تم القص')
     ) then
       raise exception 'Finish cutting before making this order available for sewing.';
     end if;

@@ -2604,9 +2604,16 @@ function adminCuttingTransferView(data) {
   return panel("قصّات جاهزة للإتاحة للخياطة", finishedCutting.length
     ? table(["الموديل", "العميل", "الكمية", "حالة الخياطة", "إجراء"], finishedCutting.map((order) => {
       const sewing = data.sewing.find((stage) => stage.order === order.id);
+      const cutting = data.cutting.find((stage) => stage.order === order.id);
       const stageStatus = sewing?.status || "مرحلة الخياطة غير موجودة";
-      const canTransfer = sewing && !["متاح للخياطة", "قيد الخياطة", "مكتمل"].includes(sewing.status);
-      return `<tr><td>${escapeHtml(order.name)}</td><td>${escapeHtml(order.client || "—")}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity)} قطعة</td><td>${statusTag(stageStatus)}</td><td>${canTransfer ? `<button class="button button-secondary" type="button" data-make-sewing-available="${escapeHtml(order.id)}">إتاحة للخياطة</button>` : "—"}</td></tr>`;
+      const cuttingFinished = cutting && ["مكتمل", "تم القص"].includes(cutting.status);
+      const canTransfer = cuttingFinished && sewing && !["متاح للخياطة", "قيد الخياطة", "مكتمل"].includes(sewing.status);
+      const action = canTransfer
+        ? `<button class="button button-secondary" type="button" data-make-sewing-available="${escapeHtml(order.id)}">إتاحة للخياطة</button>`
+        : !cuttingFinished
+          ? `يلزم اعتماد اكتمال القص${cutting?.status ? ` (${escapeHtml(cutting.status)})` : ""}`
+          : "—";
+      return `<tr><td>${escapeHtml(order.name)}</td><td>${escapeHtml(order.client || "—")}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity)} قطعة</td><td>${statusTag(stageStatus)}</td><td>${action}</td></tr>`;
     }))
     : '<div class="empty-state">لا توجد قصّات مكتملة تنتظر إتاحتها للخياطة.</div>',
   "لا تبدأ الخياطة تلقائياً عند الإتاحة؛ يستلم المشرف القصّة من لوحته لبدء العمل.");
