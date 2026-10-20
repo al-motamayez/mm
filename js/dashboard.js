@@ -2301,7 +2301,7 @@ function adminView(data, accounts) {
         ${panel("إدارة الموديلات والطلبيات", orderCards(activeOrders, true))}
       </div>
       <div data-orders-tab-panel="status"${activeOrdersTab === "status" ? "" : " hidden"}>${modelStatusReviewView(data)}</div>
-      <div class="modal-backdrop" id="order-modal" hidden><section class="modal-card order-modal-card" role="dialog" aria-modal="true" aria-labelledby="order-modal-title"><button class="modal-close" type="button" data-close-order aria-label="إغلاق">×</button><h2 id="order-modal-title">إضافة موديل / طلبية</h2><p>يمكن ترك العدد فارغًا حتى انتهاء الفرش والقص، ثم إدخال العدد الفعلي عند تعديل الطلب.</p>      <form id="model-form" class="order-form modal-form"><input type="hidden" name="editIndex" value=""><input type="hidden" name="savedOrderId" value=""><input type="hidden" name="productionType" value="full_cutting">
+      <div class="modal-backdrop" id="order-modal" hidden><section class="modal-card order-modal-card" role="dialog" aria-modal="true" aria-labelledby="order-modal-title"><button class="modal-close" type="button" data-close-order aria-label="إغلاق">×</button><h2 id="order-modal-title">إضافة موديل / طلبية</h2><p>يمكن ترك العدد فارغًا حتى انتهاء الفرش والقص، ثم إدخال العدد الفعلي عند تعديل الطلب.</p>      <form id="model-form" class="order-form modal-form" novalidate><input type="hidden" name="editIndex" value=""><input type="hidden" name="savedOrderId" value=""><input type="hidden" name="productionType" value="full_cutting">
         <section class="form-section"><h3>المعلومات الأساسية <span>إجباري</span></h3><div class="form-section-grid">
           <input type="hidden" name="customerId">
           <div class="field model-customer-field"><label for="model-client">اختيار اسم العميل</label><select id="model-client" name="customerSelection"><option value="">اختر اسم العميل</option>${clientOptions}</select><small>اختر العميل أو البراند؛ اختيار أحدهما يلغي الآخر.</small></div>
@@ -4579,6 +4579,7 @@ function bindActions(session) {
     if (!isEditing && !isDelivered) orderForm.elements.deliveredPieces.value = "";
   };
   bindPickers(orderForm);
+  orderForm.noValidate = true;
   orderForm.elements.customerSelection.addEventListener("change", () => {
     syncOrderCustomerSelection(orderForm, orderForm.elements.customerSelection.value, "customerSelection");
     updateOrderTotals();
@@ -5195,6 +5196,17 @@ function bindActions(session) {
   document.querySelector("#model-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
+    const invalidVisibleControl = [...form.elements].find((control) =>
+      typeof control.checkValidity === "function"
+      && control.willValidate
+      && !control.disabled
+      && !control.closest("[hidden]")
+      && !control.checkValidity()
+    );
+    if (invalidVisibleControl) {
+      invalidVisibleControl.reportValidity();
+      return;
+    }
     const formData = new FormData(form);
     const submitButton = form.querySelector('[type="submit"]');
     const editIndex = String(formData.get("editIndex") || "");
