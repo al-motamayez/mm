@@ -2319,7 +2319,7 @@ function adminView(data, accounts) {
           <label class="field model-image-field"><span>صورة الموديل (اختياري)</span><input type="file" name="modelImage" accept="image/*"><small>يمكن رفع صيغ الصور الشائعة حتى 25 ميجابايت.</small><div data-model-image-preview></div></label>
           <div class="field" data-expected-delivery-field><label for="model-expected-delivery">تاريخ التسليم المتوقع (اختياري)</label><input id="model-expected-delivery" name="expectedDeliveryDate" type="date"></div>
           <div class="field"><label for="model-status">حالة الطلب</label><select id="model-status" name="status"><option>قيد الانتظار</option><option>معلق</option><option>تحت الإنشاء</option><option>قيد الفرش</option><option>تم الفرش / جاهز للقص</option><option>تم القص</option><option>جاهز للتسليم</option><option>تم التسليم</option></select></div>
-          <div class="field" data-initial-delivery-field hidden><label for="model-delivered-pieces">العدد المسلّم</label><input id="model-delivered-pieces" name="deliveredPieces" type="number" min="1" step="1"><small>يُسجل كدفعة تسليم تاريخية ويُحتسب ضمن حساب العميل.</small></div>
+          <div class="field" data-initial-delivery-field hidden><label for="model-delivered-pieces">العدد المسلّم</label><input id="model-delivered-pieces" name="deliveredPieces" type="text" inputmode="numeric" autocomplete="off"><small>يُسجل كدفعة تسليم تاريخية ويُحتسب ضمن حساب العميل.</small></div>
           <div class="field" data-model-priority-field><label for="model-priority">أولوية التنفيذ</label><select id="model-priority" name="priority"><option>عادي</option><option>مرتفع</option><option>عاجل</option></select></div>
         </div></section>
         <section class="form-section"><h3>التفاصيل المالية <span>اختياري</span></h3><div class="form-section-grid">
@@ -4573,7 +4573,7 @@ function bindActions(session) {
     const initialDeliveryField = orderForm.querySelector("[data-initial-delivery-field]");
     const showInitialDelivery = isDelivered && !isEditing;
     initialDeliveryField.hidden = !showInitialDelivery;
-    orderForm.elements.deliveredPieces.required = showInitialDelivery;
+    orderForm.elements.deliveredPieces.required = false;
     orderForm.querySelector("[data-expected-delivery-field]").hidden = isDelivered;
     orderForm.querySelector("[data-model-priority-field]").hidden = isDelivered;
     if (!isEditing && !isDelivered) orderForm.elements.deliveredPieces.value = "";
