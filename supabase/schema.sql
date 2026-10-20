@@ -4631,7 +4631,7 @@ revoke all on function public.save_factory_cash_transaction(text, text, text, nu
 grant execute on function public.save_factory_cash_transaction(text, text, text, numeric, text, timestamptz, uuid) to authenticated;
 
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
-values ('factory-model-images', 'factory-model-images', true, 5242880, array['image/jpeg', 'image/png', 'image/webp'])
+values ('factory-model-images', 'factory-model-images', true, 26214400, null)
 on conflict (id) do update
 set public = excluded.public,
     file_size_limit = excluded.file_size_limit,

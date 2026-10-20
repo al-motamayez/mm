@@ -275,7 +275,7 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .dashboard-section#client-accounts { overflow: visible; }
 .dashboard-section#client-accounts > .panel { overflow: visible; }
 .order-card-heading .model-thumbnail { flex: 0 0 68px; }
-.model-thumbnail { display: block; width: 68px; height: 68px; border: 1px solid var(--line); border-radius: 9px; background: #f5f7f4; object-fit: cover; }
+.model-thumbnail { display: block; width: 68px; height: 68px; border: 1px solid var(--line); border-radius: 9px; background: #f5f7f4; object-fit: contain; }
 .model-image-field { grid-column: 1 / -1; }
 .model-image-field [data-model-image-preview] { margin-top: 8px; }
 .size-picker, .color-picker { min-width: 0; }
@@ -323,11 +323,11 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .worker-submission-list { display: grid; gap: 12px; }
 .worker-submission-review { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: #fbfcfa; }
 .worker-submission-review > header { display: flex; align-items: center; gap: 12px; }
-.worker-submission-review > header img { width: 100px; height: 100px; border-radius: 8px; object-fit: cover; }
+.worker-submission-review > header img { width: 100px; height: 100px; border-radius: 8px; background: #f5f7f4; object-fit: contain; }
 .worker-submission-card { display: grid; gap: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
 .worker-submission-card > header { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
-.worker-submission-card > header img { width: 88px; height: 88px; border: 1px solid var(--line); border-radius: 8px; object-fit: cover; }
-.submission-image-preview { display: block; width: 78px; height: 78px; border: 1px solid var(--line); border-radius: 7px; object-fit: cover; }
+.worker-submission-card > header img { width: 88px; height: 88px; border: 1px solid var(--line); border-radius: 8px; background: #f5f7f4; object-fit: contain; }
+.submission-image-preview { display: block; width: 78px; height: 78px; border: 1px solid var(--line); border-radius: 7px; background: #f5f7f4; object-fit: contain; }
 .worker-submission-card h3, .worker-submission-card p { margin: 0 0 5px; }
 .worker-submission-card details { border-top: 1px solid var(--line); padding-top: 10px; }
 .worker-submission-card summary { color: var(--green); font-weight: 700; cursor: pointer; }

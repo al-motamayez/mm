@@ -1138,28 +1138,31 @@ function distributeModelQuantity(form, useEnteredTotal = true) {
 
 async function uploadModelImage(orderId, file) {
   if (!file) return null;
-  if (!["image/jpeg", "image/png", "image/webp"].includes(file.type) || file.size > 5 * 1024 * 1024) {
-    throw new Error("اختر صورة JPG أو PNG أو WEBP لا يتجاوز حجمها 5 ميجابايت.");
-  }
-  const extension = file.type === "image/jpeg" ? "jpg" : file.type.split("/")[1];
-  const path = `${orderId}/${crypto.randomUUID()}.${extension}`;
-  const { error } = await supabaseClient.storage.from("factory-model-images").upload(path, file, {
-    contentType: file.type,
-    upsert: false
-  });
-  if (error) throw error;
+  const path = await uploadFactoryModelImage(`${orderId}`, file);
   return supabaseClient.storage.from("factory-model-images").getPublicUrl(path).data.publicUrl;
 }
 
 async function uploadWorkerProductionImage(workerId, file) {
   if (!file) return null;
-  if (!["image/jpeg", "image/png", "image/webp"].includes(file.type) || file.size > 5 * 1024 * 1024) {
-    throw new Error("اختر صورة JPG أو PNG أو WEBP لا يتجاوز حجمها 5 ميجابايت.");
+  return uploadFactoryModelImage(`worker-submissions/${workerId}`, file);
+}
+
+async function uploadFactoryModelImage(directory, file) {
+  const maxSize = 25 * 1024 * 1024;
+  if (file.size > maxSize) {
+    throw new Error("حجم الصورة يتجاوز الحد الأقصى المسموح به وهو 25 ميجابايت.");
   }
-  const extension = file.type === "image/jpeg" ? "jpg" : file.type.split("/")[1];
-  const path = `worker-submissions/${workerId}/${crypto.randomUUID()}.${extension}`;
+  const extension = file.name.match(/\.([a-z0-9]{1,12})$/i)?.[1].toLowerCase();
+  const inferredContentType = extension === "jpg" || extension === "jpeg"
+    ? "image/jpeg"
+    : extension === "svg"
+      ? "image/svg+xml"
+      : extension
+        ? `image/${extension}`
+        : "application/octet-stream";
+  const path = `${directory}/${crypto.randomUUID()}${extension ? `.${extension}` : ""}`;
   const { error } = await supabaseClient.storage.from("factory-model-images").upload(path, file, {
-    contentType: file.type,
+    contentType: file.type || inferredContentType,
     upsert: false
   });
   if (error) throw error;
@@ -2313,7 +2316,7 @@ function adminView(data, accounts) {
           ${colorPickerMarkup("", "model-colors")}
           ${sizePickerMarkup("", "model-sizes")}
           <div class="model-allocation field"><label>توزيع العدد على الألوان والمقاسات</label><div data-model-allocation-grid><p class="muted">أدخل العدد الكلي واختر الألوان والمقاسات لعرض التوزيع.</p></div><input type="hidden" name="colorSizeDistribution" value='{"colors":[]}'></div>
-          <label class="field model-image-field"><span>صورة الموديل (اختياري)</span><input type="file" name="modelImage" accept="image/jpeg,image/png,image/webp"><small>JPG أو PNG أو WEBP بحد أقصى 5 ميجابايت.</small><div data-model-image-preview></div></label>
+          <label class="field model-image-field"><span>صورة الموديل (اختياري)</span><input type="file" name="modelImage" accept="image/*"><small>يمكن رفع صيغ الصور الشائعة حتى 25 ميجابايت.</small><div data-model-image-preview></div></label>
           <div class="field" data-expected-delivery-field><label for="model-expected-delivery">تاريخ التسليم المتوقع (اختياري)</label><input id="model-expected-delivery" name="expectedDeliveryDate" type="date"></div>
           <div class="field"><label for="model-status">حالة الطلب</label><select id="model-status" name="status"><option>قيد الانتظار</option><option>معلق</option><option>تحت الإنشاء</option><option>قيد الفرش</option><option>تم الفرش / جاهز للقص</option><option>تم القص</option><option>جاهز للتسليم</option><option>تم التسليم</option></select></div>
           <div class="field" data-initial-delivery-field hidden><label for="model-delivered-pieces">العدد المسلّم</label><input id="model-delivered-pieces" name="deliveredPieces" type="number" min="1" step="1"><small>يُسجل كدفعة تسليم تاريخية ويُحتسب ضمن حساب العميل.</small></div>
@@ -2407,7 +2410,7 @@ function cuttingView(data) {
       ${cuttingColorPlyMarkup(item.colorPlyData, item.colors, item.layerCount, `cutting-${item.order}`)}
       <p class="cutting-calculated-total">إجمالي الراقات: <strong data-cutting-plys>0</strong> · إجمالي قطع القصة الناتجة: <strong data-cutting-total>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.total)}</strong> قطعة</p>
       <div class="cutting-breakdown" data-cutting-breakdown></div>
-      <label class="field"><span>صورة الموديل (اختياري)</span><input type="file" name="modelImage" accept="image/jpeg,image/png,image/webp"><small>الحد الأقصى 5 ميجابايت.</small></label>
+      <label class="field"><span>صورة الموديل (اختياري)</span><input type="file" name="modelImage" accept="image/*"><small>يمكن رفع صيغ الصور الشائعة حتى 25 ميجابايت.</small></label>
       <label class="field"><span>ملاحظات فنية للفرشة والقص</span><textarea name="technicalNotes" rows="3">${escapeHtml(item.technicalNotes || "")}</textarea></label>
       ${bedReady ? `<label class="field"><span>مين اللي قص القصة؟ (اختياري)</span><input name="cutterName" maxlength="120" value="${escapeHtml(item.cutterName || "")}" placeholder="اسم منفذ القص"></label>` : ""}
       <div class="form-actions">${bedReady ? "" : `<button type="button" class="button button-primary" data-ready-cutting="${escapeHtml(item.order)}">حفظ التفاصيل واعتمادها جاهزة للقص</button>`}<button type="submit" class="button button-primary" ${bedReady ? "" : "hidden"}>تأكيد انتهاء القص</button></div>
@@ -2450,7 +2453,7 @@ function cuttingRequestsView(data) {
       ${cuttingColorPlyMarkup(null, "", 0, "new-cutting")}
       <p class="cutting-calculated-total">إجمالي الراقات: <strong data-cutting-plys>0</strong> · إجمالي قطع القصة: <strong data-cutting-total>0</strong> قطعة</p>
       <div class="cutting-breakdown" data-cutting-breakdown></div>
-      <label class="field"><span>صورة الموديل (اختياري)</span><input type="file" name="modelImage" accept="image/jpeg,image/png,image/webp"><small>الحد الأقصى 5 ميجابايت.</small></label>
+      <label class="field"><span>صورة الموديل (اختياري)</span><input type="file" name="modelImage" accept="image/*"><small>يمكن رفع صيغ الصور الشائعة حتى 25 ميجابايت.</small></label>
       <label class="field"><span>ملاحظات فنية للفرشة والقص</span><textarea name="technicalNotes" rows="3"></textarea></label>
       <div class="form-actions"><button type="submit" class="button button-primary">حفظ القصة واعتمادها جاهزة للقص</button></div>
     </form>`, "بعد إتمام الفرش، سجّل كمية القماش والألوان والمقاسات وعدد الراقات دفعة واحدة. تُحفظ القصة جاهزة للقص عند الإرسال.")}</section>`;
@@ -2700,7 +2703,7 @@ function workerProductionSubmissionForm(parentSubmission = null) {
     ${sizePickerMarkup(initialSizeData, `${prefix}-sizes`, false)}
     <div class="field worker-production-allocation"><label>الأعداد المسلّمة لكل لون ومقاس</label><small>أدخل عدد القطع في كل خانة؛ يُجمع الإجمالي تلقائياً من تفاصيل التوزيع.</small><div data-worker-production-allocation><p class="muted">اختر لوناً ومقاساً واحداً على الأقل لإدخال عدد كل لون ومقاس.</p></div></div>
     <label class="field"><span>مجموع الأعداد المفصلة (محسوب تلقائياً)</span><input name="quantity" type="number" min="1" step="1" value="0" readonly></label>
-    <label class="field wide"><span>صورة الموديل (رفع صورة أو التقاط بالكاميرا)</span><input name="modelImage" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" required><small>إجباري · JPG أو PNG أو WEBP حتى 5 ميجابايت.</small></label>
+    <label class="field wide"><span>صورة الموديل (رفع صورة أو التقاط بالكاميرا)</span><input name="modelImage" type="file" accept="image/*" capture="environment" required><small>إجباري · يمكن رفع صيغ الصور الشائعة حتى 25 ميجابايت.</small></label>
     <div class="form-actions"><button class="button button-primary" type="submit">${parentSubmission ? "إرسال التسليم التابع للإدارة" : "إرسال للإدارة للمراجعة"}</button></div>
   </form>`;
 }
