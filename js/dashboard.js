@@ -262,7 +262,15 @@ async function readDashboardData(session) {
       readFlexibleRecords("workforce_settings"),
       readFlexibleRecords("workforce_settlements")
     ])
-    : Promise.resolve([[], [], [], [], []]);
+    : session.role === "worker"
+      ? Promise.all([
+        readFlexibleRecords("workforce_attendance"),
+        readFlexibleRecords("workforce_violations"),
+        readFlexibleRecords("workforce_profiles"),
+        Promise.resolve([]),
+        readFlexibleRecords("workforce_settlements")
+      ])
+      : Promise.resolve([[], [], [], [], []]);
   const [payments, leaves, tasks, settlements, deliveriesResult, cashTransactionsResult, clientFabricStockResult, personalAttendance, personalAdvances, personalPayroll, workerAdvances, workerPayroll, workerExpenses, fabricsResult, fabricTransactionsResult, authEventsResult, productionSubmissionsResult, finishedGoodsResult, clientModelRequestsResult, cuttingStoriesResult, workforceRecordsResult] = await Promise.all([
     readFlexibleRecords("payments"),
     readFlexibleRecords("leaves"),
@@ -2966,6 +2974,48 @@ function workerProductionSubmissionForm(parentSubmission = null) {
 function workerView(data, session) {
   const tasks = data.tasks.filter((item) => item.worker === session.username);
   const formatAmount = (record) => Number(record.amount ?? record.value ?? record.netAmount ?? record.salary ?? 0);
+  const workerProfile = data.workforceProfiles.find((profile) =>
+    profile.linkedUserId === session.accountRowId || profile._ownerId === session.accountId
+  ) || {};
+  const employeeId = workerProfile.workerId || session.accountRowId;
+  const workerIdentity = {
+    id: employeeId,
+    accountId: session.accountId,
+    name: workerProfile.employeeName || session.fullName,
+    username: session.username,
+    roleKey: "worker"
+  };
+  const workerFinancialData = {
+    ...data,
+    workerAdvances: data.personalAdvances,
+    workerPayroll: data.personalPayroll
+  };
+  const workerSettings = workforceSettings(workerFinancialData);
+  const workerToday = workforceDateKey(new Date());
+  const workerMonth = workerToday.slice(0, 7);
+  const workerAccrual = workerProfile.wageAmount
+    ? workforceMonthAccrual(workerIdentity, workerFinancialData, workerSettings, workerMonth, workerToday)
+    : null;
+  const monthAttendance = data.workforceAttendance
+    .filter((record) => record.workerId === employeeId || record.workerId === session.accountRowId)
+    .filter((record) => record.date?.startsWith(workerMonth))
+    .sort((left, right) => String(right.date).localeCompare(String(left.date)));
+  const monthViolations = data.workforceViolations
+    .filter((record) => record.workerId === employeeId || record.workerId === session.accountRowId)
+    .filter((record) => record.date?.startsWith(workerMonth))
+    .sort((left, right) => String(right.date).localeCompare(String(left.date)));
+  const overtimeRows = monthAttendance.map((record) => {
+    const checkOutMinutes = workforceTimeMinutes(record.checkOut);
+    const shiftEndMinutes = workforceTimeMinutes(workerSettings.shiftEnd);
+    const checkInMinutes = workforceTimeMinutes(record.checkIn);
+    const overtimeMinutes = checkOutMinutes === null || shiftEndMinutes === null
+      ? 0
+      : Math.max(0, checkOutMinutes - Math.max(shiftEndMinutes, checkInMinutes ?? 0));
+    const amount = workerAccrual
+      ? overtimeMinutes / 60 * workerAccrual.rate.hourly * Number(workerSettings.overtimeMultiplier || 1.5)
+      : 0;
+    return { ...record, overtimeMinutes, overtimeAmount: amount };
+  }).filter((record) => record.overtimeMinutes > 0);
   const datedRows = (records, renderColumns) => records.map((record) =>
     `<tr>${renderColumns(record).map((value) => `<td>${escapeHtml(value)}</td>`).join("")}<td>${formatDateTime(record._createdAt || record.created_at || record.date)}</td></tr>`
   );
@@ -2978,7 +3028,29 @@ function workerView(data, session) {
     </article>`
   );
   const personalAccount = `<section id="personal-account" class="dashboard-section">
-    <div class="stats-grid">${stat("سجلات الحضور", data.personalAttendance.length)}${stat("إجمالي السلف", money(data.personalAdvances.reduce((sum, item) => sum + formatAmount(item), 0)))}${stat("إجمالي المصروفات", money(data.workerExpenses.reduce((sum, item) => sum + formatAmount(item), 0)))}${stat("آخر مرتب مسجل", data.personalPayroll[0] ? money(formatAmount(data.personalPayroll[0])) : "—")}</div>
+    <header class="worker-account-heading"><div><p class="eyebrow">حساب العامل</p><h2>مرحباً، ${escapeHtml(workerProfile.employeeName || session.fullName)}</h2><p>${escapeHtml(workerProfile.jobTitle || session.jobTitle || "العامل")} · ملخص الرواتب والحضور للشهر الحالي</p></div><span class="worker-account-month">${escapeHtml(workerMonth)}</span></header>
+    <div class="stats-grid worker-finance-stats">
+      ${stat("المستحقات الحالية", workerAccrual ? money(workerAccrual.earned) : data.personalPayroll[0] ? money(formatAmount(data.personalPayroll[0])) : "—", "الأجر المحتسب حتى اليوم")}
+      ${stat("إجمالي السلف", money(workerAccrual?.advances ?? data.personalAdvances.reduce((sum, item) => sum + formatAmount(item), 0)), "مبالغ مستحقة")}
+      ${stat("صافي المستحق", workerAccrual ? money(workerAccrual.netDue) : "يُحدد بعد تسجيل الأجر", workerAccrual ? "بعد السلف والخصومات والمدفوعات" : "تواصل مع الإدارة لتسجيل بيانات الأجر")}
+      ${stat("السهر والمكافآت", money(workerAccrual?.overtimeAmount || 0), "أجر السهر المحتسب × 1.5")}
+    </div>
+    ${panel("حضور وانصراف الشهر الحالي", monthAttendance.length
+      ? table(["التاريخ","الحالة","وقت الحضور","وقت الانصراف","التأخير","السهر المحتسب"], monthAttendance.map((record) => {
+        const checkIn = workforceTimeMinutes(record.checkIn);
+        const shiftStart = workforceTimeMinutes(workerSettings.shiftStart);
+        const delayMinutes = checkIn === null || shiftStart === null ? 0 : Math.max(0, checkIn - shiftStart);
+        const overtime = overtimeRows.find((entry) => entry._recordId === record._recordId);
+        return `<tr><td>${formatRecordDate(record.date)}</td><td>${escapeHtml(WORKFORCE_ATTENDANCE_LABELS[record.status] || record.status || "—")}</td><td>${escapeHtml(record.checkIn || "—")}</td><td>${escapeHtml(record.checkOut || "—")}</td><td>${delayMinutes ? `${delayMinutes} دقيقة` : "—"}</td><td>${overtime ? `${overtime.overtimeMinutes} دقيقة · ${money(overtime.overtimeAmount)}` : "—"}</td></tr>`;
+      }))
+      : '<div class="empty-state">لا توجد سجلات حضور للشهر الحالي.</div>')}
+    ${panel("الخصومات والجزاءات لهذا الشهر", monthViolations.length
+      ? table(["التاريخ","سبب الخصم","الإجراء","المبلغ"], monthViolations.map((record) => `<tr><td>${formatRecordDate(record.date)}</td><td>${escapeHtml(record.ruleLabel || workforceRuleTitle(workerSettings, record.ruleKey))}</td><td>${escapeHtml(record.decisionDescription || record.decision || "—")}</td><td>${money(record.deductionAmount || 0)}</td></tr>`))
+      : '<div class="empty-state">لا توجد خصومات أو جزاءات مسجلة لهذا الشهر.</div>')}
+    ${panel("السهر والمكافآت لهذا الشهر", overtimeRows.length
+      ? table(["التاريخ","وقت الانصراف","مدة السهر","المبلغ المحتسب"], overtimeRows.map((record) => `<tr><td>${formatRecordDate(record.date)}</td><td>${escapeHtml(record.checkOut || "—")}</td><td>${record.overtimeMinutes} دقيقة</td><td>${money(record.overtimeAmount)}</td></tr>`))
+      : '<div class="empty-state">لا يوجد سهر مسجل لهذا الشهر.</div>')}
+    <div class="stats-grid worker-legacy-stats">${stat("سجلات حضور أخرى", data.personalAttendance.length)}${stat("إجمالي المصروفات", money(data.workerExpenses.reduce((sum, item) => sum + formatAmount(item), 0)))}${stat("آخر مرتب مسجل", data.personalPayroll[0] ? money(formatAmount(data.personalPayroll[0])) : "—")}</div>
     ${panel("سجل الحضور والغياب", data.personalAttendance.length
       ? table(["التاريخ","الحالة","ملاحظات","تاريخ التسجيل"], datedRows(data.personalAttendance, (item) => [formatRecordDate(item.date || item.day || item._createdAt), item.status || item.type || "—", item.notes || item.note || "—"]))
       : '<div class="empty-state">لا توجد سجلات حضور أو غياب مرتبطة بحسابك.</div>')}

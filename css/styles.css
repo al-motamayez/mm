@@ -436,17 +436,32 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .workforce-inline-check input { width: 18px; min-height: 18px; }
 .workforce-attendance-form label { display: grid; gap: 6px; color: #465651; font-size: 13px; font-weight: 600; }
 .workforce-attendance-form textarea { width: 100%; padding: 10px 13px; border: 1px solid #dfe6e1; border-radius: 9px; font: inherit; }
-.workforce-profile-modal { width: min(1100px, 96vw); max-height: 92vh; overflow: auto; }
+.workforce-profile-modal { width: min(1000px, 90vw); max-width: 90vw; max-height: calc(100vh - 32px); overflow-y: auto; direction: rtl; text-align: right; padding: 28px; scrollbar-width: none; }
+.workforce-profile-modal::-webkit-scrollbar { display: none; }
 .workforce-profile-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 14px; padding-inline-end: 28px; }
 .workforce-profile-heading h2 { margin: 0; }
 .workforce-profile-heading p { margin: 5px 0 0; color: var(--muted); }
 .workforce-profile-stats { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); margin: 14px 0; }
-.workforce-personal-form { gap: 14px; }
-.workforce-profile-section { padding: 16px; border: 1px solid #e0e9e3; border-radius: 13px; background: #fbfdfb; }
-.workforce-profile-section h3 { margin: 0 0 13px; color: var(--green-dark); font-size: 15px; }
-.workforce-profile-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.workforce-rate-preview { grid-column: 1 / -1; margin: 0; padding: 11px 13px; border: 1px solid #d9e8de; border-radius: 9px; color: var(--green-dark); background: #f0f7f2; font-size: 13px; line-height: 1.7; }
-.workforce-new-employee-modal .workforce-profile-section .form-grid { gap: 12px; }
+.workforce-personal-form, .workforce-new-employee-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; gap: 16px; }
+.workforce-profile-section.wide { grid-column: 1 / -1; }
+.workforce-profile-section { min-width: 0; padding: 20px; border: 1px solid #e0e9e3; border-radius: 14px; background: #fbfdfb; box-shadow: 0 5px 18px #193f2b08; }
+.workforce-profile-section h3 { margin: 0 0 16px; color: var(--green-dark); font-size: 16px; }
+.workforce-profile-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; gap: 16px; }
+.workforce-profile-modal .field { min-width: 0; gap: 8px; color: #344b40; font-size: 14px; }
+.workforce-profile-modal .field.wide { grid-column: 1 / -1; }
+.workforce-profile-modal .field input, .workforce-profile-modal .field select, .workforce-profile-modal .field textarea { min-height: 48px; padding: 12px 14px; font-size: 14px; text-align: right; }
+.workforce-profile-modal .field textarea { min-height: 92px; resize: vertical; }
+.workforce-profile-modal .form-actions { grid-column: 1 / -1; justify-content: flex-start; gap: 12px; padding-top: 4px; }
+.workforce-rate-preview { grid-column: 1 / -1; margin: 0; padding: 13px 15px; border: 1px solid #d9e8de; border-radius: 10px; color: var(--green-dark); background: #f0f7f2; font-size: 13px; line-height: 1.8; }
+.workforce-new-employee-modal .workforce-profile-section .form-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; gap: 16px; }
+.worker-account-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 18px; padding: 22px 24px; border: 1px solid #d7e8dc; border-radius: 16px; background: linear-gradient(125deg, #edf7f0, #fff); }
+.worker-account-heading h2 { margin: 0; color: var(--green-dark); font-size: 23px; }
+.worker-account-heading p { margin: 6px 0 0; color: var(--muted); }
+.worker-account-heading .eyebrow { margin: 0 0 5px; color: #65816f; font-size: 11px; font-weight: 700; }
+.worker-account-month { padding: 8px 12px; border-radius: 20px; color: var(--green-dark); background: #dceee2; font-weight: 700; direction: ltr; }
+.worker-finance-stats .stat-card { min-height: 112px; border-color: #dce9e0; background: linear-gradient(145deg, #fff, #f6faf7); }
+.worker-finance-stats .stat-card:first-child, .worker-finance-stats .stat-card:nth-child(3) { border-color: #b9d9c3; background: linear-gradient(145deg, #eaf6ed, #fff); }
+.worker-legacy-stats { margin-top: 18px; }
 .workforce-late-backdrop { z-index: 1500; }
 .workforce-late-rules { min-width: 0; }
 .workforce-late-rules > div { display: grid; gap: 8px; margin-bottom: 10px; }
@@ -455,7 +470,18 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 @media (max-width: 700px) {
   .workforce-employee-toolbar { align-items: stretch; flex-direction: column; }
   .workforce-add-employee { width: 100%; }
-  .workforce-profile-fields { grid-template-columns: minmax(0, 1fr); }
+  .workforce-profile-modal { width: 96vw; max-width: 96vw; max-height: calc(100vh - 20px); padding: 18px; }
+  .workforce-profile-heading { flex-direction: column; padding-inline-end: 24px; }
+  .workforce-personal-form, .workforce-new-employee-form, .workforce-profile-fields,
+  .workforce-new-employee-modal .workforce-profile-section .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; }
+  .worker-account-heading { align-items: flex-start; flex-direction: column; padding: 17px; }
+}
+@media (max-width: 460px) {
+  .workforce-profile-modal { padding: 14px; }
+  .workforce-personal-form, .workforce-new-employee-form, .workforce-profile-fields,
+  .workforce-new-employee-modal .workforce-profile-section .form-grid { grid-template-columns: minmax(0, 1fr); }
+  .workforce-profile-section { padding: 14px; }
+  .worker-account-heading h2 { font-size: 19px; }
 }
 .cutting-order-card .cutting-finish-form { display: grid; gap: 10px; margin-top: 10px; }
 .cutting-order-card .form-section { gap: 10px; padding: 12px; }
@@ -1102,4 +1128,12 @@ input, select, .modal-form textarea { color: #1d3028; font-size: 16px; }
   .worker-allocation-table tbody tr { grid-template-columns: minmax(0, 1fr); }
   .worker-allocation-table tbody tr > th, .worker-allocation-table tbody tr > td[data-worker-color-total] { grid-column: 1; }
   .form-section { padding: 11px; }
+}
+
+.modal-card.workforce-profile-modal { width: min(1000px, 90vw); max-width: 90vw; }
+@media (max-width: 700px) {
+  .modal-card.workforce-profile-modal { width: 96vw; max-width: 96vw; padding: 18px; }
+}
+@media (max-width: 420px) {
+  .modal-card.workforce-profile-modal { width: 96vw; max-width: 96vw; padding: 14px; }
 }
