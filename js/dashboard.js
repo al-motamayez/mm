@@ -496,24 +496,30 @@ async function readDashboardData(session) {
     }));
   data.sewing = stages
     .filter((stage) => stageNames.get(stage.stage_name) === "sewing")
-    .map((stage) => ({
-      id: stage.id,
-      order: stage.order_id,
-      line: stage.line_name || "—",
-      model: ordersById.get(stage.order_id)?.model_name || ordersById.get(stage.order_id)?.model_number || "موديل غير محدد",
-      modelNumber: ordersById.get(stage.order_id)?.model_number || "",
-      client: clientsById.get(ordersById.get(stage.order_id)?.customer_id)?.name || "",
-      modelImageUrl: ordersById.get(stage.order_id)?.model_image_url || "",
-      colors: ordersById.get(stage.order_id)?.colors || "",
-      sizes: cuttingSizePickerValue(ordersById.get(stage.order_id)?.sizes, cuttingStage?.color_ply_data),
-      workStages: ordersById.get(stage.order_id)?.work_stages || [],
-      technicalNotes: stage.technical_notes || "",
-      orderStatus: ordersById.get(stage.order_id)?.status || "",
-      supervisor: stage.worker_name || "—",
-      target: stage.target_quantity || ordersById.get(stage.order_id)?.total_pieces || 0,
-      produced: stage.completed_quantity || 0,
-      status: stage.status === "قيد التنفيذ" ? "قيد الخياطة" : stage.status
-    }));
+    .map((stage) => {
+      const order = ordersById.get(stage.order_id);
+      const cuttingStage = stages.find((candidate) =>
+        candidate.order_id === stage.order_id && stageNames.get(candidate.stage_name) === "cutting"
+      );
+      return {
+        id: stage.id,
+        order: stage.order_id,
+        line: stage.line_name || "—",
+        model: order?.model_name || order?.model_number || "موديل غير محدد",
+        modelNumber: order?.model_number || "",
+        client: clientsById.get(order?.customer_id)?.name || "",
+        modelImageUrl: order?.model_image_url || "",
+        colors: order?.colors || "",
+        sizes: cuttingSizePickerValue(order?.sizes, cuttingStage?.color_ply_data),
+        workStages: order?.work_stages || [],
+        technicalNotes: stage.technical_notes || "",
+        orderStatus: order?.status || "",
+        supervisor: stage.worker_name || "—",
+        target: stage.target_quantity || order?.total_pieces || 0,
+        produced: stage.completed_quantity || 0,
+        status: stage.status === "قيد التنفيذ" ? "قيد الخياطة" : stage.status
+      };
+    });
 
   data.users = session.role === "admin" ? await readUsers() : [];
   const clientsByUserId = new Map(data.clients.filter((client) => client.user_id).map((client) => [client.user_id, client]));
