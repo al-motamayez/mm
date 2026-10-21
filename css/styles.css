@@ -421,7 +421,12 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .workforce-cell-leave, .workforce-cell-friday_paid { color: #355b7b; background: #eef5fb; }
 .workforce-cell-friday_unpaid { color: #785b28; background: #fbf4e5; }
 .workforce-cell-friday_deducted { color: #9b302c; background: #fff0ef; }
+.workforce-employee-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 6px 0 14px; padding: 18px 20px; border: 1px solid #dce9e0; border-radius: 14px; background: linear-gradient(120deg, #f5faf6, #fff); }
+.workforce-employee-toolbar h2 { margin: 0; color: var(--green-dark); font-size: 20px; }
+.workforce-employee-toolbar p { margin: 5px 0 0; color: var(--muted); font-size: 13px; }
+.workforce-add-employee { min-height: 44px; flex-shrink: 0; box-shadow: 0 5px 14px #17543b24; }
 .workforce-profile-form { display: grid; grid-template-columns: minmax(100px, 0.7fr) minmax(110px, 1fr) auto; align-items: center; gap: 6px; min-width: 320px; }
+.workforce-inline-rate { grid-column: 1 / -1; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .workforce-profile-form input, .workforce-profile-form select, .workforce-settlement-form input { min-height: 36px; padding: 6px 8px; font-size: 12px; }
 .workforce-settlement-form { display: flex; align-items: center; gap: 6px; min-width: 205px; }
 .workforce-settlement-form input { width: 105px; }
@@ -436,10 +441,22 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .workforce-profile-heading h2 { margin: 0; }
 .workforce-profile-heading p { margin: 5px 0 0; color: var(--muted); }
 .workforce-profile-stats { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); margin: 14px 0; }
+.workforce-personal-form { gap: 14px; }
+.workforce-profile-section { padding: 16px; border: 1px solid #e0e9e3; border-radius: 13px; background: #fbfdfb; }
+.workforce-profile-section h3 { margin: 0 0 13px; color: var(--green-dark); font-size: 15px; }
+.workforce-profile-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.workforce-rate-preview { grid-column: 1 / -1; margin: 0; padding: 11px 13px; border: 1px solid #d9e8de; border-radius: 9px; color: var(--green-dark); background: #f0f7f2; font-size: 13px; line-height: 1.7; }
+.workforce-new-employee-modal .workforce-profile-section .form-grid { gap: 12px; }
+.workforce-late-backdrop { z-index: 1500; }
 .workforce-late-rules { min-width: 0; }
 .workforce-late-rules > div { display: grid; gap: 8px; margin-bottom: 10px; }
 .workforce-late-rule-row { display: grid; grid-template-columns: minmax(130px, 1fr) minmax(130px, 1fr) auto; align-items: end; gap: 8px; padding: 9px; border: 1px solid var(--line); border-radius: 8px; }
 .workforce-late-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+@media (max-width: 700px) {
+  .workforce-employee-toolbar { align-items: stretch; flex-direction: column; }
+  .workforce-add-employee { width: 100%; }
+  .workforce-profile-fields { grid-template-columns: minmax(0, 1fr); }
+}
 .cutting-order-card .cutting-finish-form { display: grid; gap: 10px; margin-top: 10px; }
 .cutting-order-card .form-section { gap: 10px; padding: 12px; }
 .cutting-bed-inputs { grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); }

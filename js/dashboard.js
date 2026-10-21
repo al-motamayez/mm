@@ -16,6 +16,8 @@ let onlineUsers = [];
 let activeFinanceTab = "payments";
 let activeWorkforceTab = "employees";
 let selectedWorkforceEmployeeId = "";
+let showNewWorkforceEmployeeModal = false;
+let pendingWorkforceLateDecision = null;
 let selectedWorkforceMonth = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`;
 let selectedWorkforceCutoffDate = "";
 const REALTIME_NOTIFICATION_MESSAGE = "تحديث جديد في البرنامج";
@@ -3318,15 +3320,12 @@ function workforceRecordOwnerId(worker, data) {
 }
 
 function showWorkforceLateDecisionModal(root, worker, date, delay) {
+  pendingWorkforceLateDecision = { workerId: worker.id, date, delay, decision: "" };
   const modalRoot = document.querySelector("#workforce") || root;
   const modal = modalRoot.querySelector("[data-workforce-late-modal]");
   if (!modal) return;
   modalRoot.querySelector("[data-workforce-late-summary]").textContent =
     `${worker.name} · تأخير ${delay} دقيقة · اختر قرار الخصم الآن.`;
-  modal.dataset.workerId = worker.id;
-  modal.dataset.date = date;
-  modal.dataset.delay = String(delay);
-  modal.dataset.selectedDecision = "";
   modal.querySelectorAll("[data-late-decision]").forEach((choice) => {
     choice.classList.remove("active");
     choice.setAttribute("aria-pressed", "false");
@@ -3404,6 +3403,19 @@ function workforceMoney(value) {
   return money(Math.round((Number(value) + Number.EPSILON) * 100) / 100);
 }
 
+function workforceRatePreview(basis, value) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return "أدخل قيمة المرتب لاحتساب أجر اليوم والساعة تلقائياً.";
+  }
+  const daily = basis === "weekly" ? amount / 7
+    : basis === "hourly" ? amount * 9
+      : basis === "daily" ? amount
+        : amount / 30;
+  const hourly = basis === "hourly" ? amount : daily / 9;
+  return `أجر اليوم: ${workforceMoney(daily)} · أجر الساعة: ${workforceMoney(hourly)} · ${basis === "weekly" ? "المرتب الأسبوعي ÷ 7" : basis === "hourly" ? "قيمة الساعة المدخلة" : basis === "daily" ? "قيمة اليوم المدخلة" : "المرتب الشهري ÷ 30"} · اليوم القياسي 9 ساعات.`;
+}
+
 function workforceRuleTitle(settings, ruleKey) {
   const rule = WORKFORCE_RULES.find(([key]) => key === ruleKey);
   if (!rule) return "مخالفة أخرى";
@@ -3414,23 +3426,16 @@ function workforceRuleTitle(settings, ruleKey) {
 function workforceWageRates(profile, settings, monthKey, data, workerId) {
   const rate = Number(profile.wageAmount || 0);
   const basis = profile.wageBasis || "monthly";
-  const shiftHours = workforceShiftMinutes(settings) / 60;
-  const fridays = workforceMonthDates(monthKey).filter((date) => date.getDay() === 5);
-  const workDates = workforceMonthDates(monthKey).length - fridays.length;
-  const scheduledFridays = fridays.filter((date) => {
-    const attendance = workforceAttendanceRecord(data, workerId, workforceDateKey(date));
-    if (settings.fridayDefault === "paid") return true;
-    if (!attendance) return false;
-    if (settings.fridayDefault === "unpaid") {
-      return ["friday_paid", "present", "late"].includes(attendance.status)
-        || (attendance.status === "leave" && attendance.paidLeave);
-    }
-    return ["friday_paid", "present", "late", "friday_deducted"].includes(attendance.status)
-      || (attendance.status === "leave" && attendance.paidLeave);
-  }).length;
-  const monthlyDays = Math.max(1, workDates + scheduledFridays);
-  const daily = basis === "monthly" ? rate / monthlyDays : basis === "daily" ? rate : rate * shiftHours;
-  const hourly = basis === "hourly" ? rate : daily / Math.max(shiftHours, 1);
+  const shiftHours = 9;
+  const monthlyDays = 30;
+  const daily = basis === "weekly"
+    ? rate / 7
+    : basis === "monthly"
+      ? rate / monthlyDays
+      : basis === "hourly"
+        ? rate * shiftHours
+        : rate;
+  const hourly = basis === "hourly" ? rate : daily / shiftHours;
   return { rate, basis, daily, hourly, shiftHours, monthlyDays };
 }
 
@@ -3571,7 +3576,7 @@ function workforceMonthAccrual(worker, data, settings, monthKey, throughDate) {
 
 function workforceAttendanceGrid(data, employees, settings) {
   const dates = workforceMonthDates(selectedWorkforceMonth);
-  if (!employees.length) return '<div class="empty-state">لا توجد حسابات عمال أو مشرفين نشطة.</div>';
+  if (!employees.length) return '<div class="empty-state">لا توجد ملفات عاملين لعرض حضورها.</div>';
   const headings = dates.map((date) =>
     `<th class="${date.getDay() === 5 ? "workforce-friday" : ""}"><span>${date.getDate()}</span><small>${new Intl.DateTimeFormat("ar-EG", { weekday: "short" }).format(date)}</small></th>`
   ).join("");
@@ -3690,21 +3695,28 @@ function workforceView(data) {
       <p>${escapeHtml(selectedEmployee.jobTitle || "مسمى وظيفي غير محدد")} · ${escapeHtml(selectedEmployee.roleLabel)}</p></div>
       <button type="button" class="button button-secondary" data-print-workforce-profile>طباعة كشف العامل</button></header>
       <form class="workforce-personal-form form-grid" data-workforce-personal-form="${escapeHtml(selectedEmployee.id)}">
-        <label class="field"><span>الاسم</span><input id="workforce-profile-name" name="employeeName" value="${escapeHtml(selectedEmployee.name)}" disabled></label>
-        <label class="field"><span>اسم المستخدم</span><input id="workforce-profile-username" name="username" value="${escapeHtml(selectedEmployee.username)}" disabled></label>
-        <label class="field"><span>الدور الوظيفي المسجل</span><input id="workforce-profile-role" name="role" value="${escapeHtml(selectedEmployee.roleLabel)}" disabled></label>
-        <label class="field"><span>المسمى الوظيفي الفعلي</span><select id="workforce-profile-job-title" name="jobTitle" required>${employeeJobTitleOptions}</select></label>
-        <label class="field"><span>الهاتف</span><input id="workforce-profile-phone" name="phone" value="${escapeHtml(selectedEmployee.phone || "—")}" disabled></label>
-        <label class="field"><span>أساس المرتب</span><select name="wageBasis"><option value="monthly" ${selectedEmployeeProfile.wageBasis !== "daily" && selectedEmployeeProfile.wageBasis !== "hourly" ? "selected" : ""}>شهري</option><option value="daily" ${selectedEmployeeProfile.wageBasis === "daily" ? "selected" : ""}>يومي</option><option value="hourly" ${selectedEmployeeProfile.wageBasis === "hourly" ? "selected" : ""}>بالساعة</option></select></label>
-        <label class="field"><span>المرتب الأساسي (جنيه)</span><input name="wageAmount" type="number" min="0" step="0.01" value="${escapeHtml(selectedEmployeeProfile.wageAmount ?? "")}" placeholder="أدخل المرتب الأساسي"></label>
-        <label class="field"><span>الرقم القومي</span><input name="nationalId" value="${escapeHtml(selectedEmployeeProfile.nationalId || "")}" maxlength="32"></label>
-        <label class="field"><span>العنوان</span><input name="address" value="${escapeHtml(selectedEmployeeProfile.address || "")}" maxlength="240"></label>
-        <label class="field"><span>جهة اتصال للطوارئ</span><input name="emergencyContact" value="${escapeHtml(selectedEmployeeProfile.emergencyContact || "")}" maxlength="120"></label>
-        <label class="field"><span>تاريخ التعيين</span><input name="hireDate" type="date" value="${escapeHtml(selectedEmployeeProfile.hireDate || "")}"></label>
-        <label class="field"><span>بيانات / طبيعة العمل</span><input name="workDescription" value="${escapeHtml(selectedEmployeeProfile.workDescription || "")}" maxlength="240" placeholder="القسم، التخصص، أو طبيعة المهام"></label>
-        <label class="field"><span>موقع / خط العمل</span><input name="workLocation" value="${escapeHtml(selectedEmployeeProfile.workLocation || "")}" maxlength="160"></label>
-        <label class="field"><span>نوع التعاقد</span><input name="employmentType" value="${escapeHtml(selectedEmployeeProfile.employmentType || "")}" maxlength="100" placeholder="دوام كامل، مؤقت..."></label>
-        <label class="field wide"><span>ملاحظات وظيفية</span><textarea name="employmentNotes" rows="2" maxlength="500">${escapeHtml(selectedEmployeeProfile.employmentNotes || "")}</textarea></label>
+        <div class="workforce-profile-section wide"><h3>بيانات العامل والعمل</h3><div class="workforce-profile-fields">
+          <label class="field"><span>الاسم</span><input id="workforce-profile-name" name="employeeName" value="${escapeHtml(selectedEmployee.name)}" disabled></label>
+          <label class="field"><span>اسم المستخدم</span><input id="workforce-profile-username" name="username" value="${escapeHtml(selectedEmployee.username)}" disabled></label>
+          <label class="field"><span>الدور الوظيفي المسجل</span><input id="workforce-profile-role" name="role" value="${escapeHtml(selectedEmployee.roleLabel)}" disabled></label>
+          <label class="field"><span>المسمى الوظيفي الفعلي</span><select id="workforce-profile-job-title" name="jobTitle" required>${employeeJobTitleOptions}</select></label>
+          <label class="field"><span>الهاتف</span><input id="workforce-profile-phone" name="phone" value="${escapeHtml(selectedEmployee.phone || "—")}" disabled></label>
+          <label class="field"><span>تاريخ التعيين</span><input name="hireDate" type="date" value="${escapeHtml(selectedEmployeeProfile.hireDate || "")}"></label>
+          <label class="field"><span>بيانات / طبيعة العمل</span><input name="workDescription" value="${escapeHtml(selectedEmployeeProfile.workDescription || "")}" maxlength="240" placeholder="القسم، التخصص، أو طبيعة المهام"></label>
+          <label class="field"><span>موقع / خط العمل</span><input name="workLocation" value="${escapeHtml(selectedEmployeeProfile.workLocation || "")}" maxlength="160"></label>
+          <label class="field"><span>نوع التعاقد</span><input name="employmentType" value="${escapeHtml(selectedEmployeeProfile.employmentType || "")}" maxlength="100" placeholder="دوام كامل، مؤقت..."></label>
+        </div></div>
+        <div class="workforce-profile-section wide"><h3>الأجر الأساسي والحسابات التلقائية</h3><div class="workforce-profile-fields">
+          <label class="field"><span>نوع المرتب</span><select name="wageBasis"><option value="monthly" ${!["weekly", "daily", "hourly"].includes(selectedEmployeeProfile.wageBasis) ? "selected" : ""}>شهري</option><option value="weekly" ${selectedEmployeeProfile.wageBasis === "weekly" ? "selected" : ""}>أسبوعي</option><option value="daily" ${selectedEmployeeProfile.wageBasis === "daily" ? "selected" : ""}>يومي (قديم)</option><option value="hourly" ${selectedEmployeeProfile.wageBasis === "hourly" ? "selected" : ""}>بالساعة (قديم)</option></select></label>
+          <label class="field"><span>المرتب الأساسي (جنيه)</span><input name="wageAmount" type="number" min="0" step="0.01" value="${escapeHtml(selectedEmployeeProfile.wageAmount ?? "")}" placeholder="أدخل المرتب الأساسي"></label>
+          <p class="workforce-rate-preview wide" data-workforce-rate-preview></p>
+        </div></div>
+        <div class="workforce-profile-section wide"><h3>البيانات الشخصية والتواصل</h3><div class="workforce-profile-fields">
+          <label class="field"><span>الرقم القومي</span><input name="nationalId" value="${escapeHtml(selectedEmployeeProfile.nationalId || "")}" maxlength="32"></label>
+          <label class="field"><span>العنوان</span><input name="address" value="${escapeHtml(selectedEmployeeProfile.address || "")}" maxlength="240"></label>
+          <label class="field"><span>جهة اتصال للطوارئ</span><input name="emergencyContact" value="${escapeHtml(selectedEmployeeProfile.emergencyContact || "")}" maxlength="120"></label>
+          <label class="field wide"><span>ملاحظات وظيفية</span><textarea name="employmentNotes" rows="2" maxlength="500">${escapeHtml(selectedEmployeeProfile.employmentNotes || "")}</textarea></label>
+        </div></div>
         <div class="form-actions wide"><button class="button button-primary" type="submit">حفظ بيانات العامل والمرتب</button></div>
       </form>
       ${panel("ربط حساب تسجيل الدخول", `<p>${selectedEmployeeLinkedAccountId
@@ -3715,7 +3727,9 @@ function workforceView(data) {
           <div class="form-actions"><button type="button" class="button button-primary" data-link-workforce-account="${escapeHtml(selectedEmployee.id)}">ربط الحساب</button>${selectedEmployeeLinkedAccountId ? `<button type="button" class="row-action order-delete-action" data-unlink-workforce-account="${escapeHtml(selectedEmployee.id)}">فك الارتباط</button>` : ""}</div>
         </div>`, "فك الارتباط يوقف صلاحية دخول الحساب السابق مع الاحتفاظ بملف العامل وسجلاته.") }
       <div class="stats-grid workforce-profile-stats">
-        ${stat("الأجر المحدد", workforceMoney(selectedEmployeeProfile.wageAmount || 0), selectedEmployeeProfile.wageBasis === "hourly" ? "بالساعة" : selectedEmployeeProfile.wageBasis === "daily" ? "يومي" : "شهري")}
+        ${stat("الأجر المحدد", workforceMoney(selectedEmployeeProfile.wageAmount || 0), selectedEmployeeProfile.wageBasis === "weekly" ? "أسبوعي" : selectedEmployeeProfile.wageBasis === "hourly" ? "بالساعة" : selectedEmployeeProfile.wageBasis === "daily" ? "يومي" : "شهري")}
+        ${stat("أجر اليوم", workforceMoney(employeeCalculation.rate.daily), "محسوب تلقائياً")}
+        ${stat("أجر الساعة", workforceMoney(employeeCalculation.rate.hourly), "على أساس 9 ساعات")}
         ${stat("أيام مستحقة هذا الشهر", employeeCalculation.creditedDays)}
         ${stat("الأجر المستحق", workforceMoney(employeeCalculation.earned))}
         ${stat("أجر السهر × 1.5", workforceMoney(employeeCalculation.overtimeAmount))}
@@ -3739,7 +3753,36 @@ function workforceView(data) {
           .sort((left, right) => String(right.throughDate).localeCompare(String(left.throughDate)))
           .map((record) => `<tr><td>${escapeHtml(record.period || "—")}</td><td>${formatRecordDate(record.throughDate)}</td><td>${workforceMoney(record.earnedAmount)}</td><td>${workforceMoney(record.advanceAmount)}</td><td>${workforceMoney(record.deductionAmount)}</td><td>${workforceMoney(record.paidAmount)}</td><td>${workforceMoney(record.balanceAfter)}</td></tr>`))
         : '<div class="empty-state">لا توجد تصفيات محفوظة.</div>')}
-    </section></div>` : "";
+    </section>    </div>` : "";
+    const newEmployeeModal = showNewWorkforceEmployeeModal ? `<div class="modal-backdrop workforce-profile-backdrop" data-new-workforce-employee-modal>
+      <section class="modal-card workforce-profile-modal workforce-new-employee-modal" role="dialog" aria-modal="true" aria-labelledby="new-workforce-employee-title">
+        <button class="modal-close" type="button" data-close-new-workforce-employee aria-label="إغلاق">×</button>
+        <header class="workforce-profile-heading"><div><h2 id="new-workforce-employee-title">إضافة عامل جديد</h2><p>أنشئ ملفاً وظيفياً مستقلاً، ويمكن ربط حساب دخول به لاحقاً.</p></div></header>
+        <form class="workforce-new-employee-form form-grid">
+          <div class="workforce-profile-section wide"><h3>البيانات الأساسية</h3><div class="form-grid">
+            <label class="field"><span>اسم العامل</span><input name="employeeName" required maxlength="120" autocomplete="name"></label>
+            <label class="field"><span>المسمى الوظيفي الفعلي</span><select name="jobTitle" required>${WORKER_JOB_TITLES.map((title) => `<option value="${escapeHtml(title)}">${escapeHtml(title)}</option>`).join("")}</select></label>
+            <label class="field"><span>الهاتف</span><input name="phone" type="tel" maxlength="40" autocomplete="tel"></label>
+            <label class="field"><span>تاريخ التعيين</span><input name="hireDate" type="date" value="${workforceDateKey(new Date())}"></label>
+          </div></div>
+          <div class="workforce-profile-section wide"><h3>الأجر وبيانات العمل</h3><div class="form-grid">
+            <label class="field"><span>نوع المرتب</span><select name="wageBasis"><option value="monthly">شهري</option><option value="weekly">أسبوعي</option></select></label>
+            <label class="field"><span>قيمة المرتب (جنيه)</span><input name="wageAmount" type="number" min="0" step="0.01" placeholder="اختياري"></label>
+            <p class="workforce-rate-preview wide" data-new-workforce-rate-preview>أجر اليوم والساعة يُحسبان تلقائياً: الشهري ÷ 30 أو الأسبوعي ÷ 7، ثم أجر اليوم ÷ 9.</p>
+            <label class="field"><span>القسم / طبيعة العمل</span><input name="workDescription" maxlength="240"></label>
+            <label class="field"><span>موقع / خط العمل</span><input name="workLocation" maxlength="160"></label>
+            <label class="field"><span>نوع التعاقد</span><input name="employmentType" maxlength="100" placeholder="دوام كامل، مؤقت..."></label>
+          </div></div>
+          <div class="workforce-profile-section wide"><h3>معلومات إضافية</h3><div class="form-grid">
+            <label class="field"><span>الرقم القومي</span><input name="nationalId" maxlength="32"></label>
+            <label class="field"><span>العنوان</span><input name="address" maxlength="240"></label>
+            <label class="field"><span>جهة اتصال للطوارئ</span><input name="emergencyContact" maxlength="120"></label>
+            <label class="field wide"><span>ملاحظات وظيفية</span><textarea name="employmentNotes" rows="2" maxlength="500"></textarea></label>
+          </div></div>
+          <div class="form-actions wide"><button class="button button-primary" type="submit">حفظ ملف العامل</button><button class="row-action" type="button" data-close-new-workforce-employee>إلغاء</button></div>
+        </form>
+      </section>
+    </div>` : "";
   const workerOptions = `<option value="all">كل العاملين (لمخالفة تأخير الإنتاج)</option>${employees.map((worker) => `<option value="${escapeHtml(worker.id)}">${escapeHtml(worker.name)}${worker.jobTitle ? ` · ${escapeHtml(worker.jobTitle)}` : ""}</option>`).join("")}`;
   const monthDays = workforceMonthDates(selectedWorkforceMonth);
   const now = new Date();
@@ -3752,7 +3795,7 @@ function workforceView(data) {
     : defaultCutoffDate;
   const profileRows = employees.map((worker) => {
     const profile = workforceProfile(data, worker.id);
-    return `<tr><td>${escapeHtml(worker.name)}</td><td>${escapeHtml(worker.jobTitle || roleNames[worker.roleKey])}</td><td><form class="workforce-profile-form" data-workforce-profile-form="${escapeHtml(worker.id)}"><select name="wageBasis" aria-label="أساس الأجر"><option value="monthly" ${profile.wageBasis === "monthly" || !profile.wageBasis ? "selected" : ""}>شهري</option><option value="daily" ${profile.wageBasis === "daily" ? "selected" : ""}>يومي</option><option value="hourly" ${profile.wageBasis === "hourly" ? "selected" : ""}>بالساعة</option></select><input name="wageAmount" type="number" min="0.01" step="0.01" value="${escapeHtml(profile.wageAmount ?? "")}" placeholder="الأجر بالجنيه" aria-label="قيمة الأجر"><button class="row-action" type="submit">حفظ الأجر</button></form></td></tr>`;
+    return `<tr><td>${escapeHtml(worker.name)}</td><td>${escapeHtml(worker.jobTitle || roleNames[worker.roleKey])}</td><td><form class="workforce-profile-form" data-workforce-profile-form="${escapeHtml(worker.id)}"><select name="wageBasis" aria-label="نوع المرتب"><option value="monthly" ${profile.wageBasis === "monthly" || !profile.wageBasis ? "selected" : ""}>شهري</option><option value="weekly" ${profile.wageBasis === "weekly" ? "selected" : ""}>أسبوعي</option><option value="daily" ${profile.wageBasis === "daily" ? "selected" : ""}>يومي</option><option value="hourly" ${profile.wageBasis === "hourly" ? "selected" : ""}>بالساعة</option></select><input name="wageAmount" type="number" min="0.01" step="0.01" value="${escapeHtml(profile.wageAmount ?? "")}" placeholder="الأجر بالجنيه" aria-label="قيمة الأجر"><button class="row-action" type="submit">حفظ الأجر</button><small class="workforce-inline-rate" data-workforce-rate-preview></small></form></td></tr>`;
   }).join("");
   const settlementRows = employees.map((worker) => {
     const calculation = workforceMonthAccrual(worker, data, settings, selectedWorkforceMonth, cutoffDate);
@@ -3810,9 +3853,10 @@ function workforceView(data) {
       <button type="button" role="tab" class="client-management-tab${activeWorkforceTab === "settlements" ? " active" : ""}" aria-selected="${activeWorkforceTab === "settlements"}" data-workforce-tab="settlements">الأجور والتصفية</button>
     </div>
     <div class="workforce-panel" data-workforce-panel="employees"${activeWorkforceTab === "employees" ? "" : " hidden"}>
+      <div class="workforce-employee-toolbar"><div><h2>سجل العاملين والموظفين</h2><p>إدارة الملفات الوظيفية والأجور وربط حسابات الدخول.</p></div><button type="button" class="button button-primary workforce-add-employee" data-add-workforce-employee>＋ إضافة عامل جديد</button></div>
       ${panel("سجل العاملين والموظفين", employees.length
         ? table(["الاسم","المسمى الوظيفي الفعلي","الدور المسجل","اسم المستخدم","الهاتف","السجل"], employeeRows)
-        : '<div class="empty-state">لا توجد حسابات عمال أو مشرفين نشطة.</div>',
+        : '<div class="empty-state">لا توجد ملفات عاملين حتى الآن. ابدأ بإنشاء ملف عامل جديد.</div>',
       "المسمى الوظيفي والدور يعرضان كما هما مسجلان في بيانات الحساب؛ افتح الملف للاطلاع على الحضور والحساب والجزاءات.")}
     </div>
     <div class="workforce-panel" data-workforce-panel="attendance"${activeWorkforceTab === "attendance" ? "" : " hidden"}>
@@ -3826,14 +3870,15 @@ function workforceView(data) {
     </div>
     <div class="workforce-panel" data-workforce-panel="settlements"${activeWorkforceTab === "settlements" ? "" : " hidden"}>
       <div class="clients-toolbar"><div><h2>الأجور وترحيل الرصيد والتصفية</h2><p>حدد أجر كل عامل، ثم راجع الاستحقاق والخصومات والسلف قبل حفظ التصفية.</p></div><label class="field workforce-month-picker"><span>تاريخ التصفية حتى</span><input type="date" data-workforce-cutoff value="${cutoffDate}"></label></div>
-      ${panel("إعداد أجور العمال", profileRows.length ? table(["العامل","الوظيفة","الأجر"], profileRows) : '<div class="empty-state">لا توجد حسابات عمال نشطة لإعداد أجورها.</div>', "أساس الأجر والقيمة يُحفظان لكل عامل؛ الأجر الشهري يوزع على أيام العمل المدفوعة في الشهر.")}
+      ${panel("إعداد أجور العمال", profileRows.length ? table(["العامل","الوظيفة","الأجر"], profileRows) : '<div class="empty-state">لا توجد ملفات عاملين لإعداد أجورها.</div>', "أجر اليوم = الشهري ÷ 30 أو الأسبوعي ÷ 7، وأجر الساعة = أجر اليوم ÷ 9. تُستخدم هذه القيم تلقائياً في الخصومات والسهر.")}
       ${panel("حساب المستحقات حتى التاريخ المحدد", employees.length ? table(["العامل","أيام مستحقة","الأجر دون السهر","أجر السهر × 1.5","السلف","مدفوعات راتب سابقة","الخصومات","رصيد مرحّل","صافي قبل الدفع","المبلغ المدفوع / إجراء"], settlementRows) : '<div class="empty-state">لا توجد حسابات عمال نشطة.</div>', "يُرحّل الرصيد بعد كل تصفية إلى الفترة التالية. لا تحتسب الأيام غير المسجلة حضوراً كأيام عمل، والجمعة تتبع إعدادها أو حالة اليوم المسجلة.")}
       ${panel("سجل التصفية", data.workforceSettlements.length ? table(["العامل","الفترة","حتى تاريخ","المستحق","السلف","مدفوعات سابقة","الخصومات","المدفوع","الرصيد المرحّل"], [...data.workforceSettlements].sort((a, b) => String(b.throughDate).localeCompare(String(a.throughDate))).map((record) => `<tr><td>${escapeHtml(employees.find((worker) => worker.id === record.workerId)?.name || record.workerName || "عامل")}</td><td>${escapeHtml(record.period || "—")}</td><td>${formatRecordDate(record.throughDate)}</td><td>${workforceMoney(record.earnedAmount)}</td><td>${workforceMoney(record.advanceAmount)}</td><td>${workforceMoney(record.previousPaidAmount)}</td><td>${workforceMoney(record.deductionAmount)}</td><td>${workforceMoney(record.paidAmount)}</td><td>${workforceMoney(record.balanceAfter)}</td></tr>`)) : '<div class="empty-state">لا توجد تصفيات محفوظة.</div>')}
     </div>
     ${employeeProfileModal}
+    ${newEmployeeModal}
     <div class="modal-backdrop" data-workforce-attendance-modal hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="workforce-attendance-title"><button class="modal-close" type="button" data-close-workforce-attendance aria-label="إغلاق">×</button><h2 id="workforce-attendance-title">تعديل حالة اليوم</h2><form class="workforce-attendance-form modal-form"><input type="hidden" name="workerId"><input type="hidden" name="date"><label>حالة اليوم<select name="status"></select></label><label class="workforce-inline-check"><input name="paidLeave" type="checkbox" checked> الإجازة مدفوعة الأجر</label><label>ملاحظات<textarea name="notes" rows="2" maxlength="400"></textarea></label><div class="form-actions"><button class="button button-primary" type="submit">حفظ الحالة</button><button class="row-action" type="button" data-close-workforce-attendance>إلغاء</button></div></form></section></div>
     <div class="modal-backdrop" data-workforce-clock-modal hidden><section class="modal-card compact-view-modal" role="dialog" aria-modal="true" aria-labelledby="workforce-clock-title"><button class="modal-close" type="button" data-close-workforce-clock aria-label="إغلاق">×</button><h2 id="workforce-clock-title">تعديل الوقت</h2><form class="workforce-clock-form modal-form"><input type="hidden" name="workerId"><input type="hidden" name="date"><input type="hidden" name="clockType"><label>الوقت الجديد<input name="time" type="time" required></label><div class="form-actions"><button class="button button-primary" type="submit">حفظ الوقت</button><button class="row-action" type="button" data-close-workforce-clock>إلغاء</button></div></form></section></div>
-    <div class="modal-backdrop workforce-late-backdrop" data-workforce-late-modal hidden><section class="modal-card compact-view-modal" role="dialog" aria-modal="true" aria-labelledby="workforce-late-title"><button class="modal-close" type="button" data-close-workforce-late aria-label="إغلاق">×</button><h2 id="workforce-late-title">تم تسجيل حضور متأخر</h2><p data-workforce-late-summary></p><div class="workforce-late-actions"><button type="button" class="button button-primary" data-late-decision="official">تطبيق اللائحة</button><button type="button" class="button button-secondary" data-late-decision="actual_time">خصم الوقت الفعلي</button><button type="button" class="row-action" data-late-decision="waived">إعفاء من الخصم</button></div><div class="form-actions"><button type="button" class="button button-primary" data-save-late-decision disabled>حفظ قرار الخصم</button></div></section></div>
+    <div class="modal-backdrop workforce-late-backdrop" data-workforce-late-modal ${pendingWorkforceLateDecision ? "" : "hidden"}><section class="modal-card compact-view-modal" role="dialog" aria-modal="true" aria-labelledby="workforce-late-title"><button class="modal-close" type="button" data-close-workforce-late aria-label="إغلاق">×</button><h2 id="workforce-late-title">تم تسجيل حضور متأخر</h2><p data-workforce-late-summary>${pendingWorkforceLateDecision ? `${escapeHtml(workforceEmployees(data).find((worker) => worker.id === pendingWorkforceLateDecision.workerId)?.name || "")} · تأخير ${pendingWorkforceLateDecision.delay} دقيقة · اختر قرار الخصم الآن.` : ""}</p><div class="workforce-late-actions"><button type="button" class="button button-primary${pendingWorkforceLateDecision?.decision === "official" ? " active" : ""}" data-late-decision="official" aria-pressed="${pendingWorkforceLateDecision?.decision === "official"}">تطبيق اللائحة</button><button type="button" class="button button-secondary${pendingWorkforceLateDecision?.decision === "actual_time" ? " active" : ""}" data-late-decision="actual_time" aria-pressed="${pendingWorkforceLateDecision?.decision === "actual_time"}">خصم الوقت الفعلي</button><button type="button" class="row-action${pendingWorkforceLateDecision?.decision === "waived" ? " active" : ""}" data-late-decision="waived" aria-pressed="${pendingWorkforceLateDecision?.decision === "waived"}">إعفاء من الخصم</button></div><div class="form-actions"><button type="button" class="button button-primary" data-save-late-decision ${pendingWorkforceLateDecision?.decision ? "" : "disabled"}>حفظ قرار الخصم</button></div></section></div>
   </section>`;
 }
 
@@ -3841,6 +3886,70 @@ function bindWorkforceActions(session) {
   const root = document.querySelector("#workforce");
   if (!root) return;
   const refresh = () => refreshDashboard(session);
+  root.querySelector("[data-add-workforce-employee]")?.addEventListener("click", () => {
+    showNewWorkforceEmployeeModal = true;
+    render(session, dashboardData, dashboardData.pendingAccounts || []);
+  });
+  root.querySelectorAll("[data-close-new-workforce-employee]").forEach((button) => button.addEventListener("click", () => {
+    showNewWorkforceEmployeeModal = false;
+    render(session, dashboardData, dashboardData.pendingAccounts || []);
+  }));
+  const newEmployeeForm = root.querySelector(".workforce-new-employee-form");
+  if (newEmployeeForm) {
+    const preview = () => {
+      newEmployeeForm.querySelector("[data-new-workforce-rate-preview]").textContent =
+        workforceRatePreview(newEmployeeForm.elements.wageBasis.value, newEmployeeForm.elements.wageAmount.value);
+    };
+    newEmployeeForm.addEventListener("input", preview);
+    newEmployeeForm.addEventListener("change", preview);
+    preview();
+    newEmployeeForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const name = form.elements.employeeName.value.trim();
+      const wageAmount = form.elements.wageAmount.value.trim() ? Number(form.elements.wageAmount.value) : 0;
+      if (!name || (form.elements.wageAmount.value.trim() && (!Number.isFinite(wageAmount) || wageAmount < 0))) {
+        window.factoryUI.toast("أدخل اسم العامل ومرتباً صحيحاً أو اترك خانة المرتب فارغة.", "error");
+        return;
+      }
+      const submit = form.querySelector('[type="submit"]');
+      submit.disabled = true;
+      try {
+        const workerId = crypto.randomUUID();
+        await saveFlexibleRecord("workforce_profiles", {
+          workerId,
+          employeeName: name,
+          username: "—",
+          phone: form.elements.phone.value.trim(),
+          roleKey: "worker",
+          jobTitle: form.elements.jobTitle.value,
+          linkedUserId: null,
+          wageBasis: form.elements.wageBasis.value,
+          wageAmount,
+          hireDate: form.elements.hireDate.value,
+          workDescription: form.elements.workDescription.value.trim(),
+          workLocation: form.elements.workLocation.value.trim(),
+          employmentType: form.elements.employmentType.value.trim(),
+          nationalId: form.elements.nationalId.value.trim(),
+          address: form.elements.address.value.trim(),
+          emergencyContact: form.elements.emergencyContact.value.trim(),
+          employmentNotes: form.elements.employmentNotes.value.trim()
+        });
+        showNewWorkforceEmployeeModal = false;
+        selectedWorkforceEmployeeId = workerId;
+        try {
+          await refresh();
+          window.factoryUI.toast(`تم إنشاء ملف العامل ${name} بنجاح.`);
+        } catch (refreshError) {
+          reportDashboardFailure(session, "تم حفظ ملف العامل لكن تعذر تحديث القائمة", refreshError);
+        }
+      } catch (error) {
+        reportDashboardFailure(session, "تعذر إنشاء ملف العامل", error);
+      } finally {
+        submit.disabled = false;
+      }
+    });
+  }
   root.querySelectorAll("[data-workforce-tab]").forEach((button) => button.addEventListener("click", () => {
     activeWorkforceTab = button.dataset.workforceTab;
     render(session, dashboardData, dashboardData.pendingAccounts || []);
@@ -3853,7 +3962,16 @@ function bindWorkforceActions(session) {
     selectedWorkforceEmployeeId = "";
     render(session, dashboardData, dashboardData.pendingAccounts || []);
   });
-  root.querySelector(".workforce-personal-form")?.addEventListener("submit", async (event) => {
+  const employeeProfileForm = root.querySelector(".workforce-personal-form");
+  if (employeeProfileForm) {
+    const preview = () => {
+      employeeProfileForm.querySelector("[data-workforce-rate-preview]").textContent =
+        workforceRatePreview(employeeProfileForm.elements.wageBasis.value, employeeProfileForm.elements.wageAmount.value);
+    };
+    employeeProfileForm.addEventListener("input", preview);
+    employeeProfileForm.addEventListener("change", preview);
+    preview();
+    employeeProfileForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
     const workerId = form.dataset.workforcePersonalForm;
@@ -3899,7 +4017,8 @@ function bindWorkforceActions(session) {
     } finally {
       submit.disabled = false;
     }
-  });
+    });
+  }
   root.querySelectorAll("[data-link-workforce-account]").forEach((button) => button.addEventListener("click", async () => {
     const workerId = button.dataset.linkWorkforceAccount;
     const worker = workforceEmployees(dashboardData).find((entry) => entry.id === workerId);
@@ -3934,6 +4053,18 @@ function bindWorkforceActions(session) {
           .eq("owner_id", sourceOwnerId)
           .in("collection", employeeCollections);
         if (recordsError) throw recordsError;
+      }
+      if (!previousAccountId) {
+        const employeeCollections = [
+          "attendance", "advances", "payroll", "worker_expenses", "workforce_attendance",
+          "workforce_violations", "workforce_settlements", "tasks", "leaves"
+        ];
+        const { error: unownedRecordsError } = await supabaseClient.from("factory_records")
+          .update({ owner_id: accountId, updated_at: new Date().toISOString() })
+          .is("owner_id", null)
+          .eq("payload->>workerId", workerId)
+          .in("collection", employeeCollections);
+        if (unownedRecordsError) throw unownedRecordsError;
       }
       const profilePayload = {
         ...workforceEmployeeProfilePayload(worker, existing, dashboardData),
@@ -4184,14 +4315,13 @@ function bindWorkforceActions(session) {
       const delay = status === "late" && existing?.checkIn
         ? Math.max(0, workforceTimeMinutes(existing.checkIn) - workforceTimeMinutes(workforceSettings(dashboardData).shiftStart))
         : 0;
+      if (delay > 0) showWorkforceLateDecisionModal(root, worker, date, delay);
       try {
         await refresh();
       } catch (refreshError) {
         reportDashboardFailure(session, "تم حفظ حالة الحضور لكن تعذر تحديث اللوحة", refreshError);
       }
-      if (delay > 0) {
-        showWorkforceLateDecisionModal(root, worker, date, delay);
-      } else {
+      if (delay <= 0) {
         window.factoryUI.toast("تم حفظ حالة اليوم.");
       }
     } catch (error) {
@@ -4238,14 +4368,13 @@ function bindWorkforceActions(session) {
     try {
       await saveFlexibleRecord("workforce_attendance", payload, existing._recordId || null, workforceRecordOwnerId(worker, dashboardData));
       root.querySelector("[data-workforce-clock-modal]").hidden = true;
+      if (delay > 0) showWorkforceLateDecisionModal(root, worker, date, delay);
       try {
         await refresh();
       } catch (refreshError) {
         reportDashboardFailure(session, "تم حفظ الوقت لكن تعذر تحديث اللوحة", refreshError);
       }
-      if (delay > 0) {
-        showWorkforceLateDecisionModal(root, worker, date, delay);
-      } else {
+      if (delay <= 0) {
         window.factoryUI.toast("تم تحديث وقت الحضور والانصراف.");
       }
     } catch (error) {
@@ -4255,31 +4384,34 @@ function bindWorkforceActions(session) {
     }
   });
   root.querySelectorAll("[data-late-decision]").forEach((button) => button.addEventListener("click", () => {
-    const modal = root.querySelector("[data-workforce-late-modal]");
-    modal.dataset.selectedDecision = button.dataset.lateDecision;
-    root.querySelectorAll("[data-late-decision]").forEach((choice) => {
+    if (!pendingWorkforceLateDecision) return;
+    pendingWorkforceLateDecision.decision = button.dataset.lateDecision;
+    const currentModal = document.querySelector("#workforce [data-workforce-late-modal]");
+    currentModal?.querySelectorAll("[data-late-decision]").forEach((choice) => {
       choice.classList.toggle("active", choice === button);
       choice.setAttribute("aria-pressed", String(choice === button));
     });
-    root.querySelector("[data-save-late-decision]").disabled = false;
+    const saveButton = document.querySelector("#workforce [data-save-late-decision]");
+    if (saveButton) saveButton.disabled = false;
   }));
   root.querySelector("[data-close-workforce-late]")?.addEventListener("click", () => {
-    const modal = root.querySelector("[data-workforce-late-modal]");
-    modal.hidden = true;
-    modal.dataset.selectedDecision = "";
+    pendingWorkforceLateDecision = null;
+    render(session, dashboardData, dashboardData.pendingAccounts || []);
   });
   root.querySelector("[data-save-late-decision]")?.addEventListener("click", async (event) => {
     const button = event.currentTarget;
-    const modal = root.querySelector("[data-workforce-late-modal]");
-    const workerId = modal.dataset.workerId;
-    const date = modal.dataset.date;
-    const minutes = Number(modal.dataset.delay);
+    event.preventDefault();
+    const pendingDecision = pendingWorkforceLateDecision;
+    if (!pendingDecision) {
+      window.factoryUI.toast("لا يوجد قرار تأخير معلق لحفظه.", "error");
+      return;
+    }
+    const { workerId, date, delay: minutes, decision } = pendingDecision;
     const worker = workforceEmployees(dashboardData).find((entry) => entry.id === workerId);
     if (!worker || !date || !Number.isFinite(minutes) || minutes <= 0) {
       window.factoryUI.toast("تعذر تحديد بيانات التأخير.", "error");
       return;
     }
-    const decision = modal.dataset.selectedDecision;
     if (!["official", "actual_time", "waived"].includes(decision)) {
       window.factoryUI.toast("اختر قرار الخصم أولاً، ثم اضغط حفظ القرار.", "error");
       return;
@@ -4314,7 +4446,7 @@ function bindWorkforceActions(session) {
         deductionDays: 0,
         notes: ""
       }, existingViolation?._recordId || null, workforceRecordOwnerId(worker, dashboardData));
-      modal.hidden = true;
+      pendingWorkforceLateDecision = null;
       await refresh();
       window.factoryUI.toast(`تم تسجيل قرار التأخير: ${decision === "official" ? "تطبيق اللائحة" : decision === "actual_time" ? "خصم الوقت الفعلي" : "إعفاء"}.`);
     } catch (error) {
@@ -4323,7 +4455,15 @@ function bindWorkforceActions(session) {
       button.disabled = false;
     }
   });
-  root.querySelectorAll(".workforce-profile-form").forEach((form) => form.addEventListener("submit", async (event) => {
+  root.querySelectorAll(".workforce-profile-form").forEach((form) => {
+    const preview = () => {
+      form.querySelector("[data-workforce-rate-preview]").textContent =
+        workforceRatePreview(form.elements.wageBasis.value, form.elements.wageAmount.value);
+    };
+    form.addEventListener("input", preview);
+    form.addEventListener("change", preview);
+    preview();
+    form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const workerId = form.dataset.workforceProfileForm;
     const worker = workforceEmployees(dashboardData).find((entry) => entry.id === workerId);
@@ -4351,7 +4491,8 @@ function bindWorkforceActions(session) {
     } finally {
       submit.disabled = false;
     }
-  }));
+    });
+  });
   root.querySelector("[data-add-late-rule]")?.addEventListener("click", () => {
     const list = root.querySelector("[data-workforce-late-rules]");
     const rules = [...list.querySelectorAll(".workforce-late-rule-row")].map((row) => ({
