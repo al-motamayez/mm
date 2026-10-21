@@ -3778,12 +3778,12 @@ function workforceView(data) {
           <label class="field"><span>موقع / خط العمل</span><input name="workLocation" value="${escapeHtml(selectedEmployeeProfile.workLocation || "")}" maxlength="160"></label>
           <label class="field"><span>نوع التعاقد</span><input name="employmentType" value="${escapeHtml(selectedEmployeeProfile.employmentType || "")}" maxlength="100" placeholder="دوام كامل، مؤقت..."></label>
         </div></div>
-        <div class="workforce-profile-section wide"><h3>الأجر الأساسي والحسابات التلقائية</h3><div class="workforce-profile-fields">
+        <div class="workforce-profile-section"><h3>الأجر الأساسي والحسابات التلقائية</h3><div class="workforce-profile-fields">
           <label class="field"><span>نوع المرتب</span><select name="wageBasis"><option value="monthly" ${!["weekly", "daily", "hourly"].includes(selectedEmployeeProfile.wageBasis) ? "selected" : ""}>شهري</option><option value="weekly" ${selectedEmployeeProfile.wageBasis === "weekly" ? "selected" : ""}>أسبوعي</option><option value="daily" ${selectedEmployeeProfile.wageBasis === "daily" ? "selected" : ""}>يومي (قديم)</option><option value="hourly" ${selectedEmployeeProfile.wageBasis === "hourly" ? "selected" : ""}>بالساعة (قديم)</option></select></label>
           <label class="field"><span>المرتب الأساسي (جنيه)</span><input name="wageAmount" type="number" min="0" step="0.01" value="${escapeHtml(selectedEmployeeProfile.wageAmount ?? "")}" placeholder="أدخل المرتب الأساسي"></label>
           <p class="workforce-rate-preview wide" data-workforce-rate-preview></p>
         </div></div>
-        <div class="workforce-profile-section wide"><h3>البيانات الشخصية والتواصل</h3><div class="workforce-profile-fields">
+        <div class="workforce-profile-section"><h3>البيانات الشخصية والتواصل</h3><div class="workforce-profile-fields">
           <label class="field"><span>الرقم القومي</span><input name="nationalId" value="${escapeHtml(selectedEmployeeProfile.nationalId || "")}" maxlength="32"></label>
           <label class="field"><span>العنوان</span><input name="address" value="${escapeHtml(selectedEmployeeProfile.address || "")}" maxlength="240"></label>
           <label class="field"><span>جهة اتصال للطوارئ</span><input name="emergencyContact" value="${escapeHtml(selectedEmployeeProfile.emergencyContact || "")}" maxlength="120"></label>
@@ -3837,7 +3837,7 @@ function workforceView(data) {
             <label class="field"><span>الهاتف</span><input name="phone" type="tel" maxlength="40" autocomplete="tel"></label>
             <label class="field"><span>تاريخ التعيين</span><input name="hireDate" type="date" value="${workforceDateKey(new Date())}"></label>
           </div></div>
-          <div class="workforce-profile-section wide"><h3>الأجر وبيانات العمل</h3><div class="form-grid">
+          <div class="workforce-profile-section"><h3>الأجر وبيانات العمل</h3><div class="form-grid">
             <label class="field"><span>نوع المرتب</span><select name="wageBasis"><option value="monthly">شهري</option><option value="weekly">أسبوعي</option></select></label>
             <label class="field"><span>قيمة المرتب (جنيه)</span><input name="wageAmount" type="number" min="0" step="0.01" placeholder="اختياري"></label>
             <p class="workforce-rate-preview wide" data-new-workforce-rate-preview>أجر اليوم والساعة يُحسبان تلقائياً: الشهري ÷ 30 أو الأسبوعي ÷ 7، ثم أجر اليوم ÷ 9.</p>
@@ -3845,7 +3845,7 @@ function workforceView(data) {
             <label class="field"><span>موقع / خط العمل</span><input name="workLocation" maxlength="160"></label>
             <label class="field"><span>نوع التعاقد</span><input name="employmentType" maxlength="100" placeholder="دوام كامل، مؤقت..."></label>
           </div></div>
-          <div class="workforce-profile-section wide"><h3>معلومات إضافية</h3><div class="form-grid">
+          <div class="workforce-profile-section"><h3>معلومات إضافية</h3><div class="form-grid">
             <label class="field"><span>الرقم القومي</span><input name="nationalId" maxlength="32"></label>
             <label class="field"><span>العنوان</span><input name="address" maxlength="240"></label>
             <label class="field"><span>جهة اتصال للطوارئ</span><input name="emergencyContact" maxlength="120"></label>
