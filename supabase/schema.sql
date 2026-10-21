@@ -310,6 +310,27 @@ begin
       updated_at = now()
   where id = requested_customer_id;
 
+  update public.orders
+  set client_id = requested_user_id
+  where customer_id = requested_customer_id
+    and client_id is distinct from requested_user_id;
+
+  update public.factory_records
+  set owner_id = requested_user_id
+  where collection in ('payments', 'settlements')
+    and owner_id is distinct from requested_user_id
+    and (
+      payload ->> 'customerId' = requested_customer_id::text
+      or payload ->> 'customer_id' = requested_customer_id::text
+      or payload ->> 'clientId' = requested_customer_id::text
+      or payload ->> 'client_id' = requested_customer_id::text
+    );
+
+  update public.factory_client_model_requests
+  set user_id = requested_user_id
+  where client_id = requested_customer_id
+    and user_id is distinct from requested_user_id;
+
   update public.users
   set role = 'client',
       status = 'active',
@@ -944,6 +965,7 @@ begin
            factory_order.created_at
     from public.orders as factory_order
     where factory_order.client_id = auth.uid()
+       or public.owns_factory_client_profile(factory_order.customer_id)
     order by factory_order.created_at desc;
 end;
 $$;
@@ -1767,6 +1789,19 @@ begin
   end if;
 
   if old.collection = 'settlements' then
+    if tg_op = 'UPDATE'
+       and (
+         public.is_active_factory_admin()
+         or current_setting('factory.client_link_sync', true) = 'on'
+       )
+       and new.id = old.id
+       and new.collection = old.collection
+       and new.payload = old.payload
+       and new.created_at = old.created_at
+       and new.updated_at = old.updated_at
+       and new.owner_id is distinct from old.owner_id then
+      return new;
+    end if;
     raise exception 'Settled account history is immutable.';
   end if;
 
@@ -1778,6 +1813,19 @@ begin
     from public.factory_clients
     where id = payment_customer_id;
     if payment_period_started_at is not null and old.created_at < payment_period_started_at then
+      if tg_op = 'UPDATE'
+         and (
+           public.is_active_factory_admin()
+           or current_setting('factory.client_link_sync', true) = 'on'
+         )
+         and new.id = old.id
+         and new.collection = old.collection
+         and new.payload = old.payload
+         and new.created_at = old.created_at
+         and new.updated_at = old.updated_at
+         and new.owner_id is distinct from old.owner_id then
+        return new;
+      end if;
       raise exception 'Payments in a settled period are immutable.';
     end if;
   end if;
@@ -1793,6 +1841,40 @@ drop trigger if exists guard_factory_financial_history on public.factory_records
 create trigger guard_factory_financial_history
   before update or delete on public.factory_records
   for each row execute procedure public.guard_factory_financial_history();
+
+-- Backfill records for client profiles linked before account synchronization.
+do $$
+begin
+  perform set_config('factory.client_link_sync', 'on', true);
+
+  update public.orders as factory_order
+  set client_id = customer.user_id
+  from public.factory_clients as customer
+  where customer.id = factory_order.customer_id
+    and customer.user_id is not null
+    and factory_order.client_id is distinct from customer.user_id;
+
+  update public.factory_records as account_record
+  set owner_id = customer.user_id
+  from public.factory_clients as customer
+  where customer.user_id is not null
+    and account_record.collection in ('payments', 'settlements')
+    and account_record.owner_id is distinct from customer.user_id
+    and (
+      account_record.payload ->> 'customerId' = customer.id::text
+      or account_record.payload ->> 'customer_id' = customer.id::text
+      or account_record.payload ->> 'clientId' = customer.id::text
+      or account_record.payload ->> 'client_id' = customer.id::text
+    );
+
+  update public.factory_client_model_requests as model_request
+  set user_id = customer.user_id
+  from public.factory_clients as customer
+  where customer.id = model_request.client_id
+    and customer.user_id is not null
+    and model_request.user_id is distinct from customer.user_id;
+end;
+$$;
 
 create index if not exists factory_records_collection_created_idx
   on public.factory_records (collection, created_at desc);
@@ -4443,7 +4525,13 @@ create policy "Factory roles read relevant orders"
   on public.orders for select to authenticated
   using (
     public.has_active_factory_role(array['admin', 'cutting', 'sewing'])
-    or (client_id = auth.uid() and public.has_active_factory_role(array['client']))
+    or (
+      public.has_active_factory_role(array['client'])
+      and (
+        client_id = auth.uid()
+        or public.owns_factory_client_profile(customer_id)
+      )
+    )
   );
 
 drop policy if exists "Admins manage orders" on public.orders;
@@ -4463,7 +4551,10 @@ create policy "Users read relevant production stages"
       select 1
       from public.orders
       where orders.id = production_stages.order_id
-        and orders.client_id = auth.uid()
+        and (
+          orders.client_id = auth.uid()
+          or public.owns_factory_client_profile(orders.customer_id)
+        )
         and public.has_active_factory_role(array['client'])
     )
     or (worker_id = auth.uid() and public.has_active_factory_role(array['worker']))
@@ -4565,7 +4656,10 @@ create policy "Users read their own factory deliveries"
       select 1
       from public.orders
       where orders.id = factory_deliveries.order_id
-        and orders.client_id = auth.uid()
+        and (
+          orders.client_id = auth.uid()
+          or public.owns_factory_client_profile(orders.customer_id)
+        )
         and public.has_active_factory_role(array['client'])
     )
   );
@@ -4641,7 +4735,13 @@ create policy "Admins and clients read client model requests"
   on public.factory_client_model_requests for select to authenticated
   using (
     public.is_active_factory_admin()
-    or (user_id = auth.uid() and public.has_active_factory_role(array['client']))
+    or (
+      public.has_active_factory_role(array['client'])
+      and (
+        user_id = auth.uid()
+        or public.owns_factory_client_profile(client_id)
+      )
+    )
   );
 drop policy if exists "Admins manage worker production submissions" on public.factory_worker_production_submissions;
 create policy "Admins manage worker production submissions"

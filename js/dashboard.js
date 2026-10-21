@@ -3080,7 +3080,9 @@ function clientView(data, session) {
   const currentOrders = data.models.filter((item) => !item.archivedAt);
   const archivedOrders = data.models.filter((item) => item.archivedAt);
   const allClientPayments = data.payments.filter((item) =>
-    (item.clientId || item._ownerId) === session.accountId || item.client === session.username
+    item.clientId === session.accountId
+    || item._ownerId === session.accountId
+    || item.client === session.username
   );
   const payments = allClientPayments.filter((item) =>
     !latestSettlement
