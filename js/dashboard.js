@@ -422,7 +422,7 @@ async function readDashboardData(session) {
       workStages: order.work_stages || ["cutting", "sewing", "finishing"],
       pricingMode: order.pricing_mode || "total",
       stagePrices: order.stage_prices || {},
-      sizes: order.sizes || "",
+      sizes: cuttingSizePickerValue(order.sizes, cuttingStage?.color_ply_data),
       modelImageUrl: order.model_image_url || "",
       priority: order.priority || "عادي",
       deliveredPieces,
@@ -505,7 +505,7 @@ async function readDashboardData(session) {
       client: clientsById.get(ordersById.get(stage.order_id)?.customer_id)?.name || "",
       modelImageUrl: ordersById.get(stage.order_id)?.model_image_url || "",
       colors: ordersById.get(stage.order_id)?.colors || "",
-      sizes: ordersById.get(stage.order_id)?.sizes || "",
+      sizes: cuttingSizePickerValue(ordersById.get(stage.order_id)?.sizes, cuttingStage?.color_ply_data),
       workStages: ordersById.get(stage.order_id)?.work_stages || [],
       technicalNotes: stage.technical_notes || "",
       orderStatus: ordersById.get(stage.order_id)?.status || "",
@@ -640,7 +640,7 @@ function money(value) {
 }
 
 function parseSizeData(value) {
-  if (!value) return { type: "", counts: {}, multiplicities: {}, legacy: "" };
+  if (!value) return { type: "", counts: {}, multiplicities: {}, sizes: [], legacy: "" };
   try {
     const parsed = JSON.parse(value);
     if (parsed && typeof parsed === "object" && parsed.counts && typeof parsed.counts === "object") {
@@ -660,17 +660,37 @@ function parseSizeData(value) {
         type: parsed.type || "",
         counts,
         multiplicities,
+        sizes: Array.isArray(parsed.sizes)
+          ? parsed.sizes.map((size) => size === "SX" ? "XS" : String(size))
+          : [],
         legacy: ""
       };
     }
   } catch {
-    return { type: "", counts: {}, multiplicities: {}, legacy: String(value) };
+    return { type: "", counts: {}, multiplicities: {}, sizes: [], legacy: String(value) };
   }
-  return { type: "", counts: {}, multiplicities: {}, legacy: String(value) };
+  return { type: "", counts: {}, multiplicities: {}, sizes: [], legacy: String(value) };
+}
+
+function orderedSizeEntries(sizeData) {
+  return sizeData.sizes.length
+    ? [...sizeData.sizes]
+    : Object.entries(sizeData.multiplicities)
+      .flatMap(([size, occurrences]) => Array(Math.max(Number(occurrences) || 0, 0)).fill(size));
+}
+
+function readSizePickerOrder(root) {
+  try {
+    const sizes = JSON.parse(root.dataset.sizeOrder || "[]");
+    return Array.isArray(sizes) ? sizes.map((size) => size === "SX" ? "XS" : String(size)) : [];
+  } catch {
+    return [];
+  }
 }
 
 function sizePickerMarkup(value, prefix, showCounts = true, allowDuplicates = false) {
   const sizeData = parseSizeData(value);
+  const initialSizeOrder = orderedSizeEntries(sizeData);
   const pickerOptions = Object.entries(SIZE_OPTIONS).map(([type, sizes]) => `
     <div class="size-option-group" data-size-group="${type}" ${sizeData.type === type ? "" : "hidden"}>
       ${sizes.map((size) => {
@@ -683,7 +703,7 @@ function sizePickerMarkup(value, prefix, showCounts = true, allowDuplicates = fa
         return `<div class="size-choice${active ? " active" : ""}"${allowDuplicates ? ` data-size-occurrences="${size}" data-occurrences="${occurrences}"` : ""}><button type="button" class="size-toggle" data-size-toggle="${size}" aria-pressed="${active}">${size}</button>${occurrenceControls}${showCounts ? `<label class="size-count-label" ${active ? "" : "hidden"}><span class="visually-hidden">عدد مقاس ${size}</span><input data-size-count="${size}" type="number" min="0" step="1" value="${active && count ? count : ""}" placeholder="العدد" ${active ? "" : "disabled"}></label>` : ""}</div>`;
       }).join("")}
     </div>`).join("");
-  return `<div class="field size-picker" data-size-picker="${prefix}" data-size-legacy="${escapeHtml(sizeData.legacy)}" data-auto-quantity="${showCounts ? "false" : "true"}" data-size-duplicates="${allowDuplicates}">
+  return `<div class="field size-picker" data-size-picker="${prefix}" data-size-legacy="${escapeHtml(sizeData.legacy)}" data-size-order="${escapeHtml(JSON.stringify(initialSizeOrder))}" data-auto-quantity="${showCounts ? "false" : "true"}" data-size-duplicates="${allowDuplicates}">
     <label for="${prefix}-type">نوع المقاسات</label>
     <select id="${prefix}-type" data-size-type><option value="">اختر النوع</option>${Object.entries(SIZE_TYPE_LABELS).map(([type, label]) => `<option value="${type}" ${sizeData.type === type ? "selected" : ""}>${label}</option>`).join("")}</select>
     ${allowDuplicates ? '<small>اضغط على المقاس لإضافته مرة أخرى، واستخدم (−) لتقليل التكرار.</small>' : ""}
@@ -723,6 +743,7 @@ function cuttingSizePickerValue(orderSizes, colorPlyData) {
     result[normalizedSize] = Number(result[normalizedSize] || 0) + 1;
     return result;
   }, {});
+  sizeData.sizes = cuttingData.sizes.map((size) => size === "SX" ? "XS" : size);
   return JSON.stringify(sizeData);
 }
 
@@ -750,11 +771,18 @@ function cuttingColorPlyRow(color, plys, name = "") {
 function updateCuttingCalculation(form) {
   const sizePicker = form.querySelector("[data-size-picker]");
   const sizeType = sizePicker.querySelector("[data-size-type]").value;
+  const selectedSizeNames = new Set([...sizePicker.querySelectorAll(".size-option-group:not([hidden]) [data-size-toggle]")]
+    .map((button) => button.dataset.sizeToggle));
   const selectedSizes = sizePicker.dataset.sizeDuplicates === "true"
-    ? [...sizePicker.querySelectorAll(".size-option-group:not([hidden]) .size-choice[data-size-occurrences]")]
-      .flatMap((choice) => Array(Number(choice.dataset.occurrences || 0)).fill(choice.dataset.sizeOccurrences))
+    ? readSizePickerOrder(sizePicker).filter((size) => selectedSizeNames.has(size))
     : [...sizePicker.querySelectorAll(".size-option-group:not([hidden]) .size-toggle[aria-pressed='true']")]
       .map((button) => button.dataset.sizeToggle);
+  if (sizePicker.dataset.sizeDuplicates === "true" && !selectedSizes.length) {
+    [...sizePicker.querySelectorAll(".size-option-group:not([hidden]) .size-choice[data-size-occurrences]")]
+      .forEach((choice) => {
+        selectedSizes.push(...Array(Number(choice.dataset.occurrences || 0)).fill(choice.dataset.sizeOccurrences));
+      });
+  }
   const colorRows = [...form.querySelectorAll("[data-color-ply-row]")].map((row) => ({
     color: row.querySelector("[data-ply-color]").value.toUpperCase(),
     name: String(row.querySelector("[data-ply-name]").value).trim(),
@@ -768,13 +796,14 @@ function updateCuttingCalculation(form) {
   }, {});
   const sizeData = { type: sizeType, counts };
   if (sizePicker.dataset.sizeDuplicates === "true") {
+    sizeData.sizes = selectedSizes;
     sizeData.multiplicities = selectedSizes.reduce((result, size) => {
       result[size] = Number(result[size] || 0) + 1;
       return result;
     }, {});
   }
-  const total = plysPerSize * selectedSizes.length;
   sizePicker.querySelector("[data-size-value]").value = sizeType ? JSON.stringify(sizeData) : "";
+  const total = plysPerSize * selectedSizes.length;
 
   const picker = form.querySelector("[data-color-ply-picker]");
   const selectedColors = validRows.map((entry) => entry.color);
@@ -854,32 +883,59 @@ function colorSummaryMarkup(colors, colorNames = {}, colorPlyData = null) {
 
 function sizeSummary(value) {
   const sizeData = parseSizeData(value);
-  const countedSizes = Object.entries(sizeData.counts)
-    .filter(([, count]) => Number(count) > 0)
-    .map(([size, count]) => `${size}: ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(Number(count))}`);
+  const orderedSizes = sizeData.sizes.length
+    ? sizeData.sizes
+    : Object.entries(sizeData.multiplicities)
+      .flatMap(([size, occurrences]) => Array(Math.max(Number(occurrences) || 0, 0)).fill(size));
+  const occurrenceTotals = orderedSizes.reduce((totals, size) => {
+    totals[size] = Number(totals[size] || 0) + 1;
+    return totals;
+  }, {});
+  const countedSizes = orderedSizes
+    .map((size) => {
+      const total = Number(sizeData.counts[size] || 0);
+      const count = total / occurrenceTotals[size];
+      return count > 0 ? `${size}: ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(count)}` : "";
+    })
+    .filter(Boolean);
+  const totalPieces = Object.values(sizeData.counts).reduce((sum, count) => sum + Number(count || 0), 0);
   return countedSizes.length
-    ? `${SIZE_TYPE_LABELS[sizeData.type] || ""} ${countedSizes.join(" · ")}`.trim()
+    ? `${SIZE_TYPE_LABELS[sizeData.type] || ""} ${countedSizes.join(" · ")} · الإجمالي: ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(totalPieces)} قطعة`.trim()
     : sizeData.legacy || "—";
 }
 
 function updateSizePicker(root) {
   const typeSelect = root.querySelector("[data-size-type]");
   const selectedType = typeSelect.value;
+  const previous = parseSizeData(root.querySelector("[data-size-value]").value);
+  const previousOrder = orderedSizeEntries(previous);
   root.querySelectorAll("[data-size-group]").forEach((group) => {
     group.hidden = group.dataset.sizeGroup !== selectedType;
   });
+  const selectedSizes = [...root.querySelectorAll(".size-option-group:not([hidden]) .size-toggle[aria-pressed='true']")]
+    .map((button) => button.dataset.sizeToggle);
   const sizeData = { type: selectedType, counts: {} };
   if (root.dataset.sizeDuplicates === "true") {
     sizeData.multiplicities = {};
+    sizeData.sizes = readSizePickerOrder(root).filter((size) => selectedSizes.includes(size));
     root.querySelectorAll(".size-option-group:not([hidden]) .size-choice[data-size-occurrences]").forEach((choice) => {
       const size = choice.dataset.sizeOccurrences;
       const occurrences = Number(choice.dataset.occurrences || 0);
       if (occurrences > 0) sizeData.multiplicities[size] = occurrences;
       if (occurrences > 0) sizeData.counts[size] = "0";
     });
+    root.querySelector("[data-size-value]").value = selectedType
+      ? JSON.stringify(sizeData)
+      : root.dataset.sizeLegacy;
+    return;
   }
+  const orderedSizes = previousOrder.filter((size) => selectedSizes.includes(size));
+  selectedSizes.forEach((size) => {
+    if (!orderedSizes.includes(size)) orderedSizes.push(size);
+  });
+  sizeData.sizes = orderedSizes;
+  root.dataset.sizeOrder = JSON.stringify(orderedSizes);
   root.querySelectorAll(".size-option-group:not([hidden]) .size-toggle[aria-pressed='true']").forEach((button) => {
-    if (root.dataset.sizeDuplicates === "true") return;
     if (root.dataset.autoQuantity === "true") {
       sizeData.counts[button.dataset.sizeToggle] = "0";
     } else {
@@ -921,6 +977,7 @@ function bindPickers(form) {
         const choice = button.closest("[data-size-occurrences]");
         const occurrences = Math.min(Number(choice.dataset.occurrences || 0) + 1, 99);
         choice.dataset.occurrences = String(occurrences);
+        root.dataset.sizeOrder = JSON.stringify([...readSizePickerOrder(root), button.dataset.sizeToggle]);
         choice.querySelector("[data-size-occurrence-count]").textContent = String(occurrences);
         choice.querySelector("[data-size-occurrence-remove]").disabled = false;
         button.setAttribute("aria-pressed", "true");
@@ -944,6 +1001,10 @@ function bindPickers(form) {
       const choice = button.closest("[data-size-occurrences]");
       const occurrences = Math.max(Number(choice.dataset.occurrences || 0) - 1, 0);
       choice.dataset.occurrences = String(occurrences);
+      const sizeOrder = readSizePickerOrder(root);
+      const lastOccurrence = sizeOrder.lastIndexOf(button.dataset.sizeOccurrenceRemove);
+      if (lastOccurrence >= 0) sizeOrder.splice(lastOccurrence, 1);
+      root.dataset.sizeOrder = JSON.stringify(sizeOrder);
       choice.querySelector("[data-size-occurrence-count]").textContent = String(occurrences);
       button.disabled = occurrences === 0;
       choice.querySelector("[data-size-toggle]").setAttribute("aria-pressed", String(occurrences > 0));

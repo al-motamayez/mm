@@ -3322,6 +3322,7 @@ declare
   size_type text;
   size_name text;
   selected_sizes text[] := array[]::text[];
+  normalized_size_order text[] := array[]::text[];
   selected_colors text[] := array[]::text[];
   expected_counts jsonb := '{}'::jsonb;
   expected_multiplicities jsonb := '{}'::jsonb;
@@ -3346,7 +3347,10 @@ begin
   end if;
 
   for size_name in
-    select jsonb_array_elements_text(requested_color_ply_data -> 'sizes')
+    select selected_size.name
+    from jsonb_array_elements_text(requested_color_ply_data -> 'sizes')
+      with ordinality as selected_size(name, position)
+    order by selected_size.position
   loop
     if coalesce(size_type, '') not in ('men', 'women', 'children') then
       raise exception 'Select a supported size category before selecting sizes.';
@@ -3356,7 +3360,7 @@ begin
        then
       raise exception 'The selected size list contains an invalid size.';
     end if;
-    selected_sizes := array_append(selected_sizes, size_name);
+    selected_sizes := array_append(selected_sizes, case when size_name = 'SX' then 'XS' else size_name end);
   end loop;
   for color_entry in
     select value from jsonb_array_elements(requested_color_ply_data -> 'colors')
@@ -3388,6 +3392,7 @@ begin
     raise exception 'The calculated cutting quantity exceeds the supported range.';
   end if;
   foreach size_name in array selected_sizes loop
+    normalized_size_order := array_append(normalized_size_order, size_name);
     expected_counts := expected_counts || jsonb_build_object(
       size_name,
       (coalesce(nullif(expected_counts ->> size_name, '')::numeric, 0) + plys_sum)::integer::text
@@ -3400,7 +3405,8 @@ begin
   normalized_sizes := jsonb_build_object(
     'type', size_type,
     'counts', expected_counts,
-    'multiplicities', expected_multiplicities
+    'multiplicities', expected_multiplicities,
+    'sizes', to_jsonb(normalized_size_order)
   );
   if cardinality(selected_colors) > 0
      and cardinality(selected_sizes) > 0
