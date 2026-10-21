@@ -2689,9 +2689,11 @@ function adminCuttingTransferView(data) {
         ? "تم اعتمادها وإضافتها للموديلات"
         : story.status === "sent_to_sewing"
           ? "تم اعتمادها وإرسالها للخياطة"
-          : "بانتظار قرار الإدارة";
+          : story.status === "rejected"
+            ? "مرفوضة من الإدارة"
+            : "بانتظار قرار الإدارة";
       const actions = story.status === "pending"
-        ? `<div class="form-actions"><button class="button button-primary" type="button" data-action="approve-cutting-story-model" data-story-id="${escapeHtml(story.id)}">تأكيد وإضافة للموديلات</button><button class="button button-secondary" type="button" data-action="approve-cutting-story-sewing" data-story-id="${escapeHtml(story.id)}">تأكيد وإرسال للخياطة</button></div>`
+        ? `<div class="form-actions"><button class="button button-primary" type="button" data-action="approve-cutting-story-model" data-story-id="${escapeHtml(story.id)}">تأكيد وإضافة للموديلات</button><button class="button button-secondary" type="button" data-action="approve-cutting-story-sewing" data-story-id="${escapeHtml(story.id)}">تأكيد وإرسال للخياطة</button><button class="button button-danger" type="button" data-action="reject-cutting-story" data-story-id="${escapeHtml(story.id)}">رفض القصة</button></div>`
         : story.approved_order_id
           ? '<a class="row-action" href="#orders">الانتقال إلى الموديلات</a>'
           : "";
@@ -5790,6 +5792,40 @@ function bindActions(session) {
     }
   }));
   document.querySelectorAll("[data-action]").forEach((button) => button.addEventListener("click", async () => {
+    if (button.dataset.action === "reject-cutting-story") {
+      const storyId = button.dataset.storyId;
+      const story = dashboardData.cuttingStories.find((entry) => entry.id === storyId);
+      if (!story || story.status !== "pending") {
+        window.factoryUI.toast("القصة لم تعد معلقة أو تعذر العثور عليها. حدّث الصفحة.", "error");
+        return;
+      }
+      if (!await window.factoryUI.confirmAction({
+        title: "رفض قصة القص",
+        message: `سيتم رفض قصة «${story.model_name || story.model_number}» وإبقاؤها في سجل القص للرجوع إليها. لن تُضاف إلى الموديلات أو الخياطة.`,
+        confirmLabel: "رفض القصة",
+        danger: true
+      })) return;
+      button.disabled = true;
+      let rejectionSaved = false;
+      try {
+        const { error } = await supabaseClient.rpc("admin_reject_factory_cutting_story", {
+          requested_story_id: storyId
+        });
+        if (error?.code === "PGRST202") {
+          throw new Error("دالة رفض قصة القص غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+        }
+        if (error) throw error;
+        rejectionSaved = true;
+        await refreshDashboard(session);
+        window.factoryUI.toast("تم رفض القصة وحفظها في سجل القص.");
+      } catch (error) {
+        button.disabled = false;
+        reportDashboardFailure(session, rejectionSaved
+          ? "تم رفض القصة لكن تعذر تحديث اللوحة"
+          : "تعذر رفض قصة القص", error);
+      }
+      return;
+    }
     if (["approve-cutting-story-model", "approve-cutting-story-sewing"].includes(button.dataset.action)) {
       const storyId = button.dataset.storyId;
       const requestedAction = button.dataset.action === "approve-cutting-story-sewing" ? "send_to_sewing" : "add_to_models";

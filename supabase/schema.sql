@@ -2024,7 +2024,7 @@ create table if not exists public.factory_cutting_stories (
   fabric_unit text not null check (fabric_unit in ('متر', 'توب')),
   technical_notes text not null default '',
   model_image_url text default '',
-  status text not null default 'pending' check (status in ('pending', 'added_to_models', 'sent_to_sewing')),
+  status text not null default 'pending' check (status in ('pending', 'added_to_models', 'sent_to_sewing', 'rejected')),
   approved_order_id uuid references public.orders (id) on delete set null,
   approved_action text check (approved_action in ('add_to_models', 'send_to_sewing')),
   approved_by uuid references auth.users (id) on delete set null,
@@ -2038,9 +2038,14 @@ alter table public.factory_cutting_stories
   add column if not exists approved_order_id uuid references public.orders (id) on delete set null,
   add column if not exists approved_action text,
   add column if not exists approved_by uuid references auth.users (id) on delete set null,
-  add column if not exists approved_at timestamptz;
+  add column if not exists approved_at timestamptz,
+  add column if not exists rejected_by uuid references auth.users (id) on delete set null,
+  add column if not exists rejected_at timestamptz;
 alter table public.factory_cutting_stories
-  alter column model_image_url drop not null;
+  alter column model_image_url drop not null,
+  drop constraint if exists factory_cutting_stories_status_check,
+  add constraint factory_cutting_stories_status_check
+    check (status in ('pending', 'added_to_models', 'sent_to_sewing', 'rejected'));
 create index if not exists factory_cutting_stories_status_created_idx
   on public.factory_cutting_stories (status, created_at desc);
 
@@ -3755,6 +3760,35 @@ begin
 end;
 $$;
 
+create or replace function public.admin_reject_factory_cutting_story(
+  requested_story_id uuid
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not public.is_active_factory_admin() then
+    raise exception 'Only active admins can reject cutting stories.';
+  end if;
+  if requested_story_id is null then
+    raise exception 'Choose a valid cutting story to reject.';
+  end if;
+
+  update public.factory_cutting_stories
+  set status = 'rejected',
+      rejected_by = auth.uid(),
+      rejected_at = now()
+  where id = requested_story_id
+    and status = 'pending'
+    and approved_order_id is null;
+  if not found then
+    raise exception 'The cutting story was not found or has already been reviewed.';
+  end if;
+end;
+$$;
+
 drop function if exists public.update_factory_cutting_progress(uuid, jsonb, jsonb, text, integer, text);
 drop function if exists public.update_factory_cutting_progress(uuid, jsonb, jsonb, text, integer, text, uuid, numeric);
 drop function if exists public.update_factory_cutting_progress(uuid, jsonb, jsonb, text, integer, text, uuid, numeric, text);
@@ -5098,6 +5132,8 @@ revoke all on function public.submit_factory_cutting(uuid, uuid, text, text, jso
 grant execute on function public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, text, integer, text, uuid, numeric, text) to authenticated;
 revoke all on function public.admin_approve_factory_cutting_story(uuid, text) from public, anon, authenticated;
 grant execute on function public.admin_approve_factory_cutting_story(uuid, text) to authenticated;
+revoke all on function public.admin_reject_factory_cutting_story(uuid) from public, anon, authenticated;
+grant execute on function public.admin_reject_factory_cutting_story(uuid) to authenticated;
 revoke all on function public.update_factory_cutting_progress(uuid, jsonb, jsonb, text, integer, text, uuid, numeric, text) from public, anon, authenticated;
 grant execute on function public.update_factory_cutting_progress(uuid, jsonb, jsonb, text, integer, text, uuid, numeric, text) to authenticated;
 revoke all on function public.save_factory_fabric(uuid, text, text, text, text, text) from public, anon, authenticated;
