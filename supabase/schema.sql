@@ -2023,7 +2023,7 @@ create table if not exists public.factory_cutting_stories (
   bolt_count integer not null default 0 check (bolt_count >= 0),
   fabric_unit text not null check (fabric_unit in ('متر', 'توب')),
   technical_notes text not null default '',
-  model_image_url text not null default '',
+  model_image_url text default '',
   status text not null default 'pending' check (status in ('pending', 'added_to_models', 'sent_to_sewing')),
   approved_order_id uuid references public.orders (id) on delete set null,
   approved_action text check (approved_action in ('add_to_models', 'send_to_sewing')),
@@ -2039,6 +2039,8 @@ alter table public.factory_cutting_stories
   add column if not exists approved_action text,
   add column if not exists approved_by uuid references auth.users (id) on delete set null,
   add column if not exists approved_at timestamptz;
+alter table public.factory_cutting_stories
+  alter column model_image_url drop not null;
 create index if not exists factory_cutting_stories_status_created_idx
   on public.factory_cutting_stories (status, created_at desc);
 
