@@ -3593,11 +3593,11 @@ function workforceView(data) {
       <p>${escapeHtml(selectedEmployee.jobTitle || "مسمى وظيفي غير محدد")} · ${escapeHtml(selectedEmployee.roleLabel)}</p></div>
       <button type="button" class="button button-secondary" data-print-workforce-profile>طباعة كشف العامل</button></header>
       <form class="workforce-personal-form form-grid" data-workforce-personal-form="${escapeHtml(selectedEmployee.id)}">
-        <label class="field"><span>الاسم</span><input value="${escapeHtml(selectedEmployee.name)}" disabled></label>
-        <label class="field"><span>اسم المستخدم</span><input value="${escapeHtml(selectedEmployee.username)}" disabled></label>
-        <label class="field"><span>الدور الوظيفي المسجل</span><input value="${escapeHtml(selectedEmployee.roleLabel)}" disabled></label>
-        <label class="field"><span>المسمى الوظيفي الفعلي</span><input value="${escapeHtml(selectedEmployee.jobTitle || "غير محدد")}" disabled></label>
-        <label class="field"><span>الهاتف</span><input value="${escapeHtml(selectedEmployee.phone || "—")}" disabled></label>
+        <label class="field"><span>الاسم</span><input id="workforce-profile-name" name="employeeName" value="${escapeHtml(selectedEmployee.name)}" disabled></label>
+        <label class="field"><span>اسم المستخدم</span><input id="workforce-profile-username" name="username" value="${escapeHtml(selectedEmployee.username)}" disabled></label>
+        <label class="field"><span>الدور الوظيفي المسجل</span><input id="workforce-profile-role" name="role" value="${escapeHtml(selectedEmployee.roleLabel)}" disabled></label>
+        <label class="field"><span>المسمى الوظيفي الفعلي</span><input id="workforce-profile-job-title" name="jobTitle" value="${escapeHtml(selectedEmployee.jobTitle || "غير محدد")}" disabled></label>
+        <label class="field"><span>الهاتف</span><input id="workforce-profile-phone" name="phone" value="${escapeHtml(selectedEmployee.phone || "—")}" disabled></label>
         <label class="field"><span>الرقم القومي</span><input name="nationalId" value="${escapeHtml(selectedEmployeeProfile.nationalId || "")}" maxlength="32"></label>
         <label class="field"><span>العنوان</span><input name="address" value="${escapeHtml(selectedEmployeeProfile.address || "")}" maxlength="240"></label>
         <label class="field"><span>جهة اتصال للطوارئ</span><input name="emergencyContact" value="${escapeHtml(selectedEmployeeProfile.emergencyContact || "")}" maxlength="120"></label>
