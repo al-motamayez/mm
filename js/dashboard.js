@@ -1611,6 +1611,9 @@ function syncOrderCustomerSelection(form, customerId = form.elements.customerId.
 }
 
 function table(headers, rows) {
+  if (typeof rows === "string") {
+    rows = rows.match(/<tr\b[\s\S]*?<\/tr>/gi) || [];
+  }
   if (!Array.isArray(rows)) {
     const rowType = rows === null ? "null" : typeof rows;
     const rowKeys = rows && typeof rows === "object" ? Object.keys(rows).slice(0, 8).join(", ") : "";
