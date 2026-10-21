@@ -396,6 +396,35 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .cutting-story-breakdown summary { color: var(--green-dark); font-weight: 600; cursor: pointer; }
 .cutting-story-notes { margin: 0; padding: 12px; border-radius: 8px; background: #f8faf8; white-space: pre-wrap; }
 .cutting-story-card .form-actions { margin-top: 0; }
+.workforce-tabs { margin-bottom: 16px; }
+.workforce-panel { min-width: 0; }
+.workforce-month-picker { width: min(230px, 100%); margin: 0; }
+.workforce-matrix-scroll { max-height: min(72vh, 760px); overflow: auto; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+.workforce-matrix { width: max-content; min-width: 100%; border-collapse: separate; border-spacing: 0; font-size: 11px; }
+.workforce-matrix th, .workforce-matrix td { min-width: 64px; padding: 4px; border-inline-start: 1px solid #e8ede9; border-bottom: 1px solid #e8ede9; text-align: center; }
+.workforce-matrix thead th { position: sticky; z-index: 2; top: 0; color: var(--green-dark); background: #f4f8f5; }
+.workforce-matrix .workforce-worker-name { position: sticky; z-index: 3; right: 0; min-width: 150px; max-width: 190px; background: #f8faf8; text-align: right; }
+.workforce-matrix thead .workforce-worker-name { z-index: 4; background: #edf4ef; }
+.workforce-matrix .workforce-worker-name small { display: block; color: var(--muted); font-weight: 400; }
+.workforce-matrix .workforce-friday { color: #80541d; background: #fff7e8; }
+.workforce-cell { display: grid; width: 100%; min-height: 42px; align-content: center; gap: 2px; padding: 4px 2px; border: 1px solid #e0e8e2; border-radius: 7px; color: #4f6058; background: #fff; font-size: 10px; }
+.workforce-cell:hover { border-color: #5e9b83; background: #f2f8f4; }
+.workforce-cell small { font-size: 8px; direction: ltr; }
+.workforce-cell-present { color: #1d633e; background: #eef8f0; }
+.workforce-cell-late { color: #8a5310; background: #fff6e6; }
+.workforce-cell-absent { color: #9b302c; background: #fff0ef; }
+.workforce-cell-leave, .workforce-cell-friday_paid { color: #355b7b; background: #eef5fb; }
+.workforce-cell-friday_unpaid { color: #785b28; background: #fbf4e5; }
+.workforce-profile-form { display: grid; grid-template-columns: minmax(100px, 0.7fr) minmax(110px, 1fr) auto; align-items: center; gap: 6px; min-width: 320px; }
+.workforce-profile-form input, .workforce-profile-form select, .workforce-settlement-form input { min-height: 36px; padding: 6px 8px; font-size: 12px; }
+.workforce-settlement-form { display: flex; align-items: center; gap: 6px; min-width: 205px; }
+.workforce-settlement-form input { width: 105px; }
+.workforce-violation-form, .workforce-settings-form { padding: 14px; }
+.workforce-penalty-preview { margin: 0; padding: 11px 13px; border: 1px solid #dbe9df; border-radius: 8px; color: var(--green-dark); background: #f4f8f5; font-weight: 600; }
+.workforce-inline-check { display: flex; align-items: center; gap: 8px; }
+.workforce-inline-check input { width: 18px; min-height: 18px; }
+.workforce-attendance-form label { display: grid; gap: 6px; color: #465651; font-size: 13px; font-weight: 600; }
+.workforce-attendance-form textarea { width: 100%; padding: 10px 13px; border: 1px solid #dfe6e1; border-radius: 9px; font: inherit; }
 .cutting-order-card .cutting-finish-form { display: grid; gap: 10px; margin-top: 10px; }
 .cutting-order-card .form-section { gap: 10px; padding: 12px; }
 .cutting-bed-inputs { grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); }

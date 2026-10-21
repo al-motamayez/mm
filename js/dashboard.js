@@ -14,6 +14,9 @@ let notificationStorageAccount = "";
 let onlineUserCount = 0;
 let onlineUsers = [];
 let activeFinanceTab = "payments";
+let activeWorkforceTab = "attendance";
+let selectedWorkforceMonth = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`;
+let selectedWorkforceCutoffDate = "";
 const REALTIME_NOTIFICATION_MESSAGE = "تحديث جديد في البرنامج";
 const rolePages = {
   admin: "admin.html",
@@ -121,6 +124,11 @@ function emptyDashboardData() {
     workerAdvances: [],
     workerPayroll: [],
     workerExpenses: [],
+    workforceAttendance: [],
+    workforceViolations: [],
+    workforceProfiles: [],
+    workforceSettings: [],
+    workforceSettlements: [],
     productionSubmissions: [],
     finishedGoods: []
   };
@@ -162,6 +170,24 @@ async function saveFlexibleRecord(collection, payload, recordId = null, ownerId 
       owner_id: ownerId,
       payload: cleanPayload
     }, { onConflict: "id" });
+  if (error) throw error;
+}
+
+async function saveFlexibleRecordsBatch(collection, records) {
+  const rows = records.map(({ payload, ownerId }) => {
+    const cleanPayload = { ...payload };
+    delete cleanPayload._recordId;
+    delete cleanPayload._ownerId;
+    return {
+      id: crypto.randomUUID(),
+      collection,
+      owner_id: ownerId || null,
+      payload: cleanPayload
+    };
+  });
+  const { error } = await supabaseClient
+    .from("factory_records")
+    .upsert(rows, { onConflict: "id" });
   if (error) throw error;
 }
 
@@ -225,7 +251,16 @@ async function readDashboardData(session) {
       .select("id, customer_id, customer_name, submitted_by_name, model_name, model_number, size_data, color_ply_data, total_pieces, ply_count, fabric, fabric_details, fabric_id, fabric_quantity, bolt_count, fabric_unit, technical_notes, model_image_url, status, approved_order_id, approved_action, created_at, approved_at")
       .order("created_at", { ascending: false })
     : Promise.resolve({ data: [], error: null });
-  const [payments, leaves, tasks, settlements, deliveriesResult, cashTransactionsResult, clientFabricStockResult, personalAttendance, personalAdvances, personalPayroll, workerAdvances, workerPayroll, workerExpenses, fabricsResult, fabricTransactionsResult, authEventsResult, productionSubmissionsResult, finishedGoodsResult, clientModelRequestsResult, cuttingStoriesResult] = await Promise.all([
+  const workforceRecords = session.role === "admin"
+    ? Promise.all([
+      readFlexibleRecords("workforce_attendance"),
+      readFlexibleRecords("workforce_violations"),
+      readFlexibleRecords("workforce_profiles"),
+      readFlexibleRecords("workforce_settings"),
+      readFlexibleRecords("workforce_settlements")
+    ])
+    : Promise.resolve([[], [], [], [], []]);
+  const [payments, leaves, tasks, settlements, deliveriesResult, cashTransactionsResult, clientFabricStockResult, personalAttendance, personalAdvances, personalPayroll, workerAdvances, workerPayroll, workerExpenses, fabricsResult, fabricTransactionsResult, authEventsResult, productionSubmissionsResult, finishedGoodsResult, clientModelRequestsResult, cuttingStoriesResult, workforceRecordsResult] = await Promise.all([
     readFlexibleRecords("payments"),
     readFlexibleRecords("leaves"),
     readFlexibleRecords("tasks"),
@@ -244,7 +279,8 @@ async function readDashboardData(session) {
     productionSubmissionsPromise,
     finishedGoodsPromise,
     clientModelRequestsPromise,
-    cuttingStoriesPromise
+    cuttingStoriesPromise,
+    workforceRecords
   ]);
   if (["42P01", "PGRST205"].includes(deliveriesResult.error?.code)) {
     throw new Error("سجل التسليمات غير موجود في قاعدة البيانات. شغّل supabase/schema.sql كاملًا في SQL Editor.");
@@ -308,6 +344,7 @@ async function readDashboardData(session) {
       : ""
   }));
   data.cuttingStories = cuttingStoriesResult.data || [];
+  [data.workforceAttendance, data.workforceViolations, data.workforceProfiles, data.workforceSettings, data.workforceSettlements] = workforceRecordsResult;
   data.personalAttendance = personalAttendance;
   data.personalAdvances = personalAdvances;
   data.personalPayroll = personalPayroll;
@@ -2516,6 +2553,7 @@ function adminView(data, accounts) {
       <div data-finance-panel="ledger"${activeFinanceTab === "ledger" ? "" : " hidden"}>${cashLedgerView(data)}</div>
     </section>
     <section id="workers-production" class="dashboard-section">${workerPermissionsView(data.users)}${workerProductionReviewView(data)}${panel("طلبات وأذونات الانصراف", table(["الموظف","التاريخ","السبب","الحالة","إجراء"], data.leaves.map((item, index) => `<tr><td>${escapeHtml(item.name)}</td><td>${formatRecordDate(item.date)}</td><td>${escapeHtml(item.reason)}</td><td>${statusTag(item.status)}</td><td>${item.status === "قيد المراجعة" ? `<button class="row-action" data-action="approve-leave" data-index="${index}" type="button">اعتماد</button> <button class="row-action" data-action="deny-leave" data-index="${index}" type="button">رفض</button>` : "—"}</td></tr>`)))}</section>
+    ${workforceView(data)}
     ${fabricStockView(data, true)}
     <section id="clients" class="dashboard-section">
       <div class="client-management-tabs" role="tablist" aria-label="إدارة العملاء">
@@ -3086,6 +3124,7 @@ function navigationItems(role, info, session = null) {
       { id: "cutting", icon: "✂", label: "القص" },
       { id: "sewing", icon: "⌁", label: "الخياطة" },
       { id: "workers-production", icon: "⌁", label: "العمال والإنتاج" },
+      { id: "workforce", icon: "◷", label: "شؤون العمال والحضور" },
       { id: "finance", icon: "ج.م", label: "حسابات العملاء / المصاريف" },
       { id: "owner-fabric", icon: "▧", label: "قماش الإدارة" },
       { id: "incoming-fabric", icon: "↘", label: "القماش الداخل" },
@@ -3125,6 +3164,736 @@ function navigationItems(role, info, session = null) {
     ];
   }
   return [{ id: "dashboard", icon: info.icon, label: "لوحة التحكم" }];
+}
+
+const WORKFORCE_DEFAULTS = {
+  shiftStart: "09:00",
+  shiftEnd: "17:00",
+  fridayDefault: "paid",
+  smokingFine: 100,
+  beverageFine: 50,
+  foodFine: 50,
+  musicFine: 50,
+  phoneCallsAllowed: 3,
+  phoneCallMaxMinutes: 3,
+  phoneFine: 50,
+  productionFine: 0,
+  lateUpTo15Hours: 1,
+  lateUpTo30Hours: 2,
+  lateUpTo60DayFraction: 0.25,
+  lateUpTo120DayFraction: 0.5,
+  lateOver120DayFraction: 0.5,
+  absenceOneDayPenaltyDays: 2,
+  absenceThreeDayThreshold: 3,
+  absenceThreeDayPenaltyDays: 7,
+  lateRule: "التأخير عن مواعيد العمل بدون إذن",
+  absenceRule: "الغياب بدون إذن",
+  smokingRule: "شرب السيجارة داخل المصنع",
+  beverageRule: "تناول مشروبات غير الماء داخل الصالة",
+  foodRule: "الأكل داخل الصالة",
+  musicRule: "تشغيل الأغاني أثناء العمل",
+  phoneRule: "تجاوز عدد المكالمات أو مدتها المسموحة",
+  prayerRule: "ممنوع العمل وقت الصلاة",
+  exitRule: "ممنوع الخروج من المصنع بدون إذن رسمي",
+  materialRule: "ممنوع رمي الشغل أو الخامات على الأرض",
+  cleaningRule: "تنظيف صالة العمل بالكامل قبل المغادرة",
+  productionRule: "تأخير الإنتاج مسؤولية الصالة بالكامل",
+  repairRule: "إصلاح خطأ الشغل أو الماكينة بعد الدوام دون أجر إضافي أو خصم مالي"
+};
+
+const WORKFORCE_RULES = [
+  ["smoking", "smokingRule", "smokingFine", "مخالفة مالية"],
+  ["beverage", "beverageRule", "beverageFine", "مخالفة مالية"],
+  ["food", "foodRule", "foodFine", "مخالفة مالية"],
+  ["music", "musicRule", "musicFine", "مخالفة مالية"],
+  ["late", "lateRule", null, "تأخير"],
+  ["phone", "phoneRule", "phoneFine", "مخالفة مالية"],
+  ["absence", "absenceRule", null, "غياب"],
+  ["prayer", "prayerRule", null, "تنبيه تنظيمي"],
+  ["exit", "exitRule", null, "تنبيه تنظيمي"],
+  ["material", "materialRule", null, "تنبيه تنظيمي"],
+  ["cleaning", "cleaningRule", null, "تنبيه تنظيمي"],
+  ["production", "productionRule", "productionFine", "تنبيه تنظيمي"],
+  ["repair", "repairRule", null, "تنبيه تنظيمي"]
+];
+
+const WORKFORCE_ATTENDANCE_LABELS = {
+  present: "حاضر",
+  absent: "غائب",
+  leave: "إجازة",
+  friday_paid: "جمعة مدفوعة",
+  friday_unpaid: "جمعة غير مدفوعة",
+  late: "متأخر"
+};
+
+function workforceSettings(data) {
+  return { ...WORKFORCE_DEFAULTS, ...(data.workforceSettings.find((record) => record.settingKey === "main") || {}) };
+}
+
+function workforceEmployees(data) {
+  return data.users
+    .filter((user) => ["worker", "cutting", "sewing"].includes(user.roleKey) && user.status === "active")
+    .sort((left, right) => String(left.name).localeCompare(String(right.name), "ar"));
+}
+
+function workforceProfile(data, workerId) {
+  return data.workforceProfiles.find((profile) => profile.workerId === workerId) || {};
+}
+
+function workforceRecordBelongsToWorker(record, worker, data) {
+  if (record.workerId === worker.id || record._ownerId === worker.id) return true;
+  const storedName = record.workerName || record.name || record.username;
+  return storedName === worker.name
+    && workforceEmployees(data).filter((employee) => employee.name === worker.name).length === 1;
+}
+
+function workforceDateKey(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function workforceMonthDates(monthKey) {
+  const [year, month] = monthKey.split("-").map(Number);
+  const count = new Date(year, month, 0).getDate();
+  return Array.from({ length: count }, (_, index) => new Date(year, month - 1, index + 1));
+}
+
+function workforceAttendanceRecord(data, workerId, date) {
+  return data.workforceAttendance.find((record) => record.workerId === workerId && record.date === date) || null;
+}
+
+function workforceTimeMinutes(value) {
+  if (!/^\d{2}:\d{2}$/.test(String(value || ""))) return null;
+  const [hours, minutes] = value.split(":").map(Number);
+  return hours < 24 && minutes < 60 ? hours * 60 + minutes : null;
+}
+
+function workforceShiftMinutes(settings) {
+  const start = workforceTimeMinutes(settings.shiftStart);
+  const end = workforceTimeMinutes(settings.shiftEnd);
+  return start === null || end === null || end <= start ? 480 : end - start;
+}
+
+function workforceElapsedMinutes(start, end) {
+  const startMinutes = workforceTimeMinutes(start);
+  const endMinutes = workforceTimeMinutes(end);
+  return startMinutes === null || endMinutes === null ? 0 : Math.max(0, endMinutes - startMinutes);
+}
+
+function workforceMoney(value) {
+  return money(Math.round((Number(value) + Number.EPSILON) * 100) / 100);
+}
+
+function workforceRuleTitle(settings, ruleKey) {
+  const rule = WORKFORCE_RULES.find(([key]) => key === ruleKey);
+  if (!rule) return "مخالفة أخرى";
+  const [, titleKey] = rule;
+  return settings[titleKey] || titleKey;
+}
+
+function workforceWageRates(profile, settings, monthKey, data, workerId) {
+  const rate = Number(profile.wageAmount || 0);
+  const basis = profile.wageBasis || "monthly";
+  const shiftHours = workforceShiftMinutes(settings) / 60;
+  const fridays = workforceMonthDates(monthKey).filter((date) => date.getDay() === 5);
+  const workDates = workforceMonthDates(monthKey).length - fridays.length;
+  const paidFridays = fridays.filter((date) => {
+    const attendance = workforceAttendanceRecord(data, workerId, workforceDateKey(date));
+    if (attendance) {
+      return ["friday_paid", "present", "late"].includes(attendance.status)
+        || (attendance.status === "leave" && attendance.paidLeave);
+    }
+    return settings.fridayDefault === "paid";
+  }).length;
+  const monthlyDays = Math.max(1, workDates + paidFridays);
+  const daily = basis === "monthly" ? rate / monthlyDays : basis === "daily" ? rate : rate * shiftHours;
+  const hourly = basis === "hourly" ? rate : daily / Math.max(shiftHours, 1);
+  return { rate, basis, daily, hourly, shiftHours, monthlyDays };
+}
+
+function workforceRuleAmount(ruleKey, settings) {
+  const rule = WORKFORCE_RULES.find(([key]) => key === ruleKey);
+  const amountKey = rule?.[2];
+  return amountKey ? Number(settings[amountKey] || 0) : 0;
+}
+
+function workforceActualMinutes(form, ruleKey, settings, data, workerId, date) {
+  if (ruleKey === "absence") return workforceShiftMinutes(settings);
+  if (ruleKey === "phone") {
+    const extraCalls = Math.max(0, Number(form.elements.callsCount.value || 0) - Number(settings.phoneCallsAllowed));
+    const extraDuration = Math.max(0, Number(form.elements.callDuration.value || 0) - Number(settings.phoneCallMaxMinutes));
+    return extraCalls * Number(settings.phoneCallMaxMinutes) + extraDuration;
+  }
+  if (ruleKey === "late") {
+    const attendance = workforceAttendanceRecord(data, workerId, date);
+    const recordedDelay = workforceTimeMinutes(attendance?.checkIn) - workforceTimeMinutes(settings.shiftStart);
+    if (Number.isFinite(recordedDelay) && recordedDelay > 0) return recordedDelay;
+  }
+  return Math.max(0, Number(form.elements.minutes.value || 0));
+}
+
+function workforceOfficialPenalty(ruleKey, settings, profile, monthKey, data, date, minutes, workerId) {
+  const rates = workforceWageRates(profile, settings, monthKey, data, workerId);
+  if (ruleKey === "late") {
+    const delay = Math.max(0, Number(minutes) || 0);
+    let hours = 0;
+    if (delay <= 0) return { amount: 0, description: "أدخل وقت التأخير أولاً" };
+    if (delay <= 15) hours = Number(settings.lateUpTo15Hours);
+    else if (delay <= 30) hours = Number(settings.lateUpTo30Hours);
+    else if (delay <= 60) hours = Number(settings.lateUpTo60DayFraction) * rates.shiftHours;
+    else if (delay <= 120) hours = Number(settings.lateUpTo120DayFraction) * rates.shiftHours;
+    else hours = Number(settings.lateOver120DayFraction) * rates.shiftHours;
+    return { amount: rates.hourly * hours, description: `جزاء تأخير يعادل ${hours} ساعة عمل` };
+  }
+  if (ruleKey === "absence") {
+    const monthPrefix = date.slice(0, 7);
+    const priorAbsences = data.workforceViolations.filter((record) =>
+      record.workerId === workerId
+      && record.ruleKey === "absence"
+      && record.date?.startsWith(monthPrefix)
+      && record.date < date
+    );
+    const officialDaysAlreadyApplied = priorAbsences
+      .filter((record) => record.decision === "official")
+      .reduce((total, record) => total + Number(record.deductionDays || 0), 0);
+    const absenceCount = priorAbsences.length + 1;
+    const targetDeductionDays = absenceCount >= Number(settings.absenceThreeDayThreshold)
+      ? Number(settings.absenceThreeDayPenaltyDays)
+      : absenceCount * Number(settings.absenceOneDayPenaltyDays);
+    const deductionDays = Math.max(0, targetDeductionDays - officialDaysAlreadyApplied);
+    return { amount: rates.daily * deductionDays, deductionDays, description: `جزاء الغياب يعادل ${deductionDays} يوم عمل` };
+  }
+  return { amount: workforceRuleAmount(ruleKey, settings), description: "" };
+}
+
+function workforceMonthAccrual(worker, data, settings, monthKey, throughDate) {
+  const profile = workforceProfile(data, worker.id);
+  const rates = workforceWageRates(profile, settings, monthKey, data, worker.id);
+  const monthDates = workforceMonthDates(monthKey);
+  const lastSettlement = data.workforceSettlements
+    .filter((record) => record.workerId === worker.id && record.throughDate <= throughDate)
+    .sort((left, right) => String(right.throughDate).localeCompare(String(left.throughDate)))[0];
+  const carryover = Number(lastSettlement?.balanceAfter || 0);
+  const firstDate = lastSettlement?.period === monthKey
+    ? new Date(`${lastSettlement.throughDate}T00:00:00`)
+    : new Date(`${monthKey}-01T00:00:00`);
+  if (lastSettlement?.period === monthKey) firstDate.setDate(firstDate.getDate() + 1);
+  let creditedDays = 0;
+  let earned = 0;
+  const attendanceForWorker = data.workforceAttendance.filter((record) => record.workerId === worker.id);
+  for (const date of monthDates) {
+    const dateKey = workforceDateKey(date);
+    if (dateKey < workforceDateKey(firstDate) || dateKey > throughDate) continue;
+    const record = attendanceForWorker.find((entry) => entry.date === dateKey);
+    const isFriday = date.getDay() === 5;
+    const status = record?.status || (isFriday
+      ? settings.fridayDefault === "paid" ? "friday_paid" : settings.fridayDefault === "unpaid" ? "friday_unpaid" : ""
+      : "");
+    if (status === "present" || status === "late" || (status === "leave" && record?.paidLeave)) {
+      creditedDays += 1;
+      const workedMinutes = workforceElapsedMinutes(record?.checkIn, record?.checkOut);
+      if (rates.basis === "hourly") earned += record?.status === "leave" ? rates.hourly * rates.shiftHours : rates.hourly * workedMinutes / 60;
+      else if (rates.basis === "daily") earned += rates.daily * (record?.status === "leave" ? 1 : Math.min(workedMinutes / workforceShiftMinutes(settings), 1));
+      else earned += rates.daily;
+    } else if (status === "friday_paid") {
+      creditedDays += 1;
+      earned += rates.basis === "hourly" ? rates.hourly * rates.shiftHours : rates.daily;
+    }
+  }
+  if (rates.basis === "monthly") {
+    earned = rates.daily * creditedDays;
+  }
+  const dateInRange = (date) => {
+    const dateKey = String(date || "").slice(0, 10);
+    return dateKey >= workforceDateKey(firstDate) && dateKey <= throughDate;
+  };
+  const advances = data.workerAdvances
+    .filter((record) => workforceRecordBelongsToWorker(record, worker, data)
+      && dateInRange(record.date || record.created_at || record._createdAt))
+    .reduce((total, record) => total + Number(record.amount ?? record.value ?? record.netAmount ?? 0), 0);
+  const previousPaid = data.workerPayroll
+    .filter((record) => workforceRecordBelongsToWorker(record, worker, data)
+      && (dateInRange(record.date || record.created_at || record._createdAt)
+        || (!lastSettlement && (record.period === monthKey || record.month === monthKey))))
+    .reduce((total, record) => total + Number(record.paidAmount ?? record.paid ?? 0), 0);
+  const deductions = data.workforceViolations
+    .filter((record) => record.workerId === worker.id
+      && dateInRange(record.date)
+      && ["official", "actual_time"].includes(record.decision))
+    .reduce((total, record) => total + Number(record.deductionAmount || 0), 0);
+  return {
+    earned,
+    advances,
+    previousPaid,
+    deductions,
+    carryover,
+    netDue: carryover + earned - advances - previousPaid - deductions,
+    creditedDays,
+    profile,
+    rate: rates
+  };
+}
+
+function workforceAttendanceGrid(data, employees, settings) {
+  const dates = workforceMonthDates(selectedWorkforceMonth);
+  if (!employees.length) return '<div class="empty-state">لا توجد حسابات عمال أو مشرفين نشطة.</div>';
+  const headings = dates.map((date) =>
+    `<th class="${date.getDay() === 5 ? "workforce-friday" : ""}"><span>${date.getDate()}</span><small>${new Intl.DateTimeFormat("ar-EG", { weekday: "short" }).format(date)}</small></th>`
+  ).join("");
+  const rows = employees.map((worker) => {
+    const cells = dates.map((date) => {
+      const dateKey = workforceDateKey(date);
+      const record = workforceAttendanceRecord(data, worker.id, dateKey);
+      const status = record?.status || (date.getDay() === 5
+        ? settings.fridayDefault === "paid" ? "friday_paid" : settings.fridayDefault === "unpaid" ? "friday_unpaid" : ""
+        : "");
+      const shortStatus = {
+        present: "حاضر", absent: "غائب", leave: "إجازة", friday_paid: "جمعة مدفوعة",
+        friday_unpaid: "جمعة غير مدفوعة", late: "متأخر"
+      }[status] || "＋";
+      const time = record?.checkIn ? `<small>${escapeHtml(record.checkIn)}${record.checkOut ? `–${escapeHtml(record.checkOut)}` : ""}</small>` : "";
+      return `<td><button type="button" class="workforce-cell ${status ? `workforce-cell-${status}` : ""}" data-workforce-attendance-cell data-worker-id="${escapeHtml(worker.id)}" data-attendance-date="${dateKey}" aria-label="${escapeHtml(worker.name)}، ${dateKey}، ${shortStatus}">${shortStatus}${time}</button></td>`;
+    }).join("");
+    return `<tr><th class="workforce-worker-name">${escapeHtml(worker.name)}<small>${escapeHtml(worker.jobTitle || roleNames[worker.roleKey] || "")}</small></th>${cells}</tr>`;
+  }).join("");
+  return `<div class="workforce-matrix-scroll"><table class="workforce-matrix"><thead><tr><th class="workforce-worker-name">العامل / اليوم</th>${headings}</tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function workforceView(data) {
+  const employees = workforceEmployees(data);
+  const settings = workforceSettings(data);
+  const attendanceRows = workforceAttendanceGrid(data, employees, settings);
+  const workerOptions = `<option value="all">كل العاملين (لمخالفة تأخير الإنتاج)</option>${employees.map((worker) => `<option value="${escapeHtml(worker.id)}">${escapeHtml(worker.name)}${worker.jobTitle ? ` · ${escapeHtml(worker.jobTitle)}` : ""}</option>`).join("")}`;
+  const monthDays = workforceMonthDates(selectedWorkforceMonth);
+  const now = new Date();
+  const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const defaultCutoffDate = selectedWorkforceMonth === thisMonth
+    ? workforceDateKey(now)
+    : workforceDateKey(monthDays[monthDays.length - 1]);
+  const cutoffDate = selectedWorkforceCutoffDate.startsWith(`${selectedWorkforceMonth}-`)
+    ? selectedWorkforceCutoffDate
+    : defaultCutoffDate;
+  const profileRows = employees.map((worker) => {
+    const profile = workforceProfile(data, worker.id);
+    return `<tr><td>${escapeHtml(worker.name)}</td><td>${escapeHtml(worker.jobTitle || roleNames[worker.roleKey])}</td><td><form class="workforce-profile-form" data-workforce-profile-form="${escapeHtml(worker.id)}"><select name="wageBasis" aria-label="أساس الأجر"><option value="monthly" ${profile.wageBasis === "monthly" || !profile.wageBasis ? "selected" : ""}>شهري</option><option value="daily" ${profile.wageBasis === "daily" ? "selected" : ""}>يومي</option><option value="hourly" ${profile.wageBasis === "hourly" ? "selected" : ""}>بالساعة</option></select><input name="wageAmount" type="number" min="0.01" step="0.01" value="${escapeHtml(profile.wageAmount ?? "")}" placeholder="الأجر بالجنيه" aria-label="قيمة الأجر"><button class="row-action" type="submit">حفظ الأجر</button></form></td></tr>`;
+  }).join("");
+  const settlementRows = employees.map((worker) => {
+    const calculation = workforceMonthAccrual(worker, data, settings, selectedWorkforceMonth, cutoffDate);
+    return `<tr><td>${escapeHtml(worker.name)}</td><td>${calculation.creditedDays}</td><td>${workforceMoney(calculation.earned)}</td><td>${workforceMoney(calculation.advances)}</td><td>${workforceMoney(calculation.previousPaid)}</td><td>${workforceMoney(calculation.deductions)}</td><td>${workforceMoney(calculation.carryover)}</td><td><strong>${workforceMoney(calculation.netDue)}</strong></td><td><form class="workforce-settlement-form" data-workforce-settlement-form="${escapeHtml(worker.id)}"><input type="hidden" name="throughDate" value="${cutoffDate}"><input name="paidAmount" type="number" step="0.01" value="${Math.max(calculation.netDue, 0).toFixed(2)}" aria-label="المبلغ المدفوع"><button class="row-action" type="submit">حفظ التصفية</button></form></td></tr>`;
+  }).join("");
+  const violationRows = [...data.workforceViolations]
+    .sort((left, right) => String(right.date).localeCompare(String(left.date)))
+    .map((record) => {
+      const worker = employees.find((entry) => entry.id === record.workerId);
+      const decisionLabel = { official: "اللائحة الرسمية", actual_time: "الوقت الفعلي", waived: "إعفاء" }[record.decision] || "—";
+      return `<tr><td>${formatRecordDate(record.date)}</td><td>${escapeHtml(worker?.name || record.workerName || "عامل")}</td><td>${escapeHtml(record.ruleLabel || workforceRuleTitle(settings, record.ruleKey))}</td><td>${escapeHtml(record.decisionDescription || decisionLabel)}</td><td>${workforceMoney(record.deductionAmount || 0)}</td><td>${escapeHtml(record.notes || "—")}</td></tr>`;
+    });
+  const disciplinarySettingsForm = `<form class="workforce-settings-form form-grid">
+    <label class="field"><span>بداية الدوام الافتراضية</span><input name="shiftStart" type="time" value="${escapeHtml(settings.shiftStart)}" required></label>
+    <label class="field"><span>نهاية الدوام الافتراضية</span><input name="shiftEnd" type="time" value="${escapeHtml(settings.shiftEnd)}" required></label>
+    <label class="field"><span>افتراضي الجمعة</span><select name="fridayDefault"><option value="paid" ${settings.fridayDefault === "paid" ? "selected" : ""}>مدفوعة</option><option value="unpaid" ${settings.fridayDefault === "unpaid" ? "selected" : ""}>غير مدفوعة</option><option value="each_friday" ${settings.fridayDefault === "each_friday" ? "selected" : ""}>تحديد كل جمعة داخل الجدول</option></select></label>
+    <label class="field"><span>خصم التدخين (جنيه)</span><input name="smokingFine" type="number" min="0" step="0.01" value="${settings.smokingFine}"></label>
+    <label class="field"><span>خصم المشروبات (جنيه)</span><input name="beverageFine" type="number" min="0" step="0.01" value="${settings.beverageFine}"></label>
+    <label class="field"><span>خصم الأكل (جنيه)</span><input name="foodFine" type="number" min="0" step="0.01" value="${settings.foodFine}"></label>
+    <label class="field"><span>خصم تشغيل الأغاني (جنيه)</span><input name="musicFine" type="number" min="0" step="0.01" value="${settings.musicFine}"></label>
+    <label class="field"><span>عدد المكالمات المسموح</span><input name="phoneCallsAllowed" type="number" min="0" step="1" value="${settings.phoneCallsAllowed}"></label>
+    <label class="field"><span>أقصى مدة للمكالمة (دقيقة)</span><input name="phoneCallMaxMinutes" type="number" min="0" step="1" value="${settings.phoneCallMaxMinutes}"></label>
+    <label class="field"><span>جزاء مخالفة الهاتف (جنيه)</span><input name="phoneFine" type="number" min="0" step="0.01" value="${settings.phoneFine}"></label>
+    <label class="field"><span>جزاء تأخير الإنتاج لكل عامل بالصالة (جنيه؛ صفر للتنبيه فقط)</span><input name="productionFine" type="number" min="0" step="0.01" value="${settings.productionFine}"></label>
+    <label class="field"><span>تأخير حتى 15 دقيقة: ساعات خصم</span><input name="lateUpTo15Hours" type="number" min="0" step="0.25" value="${settings.lateUpTo15Hours}"></label>
+    <label class="field"><span>تأخير حتى 30 دقيقة: ساعات خصم</span><input name="lateUpTo30Hours" type="number" min="0" step="0.25" value="${settings.lateUpTo30Hours}"></label>
+    <label class="field"><span>تأخير حتى ساعة: جزء اليوم</span><input name="lateUpTo60DayFraction" type="number" min="0" max="1" step="0.05" value="${settings.lateUpTo60DayFraction}"></label>
+    <label class="field"><span>تأخير حتى ساعتين: جزء اليوم</span><input name="lateUpTo120DayFraction" type="number" min="0" max="1" step="0.05" value="${settings.lateUpTo120DayFraction}"></label>
+    <label class="field"><span>تأخير أكثر من ساعتين: جزء اليوم</span><input name="lateOver120DayFraction" type="number" min="0" max="1" step="0.05" value="${settings.lateOver120DayFraction}"></label>
+    <label class="field"><span>جزاء غياب يوم واحد (أيام أجر)</span><input name="absenceOneDayPenaltyDays" type="number" min="0" step="0.5" value="${settings.absenceOneDayPenaltyDays}"></label>
+    <label class="field"><span>حد قاعدة الغياب الشهري (أيام)</span><input name="absenceThreeDayThreshold" type="number" min="1" step="1" value="${settings.absenceThreeDayThreshold}"></label>
+    <label class="field"><span>جزاء الحد الشهري (أيام أجر إجمالاً)</span><input name="absenceThreeDayPenaltyDays" type="number" min="0" step="0.5" value="${settings.absenceThreeDayPenaltyDays}"></label>
+    ${WORKFORCE_RULES.filter(([, titleKey]) => titleKey.endsWith("Rule")).map(([, titleKey]) => `<label class="field wide"><span>نص اللائحة</span><input name="${titleKey}" value="${escapeHtml(settings[titleKey])}" maxlength="240"></label>`).join("")}
+    <div class="form-actions wide"><button class="button button-primary" type="submit">حفظ إعدادات اللائحة والدوام</button></div>
+  </form>`;
+  const deductionActionOptions = '<option value="official">تطبيق اللائحة الرسمية</option><option value="actual_time">خصم الوقت الفعلي فقط</option><option value="waived">إعفاء والتغاضي عن الخصم</option>';
+  const violationForm = `<form class="workforce-violation-form form-grid">
+    <label class="field"><span>العامل</span><select name="workerId" required><option value="">اختر العامل</option>${workerOptions}</select></label>
+    <label class="field"><span>المخالفة</span><select name="ruleKey" required>${WORKFORCE_RULES.map(([key]) => `<option value="${key}">${escapeHtml(workforceRuleTitle(settings, key))}</option>`).join("")}</select></label>
+    <label class="field"><span>تاريخ المخالفة</span><input name="date" type="date" value="${workforceDateKey(new Date())}" required></label>
+    <label class="field"><span>مدة التأخير / الوقت الفعلي بالدقائق</span><input name="minutes" type="number" min="0" step="1" value="0"></label>
+    <label class="field"><span>عدد المكالمات في الواقعة (للهاتف)</span><input name="callsCount" type="number" min="0" step="1" value="0"></label>
+    <label class="field"><span>مدة أطول مكالمة (دقيقة)</span><input name="callDuration" type="number" min="0" step="1" value="0"></label>
+    <label class="field"><span>قرار الإدارة</span><select name="decision">${deductionActionOptions}</select></label>
+    <label class="field wide"><span>ملاحظات</span><textarea name="notes" rows="2" maxlength="500"></textarea></label>
+    <p class="workforce-penalty-preview wide" data-workforce-penalty-preview>اختر العامل والمخالفة لمعرفة الخصم المتوقع قبل التسجيل.</p>
+    <div class="form-actions wide"><button class="button button-primary" type="submit">تسجيل المخالفة والقرار</button></div>
+  </form>`;
+  return `<section id="workforce" class="dashboard-section">
+    <div class="client-management-tabs workforce-tabs" role="tablist" aria-label="شؤون العمال">
+      <button type="button" role="tab" class="client-management-tab${activeWorkforceTab === "attendance" ? " active" : ""}" aria-selected="${activeWorkforceTab === "attendance"}" data-workforce-tab="attendance">الحضور الشهري</button>
+      <button type="button" role="tab" class="client-management-tab${activeWorkforceTab === "discipline" ? " active" : ""}" aria-selected="${activeWorkforceTab === "discipline"}" data-workforce-tab="discipline">اللائحة والمخالفات</button>
+      <button type="button" role="tab" class="client-management-tab${activeWorkforceTab === "settlements" ? " active" : ""}" aria-selected="${activeWorkforceTab === "settlements"}" data-workforce-tab="settlements">الأجور والتصفية</button>
+    </div>
+    <div class="workforce-panel" data-workforce-panel="attendance"${activeWorkforceTab === "attendance" ? "" : " hidden"}>
+      <div class="clients-toolbar"><div><h2>جدول الحضور والغياب الشهري</h2><p>اضغط خلية العامل واليوم لتسجيل الحالة أو تعديل وقت الحضور والانصراف.</p></div><label class="field workforce-month-picker"><span>الشهر</span><input type="month" data-workforce-month value="${escapeHtml(selectedWorkforceMonth)}"></label></div>
+      ${panel("مصفوفة الحضور", attendanceRows, `الدوام الافتراضي ${settings.shiftStart}–${settings.shiftEnd}. الجمعة: ${settings.fridayDefault === "unpaid" ? "غير مدفوعة" : settings.fridayDefault === "each_friday" ? "تُحدد لكل جمعة من خلية العامل." : "مدفوعة ويمكن تعديل كل يوم."}`)}
+    </div>
+    <div class="workforce-panel" data-workforce-panel="discipline"${activeWorkforceTab === "discipline" ? "" : " hidden"}>
+      ${panel("تسجيل مخالفة وقرار الخصم", violationForm, "كل مخالفة تُسجل أولاً، ولا يطبق خصم إلا بعد اختيار الإدارة لأحد الخيارات الثلاثة. المخالفة غير الزمنية تُسجل بلا خصم عند اختيار الوقت الفعلي لعدم وجود مدة قابلة للحساب.")}
+      ${panel("سجل المخالفات والقرارات", violationRows.length ? table(["التاريخ","العامل","المخالفة","قرار الخصم","المبلغ","ملاحظات"], violationRows) : '<div class="empty-state">لا توجد مخالفات مسجلة.</div>')}
+      ${panel("إعدادات اللائحة والدوام", disciplinarySettingsForm, "تعديل البنود والمبالغ والحدود الزمنية يطبق على المخالفات الجديدة فقط؛ السجلات السابقة تحتفظ بقرارها.")}
+    </div>
+    <div class="workforce-panel" data-workforce-panel="settlements"${activeWorkforceTab === "settlements" ? "" : " hidden"}>
+      <div class="clients-toolbar"><div><h2>الأجور وترحيل الرصيد والتصفية</h2><p>حدد أجر كل عامل، ثم راجع الاستحقاق والخصومات والسلف قبل حفظ التصفية.</p></div><label class="field workforce-month-picker"><span>تاريخ التصفية حتى</span><input type="date" data-workforce-cutoff value="${cutoffDate}"></label></div>
+      ${panel("إعداد أجور العمال", profileRows.length ? table(["العامل","الوظيفة","الأجر"], profileRows) : '<div class="empty-state">لا توجد حسابات عمال نشطة لإعداد أجورها.</div>', "أساس الأجر والقيمة يُحفظان لكل عامل؛ الأجر الشهري يوزع على أيام العمل المدفوعة في الشهر.")}
+      ${panel("حساب المستحقات حتى التاريخ المحدد", employees.length ? table(["العامل","أيام مستحقة","أجر مستحق","السلف","مدفوعات راتب سابقة","الخصومات","رصيد مرحّل","صافي قبل الدفع","المبلغ المدفوع / إجراء"], settlementRows) : '<div class="empty-state">لا توجد حسابات عمال نشطة.</div>', "يُرحّل الرصيد بعد كل تصفية إلى الفترة التالية. لا تحتسب الأيام غير المسجلة حضوراً كأيام عمل، والجمعة تتبع إعدادها أو حالة اليوم المسجلة.")}
+      ${panel("سجل التصفية", data.workforceSettlements.length ? table(["العامل","الفترة","حتى تاريخ","المستحق","السلف","مدفوعات سابقة","الخصومات","المدفوع","الرصيد المرحّل"], [...data.workforceSettlements].sort((a, b) => String(b.throughDate).localeCompare(String(a.throughDate))).map((record) => `<tr><td>${escapeHtml(employees.find((worker) => worker.id === record.workerId)?.name || record.workerName || "عامل")}</td><td>${escapeHtml(record.period || "—")}</td><td>${formatRecordDate(record.throughDate)}</td><td>${workforceMoney(record.earnedAmount)}</td><td>${workforceMoney(record.advanceAmount)}</td><td>${workforceMoney(record.previousPaidAmount)}</td><td>${workforceMoney(record.deductionAmount)}</td><td>${workforceMoney(record.paidAmount)}</td><td>${workforceMoney(record.balanceAfter)}</td></tr>`)) : '<div class="empty-state">لا توجد تصفيات محفوظة.</div>')}
+    </div>
+    <div class="modal-backdrop" data-workforce-attendance-modal hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="workforce-attendance-title"><button class="modal-close" type="button" data-close-workforce-attendance aria-label="إغلاق">×</button><h2 id="workforce-attendance-title">تسجيل حضور العامل</h2><form class="workforce-attendance-form modal-form"><input type="hidden" name="workerId"><input type="hidden" name="date"><label>حالة اليوم<select name="status">${Object.entries(WORKFORCE_ATTENDANCE_LABELS).map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}</select></label><label>وقت الحضور<input name="checkIn" type="time"></label><label>وقت الانصراف<input name="checkOut" type="time"></label><label class="workforce-inline-check"><input name="paidLeave" type="checkbox" checked> الإجازة مدفوعة الأجر</label><label>ملاحظات<textarea name="notes" rows="2" maxlength="400"></textarea></label><div class="form-actions"><button class="button button-primary" type="submit">حفظ بيانات اليوم</button><button class="row-action" type="button" data-close-workforce-attendance>إلغاء</button></div></form></section></div>
+  </section>`;
+}
+
+function bindWorkforceActions(session) {
+  const root = document.querySelector("#workforce");
+  if (!root) return;
+  const refresh = () => refreshDashboard(session);
+  root.querySelectorAll("[data-workforce-tab]").forEach((button) => button.addEventListener("click", () => {
+    activeWorkforceTab = button.dataset.workforceTab;
+    render(session, dashboardData, dashboardData.pendingAccounts || []);
+  }));
+  root.querySelector("[data-workforce-month]")?.addEventListener("change", (event) => {
+    if (!/^\d{4}-\d{2}$/.test(event.currentTarget.value)) return;
+    selectedWorkforceMonth = event.currentTarget.value;
+    selectedWorkforceCutoffDate = "";
+    void refresh().catch((error) => reportDashboardFailure(session, "تعذر تحميل الحضور للشهر المحدد", error));
+  });
+  root.querySelector("[data-workforce-cutoff]")?.addEventListener("change", (event) => {
+    const date = event.currentTarget.value;
+    const today = workforceDateKey(new Date());
+    if (!date.startsWith(`${selectedWorkforceMonth}-`) || date > today) {
+      window.factoryUI.toast("اختر تاريخ تصفية ضمن الشهر المحدد ولا يتجاوز اليوم.", "error");
+      event.currentTarget.value = selectedWorkforceCutoffDate || today;
+      return;
+    }
+    selectedWorkforceCutoffDate = date;
+    void refresh().catch((error) => reportDashboardFailure(session, "تعذر تحديث حساب التصفية", error));
+  });
+  root.querySelectorAll("[data-workforce-attendance-cell]").forEach((button) => button.addEventListener("click", () => {
+    const workerId = button.dataset.workerId;
+    const date = button.dataset.attendanceDate;
+    const employee = workforceEmployees(dashboardData).find((entry) => entry.id === workerId);
+    if (!employee || !date) {
+      window.factoryUI.toast("تعذر تحديد العامل أو تاريخ الحضور.", "error");
+      return;
+    }
+    const settings = workforceSettings(dashboardData);
+    const record = workforceAttendanceRecord(dashboardData, workerId, date);
+    const isFriday = new Date(`${date}T00:00:00`).getDay() === 5;
+    const form = root.querySelector(".workforce-attendance-form");
+    form.elements.workerId.value = workerId;
+    form.elements.date.value = date;
+    form.elements.status.value = record?.status
+      || (isFriday && settings.fridayDefault === "unpaid" ? "friday_unpaid" : isFriday && settings.fridayDefault === "each_friday" ? "friday_paid" : isFriday ? "friday_paid" : "present");
+    form.elements.checkIn.value = record?.checkIn || settings.shiftStart;
+    form.elements.checkOut.value = record?.checkOut || settings.shiftEnd;
+    form.elements.paidLeave.checked = record?.paidLeave !== false;
+    form.elements.notes.value = record?.notes || "";
+    form.dataset.recordId = record?._recordId || "";
+    root.querySelector("[data-workforce-attendance-modal]").hidden = false;
+  }));
+  root.querySelectorAll("[data-close-workforce-attendance]").forEach((button) => button.addEventListener("click", () => {
+    root.querySelector("[data-workforce-attendance-modal]").hidden = true;
+  }));
+  root.querySelector(".workforce-attendance-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const worker = workforceEmployees(dashboardData).find((entry) => entry.id === form.elements.workerId.value);
+    const date = form.elements.date.value;
+    const existing = workforceAttendanceRecord(dashboardData, form.elements.workerId.value, date);
+    if (!worker || !date) {
+      window.factoryUI.toast("اختر العامل والتاريخ قبل حفظ الحضور.", "error");
+      return;
+    }
+    let status = form.elements.status.value;
+    const checkIn = ["present", "late"].includes(status) ? form.elements.checkIn.value : "";
+    const checkOut = ["present", "late"].includes(status) ? form.elements.checkOut.value : "";
+    if (status === "present"
+      && workforceTimeMinutes(checkIn) > workforceTimeMinutes(workforceSettings(dashboardData).shiftStart)) status = "late";
+    const payload = {
+      workerId: worker.id,
+      workerName: worker.name,
+      date,
+      status,
+      checkIn,
+      checkOut,
+      paidLeave: status === "leave" && form.elements.paidLeave.checked,
+      notes: form.elements.notes.value.trim()
+    };
+    const submit = form.querySelector('[type="submit"]');
+    submit.disabled = true;
+    try {
+      await saveFlexibleRecord("workforce_attendance", payload, existing?._recordId || null, worker.id);
+      root.querySelector("[data-workforce-attendance-modal]").hidden = true;
+      await refresh();
+      window.factoryUI.toast("تم حفظ حالة الحضور ووقتي الحضور والانصراف.");
+    } catch (error) {
+      reportDashboardFailure(session, "تعذر حفظ الحضور", error);
+    } finally {
+      submit.disabled = false;
+    }
+  });
+  root.querySelectorAll(".workforce-profile-form").forEach((form) => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const workerId = form.dataset.workforceProfileForm;
+    const worker = workforceEmployees(dashboardData).find((entry) => entry.id === workerId);
+    if (!worker) return;
+    const existing = workforceProfile(dashboardData, workerId);
+    const wageAmount = Number(form.elements.wageAmount.value);
+    if (!Number.isFinite(wageAmount) || wageAmount <= 0) {
+      window.factoryUI.toast("أدخل قيمة أجر صحيحة أكبر من صفر قبل حفظ ملف العامل.", "error");
+      return;
+    }
+    const submit = form.querySelector('[type="submit"]');
+    submit.disabled = true;
+    try {
+      await saveFlexibleRecord("workforce_profiles", {
+        workerId,
+        workerName: worker.name,
+        wageBasis: form.elements.wageBasis.value,
+        wageAmount
+      }, existing._recordId || null, workerId);
+      await refresh();
+      window.factoryUI.toast("تم حفظ أساس الأجر وقيمته للعامل.");
+    } catch (error) {
+      reportDashboardFailure(session, "تعذر حفظ أجر العامل", error);
+    } finally {
+      submit.disabled = false;
+    }
+  }));
+  root.querySelector(".workforce-settings-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const previous = dashboardData.workforceSettings.find((record) => record.settingKey === "main");
+    const values = Object.fromEntries(new FormData(form));
+    const numericFields = Object.keys(WORKFORCE_DEFAULTS).filter((key) => typeof WORKFORCE_DEFAULTS[key] === "number");
+    for (const key of numericFields) values[key] = Number(values[key] ?? WORKFORCE_DEFAULTS[key]);
+    if (workforceTimeMinutes(values.shiftEnd) <= workforceTimeMinutes(values.shiftStart)) {
+      window.factoryUI.toast("يجب أن يكون وقت نهاية الدوام بعد وقت بدايته.", "error");
+      return;
+    }
+    const submit = form.querySelector('[type="submit"]');
+    submit.disabled = true;
+    try {
+      await saveFlexibleRecord("workforce_settings", { ...values, settingKey: "main" }, previous?._recordId || null);
+      await refresh();
+      window.factoryUI.toast("تم حفظ إعدادات الدوام واللائحة.");
+    } catch (error) {
+      reportDashboardFailure(session, "تعذر حفظ إعدادات اللائحة", error);
+    } finally {
+      submit.disabled = false;
+    }
+  });
+  const violationForm = root.querySelector(".workforce-violation-form");
+  if (violationForm) {
+    const updatePenaltyPreview = () => {
+      const selectedWorkerId = violationForm.elements.workerId.value;
+      const ruleKey = violationForm.elements.ruleKey.value;
+      const date = violationForm.elements.date.value;
+      const minutes = workforceActualMinutes(violationForm, ruleKey, workforceSettings(dashboardData), dashboardData, selectedWorkerId, date);
+      const decision = violationForm.elements.decision.value;
+      const settings = workforceSettings(dashboardData);
+      const employees = workforceEmployees(dashboardData);
+      const targets = selectedWorkerId === "all" && ruleKey === "production"
+        ? employees
+        : employees.filter((entry) => entry.id === selectedWorkerId);
+      if (!targets.length || !date) return;
+      let totalAmount = 0;
+      let description = selectedWorkerId === "all" ? "تأخير الإنتاج على الصالة بالكامل" : "";
+      for (const worker of targets) {
+        const profile = workforceProfile(dashboardData, worker.id);
+        if (decision === "official") {
+          const result = workforceOfficialPenalty(ruleKey, settings, profile, date.slice(0, 7), dashboardData, date, minutes, worker.id);
+          totalAmount += result.amount;
+          if (!description) description = result.description;
+        } else if (decision === "actual_time" && ["late", "absence", "phone"].includes(ruleKey)) {
+          totalAmount += workforceWageRates(profile, settings, date.slice(0, 7), dashboardData, worker.id).hourly * minutes / 60;
+          description = `${minutes} دقيقة فعلية`;
+        }
+      }
+      const phoneViolation = ruleKey === "phone"
+        && (Number(violationForm.elements.callsCount.value || 0) > Number(settings.phoneCallsAllowed)
+          || Number(violationForm.elements.callDuration.value || 0) > Number(settings.phoneCallMaxMinutes));
+      if (ruleKey === "phone" && !phoneViolation) {
+        root.querySelector("[data-workforce-penalty-preview]").textContent =
+          `لا تتجاوز الواقعة حدود الهاتف الحالية: ${settings.phoneCallsAllowed} مكالمات، ${settings.phoneCallMaxMinutes} دقائق للمكالمة.`;
+        return;
+      }
+      const noWage = decision !== "waived" && totalAmount === 0 && ["late", "absence"].includes(ruleKey);
+      root.querySelector("[data-workforce-penalty-preview]").textContent = decision === "waived"
+        ? "سيُحفظ التنبيه دون خصم مالي."
+        : `الخصم المتوقع ${selectedWorkerId === "all" ? "للصالة" : "للعامل"}: ${workforceMoney(totalAmount)}${description ? ` · ${description}` : ""}${noWage ? " · أضف أجر العامل لحساب قيمة الخصم" : ""}`;
+    };
+    ["change", "input"].forEach((eventName) => violationForm.addEventListener(eventName, updatePenaltyPreview));
+    violationForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const selectedWorkerId = violationForm.elements.workerId.value;
+      const ruleKey = violationForm.elements.ruleKey.value;
+      const date = violationForm.elements.date.value;
+      const decision = violationForm.elements.decision.value;
+      const settings = workforceSettings(dashboardData);
+      const employees = workforceEmployees(dashboardData);
+      const targets = selectedWorkerId === "all" && ruleKey === "production"
+        ? employees
+        : employees.filter((entry) => entry.id === selectedWorkerId);
+      if (!targets.length || !date || !["official", "actual_time", "waived"].includes(decision)) {
+        window.factoryUI.toast("أكمل بيانات العامل والتاريخ وقرار المخالفة.", "error");
+        return;
+      }
+      if (selectedWorkerId === "all" && ruleKey !== "production") {
+        window.factoryUI.toast("اختيار جميع العاملين متاح لمخالفة تأخير الإنتاج فقط.", "error");
+        return;
+      }
+      const minutes = workforceActualMinutes(violationForm, ruleKey, settings, dashboardData, selectedWorkerId, date);
+      if (ruleKey === "absence" && targets.some((worker) => dashboardData.workforceViolations.some((item) =>
+        item.workerId === worker.id && item.ruleKey === "absence" && item.date === date
+      ))) {
+        window.factoryUI.toast("تم تسجيل غياب غير مأذون لهذا العامل في هذا التاريخ من قبل.", "error");
+        return;
+      }
+      const phoneViolation = ruleKey === "phone"
+        && (Number(violationForm.elements.callsCount.value || 0) > Number(settings.phoneCallsAllowed)
+          || Number(violationForm.elements.callDuration.value || 0) > Number(settings.phoneCallMaxMinutes));
+      if (ruleKey === "phone" && !phoneViolation) {
+        window.factoryUI.toast("لا تتجاوز الواقعة حدود المكالمات المسموحة في اللائحة.", "error");
+        return;
+      }
+      if (ruleKey === "late" && minutes <= 0) {
+        window.factoryUI.toast("أدخل مدة التأخير بالدقائق لتحديد الخصم.", "error");
+        return;
+      }
+      const records = [];
+      const groupId = crypto.randomUUID();
+      let totalAmount = 0;
+      let decisionDescription = "";
+      for (const worker of targets) {
+        const profile = workforceProfile(dashboardData, worker.id);
+        const rates = workforceWageRates(profile, settings, date.slice(0, 7), dashboardData, worker.id);
+        if (decision === "actual_time" && ["late", "absence", "phone"].includes(ruleKey) && rates.rate <= 0) {
+          window.factoryUI.toast(`سجل أجر العامل ${worker.name} أولاً لحساب خصم الوقت الفعلي.`, "error");
+          return;
+        }
+        if (decision === "official" && ["late", "absence"].includes(ruleKey) && rates.rate <= 0) {
+          window.factoryUI.toast(`سجل أجر العامل ${worker.name} أولاً لحساب جزاء التأخير أو الغياب.`, "error");
+          return;
+        }
+        let amount = 0;
+        let deductionDays = 0;
+        let description = "";
+        if (decision === "official") {
+          const penalty = workforceOfficialPenalty(ruleKey, settings, profile, date.slice(0, 7), dashboardData, date, minutes, worker.id);
+          amount = penalty.amount;
+          deductionDays = penalty.deductionDays || 0;
+          description = penalty.description || "تطبيق الجزاء الرسمي";
+        } else if (decision === "actual_time" && ["late", "absence", "phone"].includes(ruleKey)) {
+          amount = rates.hourly * minutes / 60;
+          description = `خصم ${minutes} دقيقة فعلية`;
+        } else if (decision === "actual_time") {
+          description = "تسجيل تنبيه فقط؛ لا توجد مدة فعلية قابلة للحساب";
+        } else {
+          description = "إعفاء من الخصم المالي";
+        }
+        totalAmount += amount;
+        decisionDescription = description;
+        records.push({
+          ownerId: worker.id,
+          payload: {
+            groupId,
+            workerId: worker.id,
+            workerName: worker.name,
+            ruleKey,
+            ruleLabel: workforceRuleTitle(settings, ruleKey),
+            date,
+            decision,
+            decisionDescription: description,
+            actualMinutes: minutes,
+            callsCount: Number(violationForm.elements.callsCount.value || 0),
+            callDuration: Number(violationForm.elements.callDuration.value || 0),
+            deductionAmount: amount,
+            deductionDays,
+            notes: violationForm.elements.notes.value.trim()
+          }
+        });
+      }
+      if (!await window.factoryUI.confirmAction({
+        title: "تأكيد تسجيل المخالفة",
+        message: `${selectedWorkerId === "all" ? "جميع العاملين" : targets[0].name}: ${workforceRuleTitle(settings, ruleKey)} · القرار: ${decisionDescription} · إجمالي الخصم: ${workforceMoney(totalAmount)}.`,
+        confirmLabel: "تسجيل القرار",
+        danger: decision === "official" && totalAmount > 0
+      })) return;
+      const submit = violationForm.querySelector('[type="submit"]');
+      submit.disabled = true;
+      try {
+        await saveFlexibleRecordsBatch("workforce_violations", records);
+        await refresh();
+        window.factoryUI.toast(decision === "waived" ? "تم تسجيل المخالفة كتنبيه دون خصم." : `تم تسجيل المخالفة وقرارها، والخصم المسجل ${workforceMoney(totalAmount)}.`);
+      } catch (error) {
+        reportDashboardFailure(session, "تعذر تسجيل المخالفة", error);
+      } finally {
+        submit.disabled = false;
+      }
+    });
+  }
+  root.querySelectorAll(".workforce-settlement-form").forEach((form) => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const workerId = form.dataset.workforceSettlementForm;
+    const worker = workforceEmployees(dashboardData).find((entry) => entry.id === workerId);
+    const throughDate = form.elements.throughDate.value;
+    const settings = workforceSettings(dashboardData);
+    if (!worker || !throughDate || throughDate.slice(0, 7) !== selectedWorkforceMonth || throughDate > workforceDateKey(new Date())) {
+      window.factoryUI.toast("تعذر تحديد العامل أو تاريخ التصفية.", "error");
+      return;
+    }
+    if (dashboardData.workforceSettlements.some((record) => record.workerId === workerId && record.throughDate === throughDate)) {
+      window.factoryUI.toast("توجد تصفية محفوظة لهذا العامل حتى هذا التاريخ بالفعل.", "error");
+      return;
+    }
+    const calculation = workforceMonthAccrual(worker, dashboardData, settings, selectedWorkforceMonth, throughDate);
+    if (calculation.rate.rate <= 0) {
+      window.factoryUI.toast("أدخل أجر العامل في قسم إعداد أجور العمال قبل إجراء التصفية.", "error");
+      return;
+    }
+    const paidAmount = Number(form.elements.paidAmount.value || 0);
+    if (!Number.isFinite(paidAmount) || paidAmount < 0) {
+      window.factoryUI.toast("أدخل مبلغاً مدفوعاً صحيحاً وغير سالب.", "error");
+      return;
+    }
+    if (!await window.factoryUI.confirmAction({
+      title: "تأكيد تصفية حساب العامل",
+      message: `${worker.name} · المستحق ${workforceMoney(calculation.earned)} · السلف ${workforceMoney(calculation.advances)} · مدفوعات سابقة ${workforceMoney(calculation.previousPaid)} · الخصومات ${workforceMoney(calculation.deductions)} · الرصيد السابق ${workforceMoney(calculation.carryover)} · المدفوع ${workforceMoney(paidAmount)} · الرصيد المرحّل ${workforceMoney(calculation.netDue - paidAmount)}.`,
+      confirmLabel: "حفظ التصفية",
+      danger: calculation.netDue < 0
+    })) return;
+    const submit = form.querySelector('[type="submit"]');
+    submit.disabled = true;
+    try {
+      await saveFlexibleRecord("workforce_settlements", {
+        workerId,
+        workerName: worker.name,
+        period: selectedWorkforceMonth,
+        throughDate,
+        earnedAmount: calculation.earned,
+        advanceAmount: calculation.advances,
+        previousPaidAmount: calculation.previousPaid,
+        deductionAmount: calculation.deductions,
+        previousBalance: calculation.carryover,
+        paidAmount,
+        balanceAfter: calculation.netDue - paidAmount,
+        creditedDays: calculation.creditedDays,
+        wageBasis: calculation.profile.wageBasis || "monthly"
+      }, null, workerId);
+      await refresh();
+      window.factoryUI.toast(`تمت تصفية حساب ${worker.name} وترحيل رصيد ${workforceMoney(calculation.netDue - paidAmount)}.`);
+    } catch (error) {
+      reportDashboardFailure(session, "تعذر حفظ تصفية العامل", error);
+    } finally {
+      submit.disabled = false;
+    }
+  }));
 }
 
 function developerFooterMarkup() {
@@ -4679,6 +5448,7 @@ function bindActions(session) {
     return;
   }
   if (session.role !== "admin") return;
+  bindWorkforceActions(session);
   bindWorkerPermissionActions(session);
   bindWorkerProductionReview(session);
   document.querySelectorAll("[data-confirm-custom-color], [data-custom-color-trigger]").forEach((item) => {
