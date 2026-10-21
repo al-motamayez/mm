@@ -1610,6 +1610,13 @@ function syncOrderCustomerSelection(form, customerId = form.elements.customerId.
 }
 
 function table(headers, rows) {
+  if (!Array.isArray(rows)) {
+    const rowType = rows === null ? "null" : typeof rows;
+    const rowKeys = rows && typeof rows === "object" ? Object.keys(rows).slice(0, 8).join(", ") : "";
+    const message = `تعذر عرض جدول (${headers.map((heading) => String(heading).replace(/<[^>]*>/g, "")).join("، ")}): البيانات ليست قائمة (${rowType}${rowKeys ? `؛ المفاتيح: ${rowKeys}` : ""}).`;
+    console.error(message, rows);
+    return `<div class="notice" role="alert">${escapeHtml(message)}</div>`;
+  }
   if (!rows.length) return '<div class="empty-state">لا توجد بيانات لعرضها حاليًا.</div>';
   const labeledRows = rows.map((row) => {
     let cellIndex = 0;
