@@ -410,11 +410,17 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .workforce-cell { display: grid; width: 100%; min-height: 42px; align-content: center; gap: 2px; padding: 4px 2px; border: 1px solid #e0e8e2; border-radius: 7px; color: #4f6058; background: #fff; font-size: 10px; }
 .workforce-cell:hover { border-color: #5e9b83; background: #f2f8f4; }
 .workforce-cell small { font-size: 8px; direction: ltr; }
+.workforce-cell { min-width: 92px; }
+.workforce-clock-button, .workforce-status-button { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 4px; padding: 3px 4px; border: 0; border-radius: 4px; color: inherit; background: transparent; font-size: 9px; }
+.workforce-clock-button:hover, .workforce-status-button:hover { background: #e9f2ec; }
+.workforce-clock-button b { direction: ltr; }
+.workforce-status-button { justify-content: center; border-top: 1px solid #e0e8e2; color: #53635a; }
 .workforce-cell-present { color: #1d633e; background: #eef8f0; }
 .workforce-cell-late { color: #8a5310; background: #fff6e6; }
 .workforce-cell-absent { color: #9b302c; background: #fff0ef; }
 .workforce-cell-leave, .workforce-cell-friday_paid { color: #355b7b; background: #eef5fb; }
 .workforce-cell-friday_unpaid { color: #785b28; background: #fbf4e5; }
+.workforce-cell-friday_deducted { color: #9b302c; background: #fff0ef; }
 .workforce-profile-form { display: grid; grid-template-columns: minmax(100px, 0.7fr) minmax(110px, 1fr) auto; align-items: center; gap: 6px; min-width: 320px; }
 .workforce-profile-form input, .workforce-profile-form select, .workforce-settlement-form input { min-height: 36px; padding: 6px 8px; font-size: 12px; }
 .workforce-settlement-form { display: flex; align-items: center; gap: 6px; min-width: 205px; }
@@ -425,6 +431,15 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .workforce-inline-check input { width: 18px; min-height: 18px; }
 .workforce-attendance-form label { display: grid; gap: 6px; color: #465651; font-size: 13px; font-weight: 600; }
 .workforce-attendance-form textarea { width: 100%; padding: 10px 13px; border: 1px solid #dfe6e1; border-radius: 9px; font: inherit; }
+.workforce-profile-modal { width: min(1100px, 96vw); max-height: 92vh; overflow: auto; }
+.workforce-profile-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 14px; padding-inline-end: 28px; }
+.workforce-profile-heading h2 { margin: 0; }
+.workforce-profile-heading p { margin: 5px 0 0; color: var(--muted); }
+.workforce-profile-stats { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); margin: 14px 0; }
+.workforce-late-rules { min-width: 0; }
+.workforce-late-rules > div { display: grid; gap: 8px; margin-bottom: 10px; }
+.workforce-late-rule-row { display: grid; grid-template-columns: minmax(130px, 1fr) minmax(130px, 1fr) auto; align-items: end; gap: 8px; padding: 9px; border: 1px solid var(--line); border-radius: 8px; }
+.workforce-late-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
 .cutting-order-card .cutting-finish-form { display: grid; gap: 10px; margin-top: 10px; }
 .cutting-order-card .form-section { gap: 10px; padding: 12px; }
 .cutting-bed-inputs { grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); }
