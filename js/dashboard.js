@@ -18,6 +18,7 @@ let activeWorkforceTab = "employees";
 let selectedWorkforceEmployeeId = "";
 let showNewWorkforceEmployeeModal = false;
 let pendingWorkforceLateDecision = null;
+let pendingWorkforceAbsenceDecision = null;
 let selectedWorkforceMonth = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`;
 let selectedWorkforceCutoffDate = "";
 const REALTIME_NOTIFICATION_MESSAGE = "تحديث جديد في البرنامج";
@@ -2164,14 +2165,6 @@ function pendingAccountRows(accounts, clients) {
   const clientOptions = availableClients.map((client) =>
     `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)}${client.brand_name ? ` · ${escapeHtml(client.brand_name)}` : ""}</option>`
   ).join("");
-  const staffAccounts = dashboardData.users.filter((account) =>
-    account.status === "active" && ["worker", "cutting", "sewing"].includes(account.roleKey)
-  );
-  const staffOptions = (roles) => staffAccounts.filter((account) => roles.includes(account.roleKey))
-    .map((account) => {
-      const roleLabel = account.roleKey === "worker" ? "عامل" : account.roleKey === "cutting" ? "مشرف قص" : "مشرف خياطة";
-      return `<option value="${escapeHtml(account.id)}">${escapeHtml(account.name)} · ${escapeHtml(account.username)} · ${roleLabel}</option>`;
-    }).join("");
   if (!pending.length) return '<div class="empty-state">لا توجد طلبات تسجيل بانتظار الموافقة.</div>';
   return `<div class="pending-approval-list">${pending.map((account) => `<article class="pending-approval-card" data-pending-account="${escapeHtml(account.id)}">
     <header class="pending-approval-heading"><div><h3>${escapeHtml(account.name || "حساب جديد")}</h3><p>${escapeHtml(account.username)}${account.phone ? ` · ${escapeHtml(account.phone)}` : ""}</p></div><div class="pending-approval-date">${formatDateTime(account.created_at)}</div></header>
@@ -2181,13 +2174,10 @@ function pendingAccountRows(accounts, clients) {
       <button class="button button-secondary" type="button" data-action="approve-client-new" data-account-id="${escapeHtml(account.id)}">اعتماد كعميل جديد</button>
     </section>
     <section class="pending-approval-options" data-pending-options="worker" hidden><h4>الخطوة 2 · اعتماد العامل</h4>
-      ${staffOptions(["worker"]) ? `<label class="field"><span>ملف عامل مسجل مسبقاً</span><select data-pending-staff-map="${escapeHtml(account.id)}"><option value="">اختر ملف العامل</option>${staffOptions(["worker"])}</select></label><button class="button button-primary" type="button" data-action="approve-staff-existing" data-account-id="${escapeHtml(account.id)}">ربط بملف العامل</button>` : '<p class="pending-approval-note">لا توجد ملفات عمال مسجلة مسبقاً.</p>'}
-      <label class="field"><span>المسمى الوظيفي الفعلي للعامل الجديد</span><select data-pending-worker-job-title="${escapeHtml(account.id)}"><option value="">اختر المسمى الوظيفي</option>${WORKER_JOB_TITLES.filter((title) => title !== "غير محدد").map((title) => `<option value="${escapeHtml(title)}">${escapeHtml(title)}</option>`).join("")}</select></label>
-      <button class="button button-secondary" type="button" data-action="approve-worker-new" data-account-id="${escapeHtml(account.id)}">اعتماد كعامل جديد</button>
+      <p class="pending-approval-note">لا يُنشأ ملف عامل من طلب التسجيل. أنشئ ملف العامل أولاً من تبويب «العاملين»، ثم اربط هذا الحساب من نموذج الملف.</p>
     </section>
     <section class="pending-approval-options" data-pending-options="supervisor" hidden><h4>الخطوة 2 · اعتماد المشرف / الموظف</h4>
-      ${staffOptions(["cutting", "sewing"]) ? `<label class="field"><span>ملف موظف مسجل مسبقاً</span><select data-pending-staff-map="${escapeHtml(account.id)}"><option value="">اختر ملف الموظف</option>${staffOptions(["cutting", "sewing"])}</select></label><button class="button button-primary" type="button" data-action="approve-staff-existing" data-account-id="${escapeHtml(account.id)}">ربط بملف الموظف</button>` : '<p class="pending-approval-note">لا توجد ملفات مشرفين / موظفين مسجلة مسبقاً.</p>'}
-      <label class="field"><span>نوع الموظف الجديد</span><select data-pending-supervisor-role="${escapeHtml(account.id)}"><option value="">اختر الدور</option><option value="cutting">مشرف قص</option><option value="sewing">مشرف خياطة</option></select></label><button class="button button-secondary" type="button" data-action="approve-supervisor-new" data-account-id="${escapeHtml(account.id)}">تفعيل كموظف جديد</button>
+      <p class="pending-approval-note">لا يُنشأ ملف موظف من طلب التسجيل. أنشئ ملفه الوظيفي من تبويب «العاملين»، ثم اربط الحساب المعلّق من نموذج الملف لتفعيل دوره.</p>
     </section>
   </article>`).join("")}</div>`;
 }
@@ -2594,7 +2584,7 @@ function adminView(data, accounts) {
     </section>
     <section id="client-details" class="dashboard-section">${data.clients.some((client) => client.id === selectedClientId) ? clientDetailsView(data.clients.find((client) => client.id === selectedClientId), data) : '<div class="empty-state">اختر عميلاً لعرض تفاصيل حسابه.</div>'}</section>
     <section id="accounts" class="dashboard-section">
-        ${panel("طلبات إنشاء الحسابات والموافقة", pendingAccountRows(accounts, data.clients), "اختر نوع الحساب أولاً، ثم اربطه بملف مسجل أو اعتمده كملف جديد.")}
+        ${panel("طلبات إنشاء الحسابات والموافقة", pendingAccountRows(accounts, data.clients), "اعتماد العميل يتم من هنا؛ أما حسابات العاملين والمشرفين فتبقى معلقة حتى إنشاء ملفها وربطها من تبويب العاملين.")}
         ${panel("حسابات المستخدمين", table(["الاسم","اسم المستخدم","الدور الوظيفي","الحالة","إجراء"], userRows(data.users)))}
         ${panel("سجل تسجيل الدخول وطلبات التسجيل", table(["الحساب","نوع الحدث","وقت الحدث"], data.authEvents.map((entry) => {
           const account = data.users.find((user) => user.id === entry.user_id)
@@ -3257,65 +3247,20 @@ function navigationItems(role, info, session = null) {
 const WORKFORCE_DEFAULTS = {
   shiftStart: "09:00",
   shiftEnd: "17:00",
-  fridayDefault: "paid",
   overtimeMultiplier: 1.5,
-  smokingFine: 100,
-  beverageFine: 50,
-  foodFine: 50,
-  musicFine: 50,
-  phoneCallsAllowed: 3,
-  phoneCallMaxMinutes: 3,
-  phoneFine: 50,
-  productionFine: 0,
-  lateUpTo15Hours: 1,
-  lateUpTo30Hours: 2,
-  lateUpTo60DayFraction: 0.25,
-  lateUpTo120DayFraction: 0.5,
-  lateOver120DayFraction: 0.5,
-  lateRules: [
-    { maxMinutes: 15, deductionHours: 1 },
-    { maxMinutes: 30, deductionHours: 2 },
-    { maxMinutes: 60, deductionHours: 2 },
-    { maxMinutes: 120, deductionHours: 4 },
-    { maxMinutes: 999999, deductionHours: 4 }
-  ],
-  absenceOneDayPenaltyDays: 2,
-  absenceThreeDayThreshold: 3,
-  absenceThreeDayPenaltyDays: 7,
-  lateRule: "التأخير عن مواعيد العمل بدون إذن",
-  absenceRule: "الغياب بدون إذن",
-  smokingRule: "شرب السيجارة داخل المصنع",
-  beverageRule: "تناول مشروبات غير الماء داخل الصالة",
-  foodRule: "الأكل داخل الصالة",
-  musicRule: "تشغيل الأغاني أثناء العمل",
-  phoneRule: "تجاوز عدد المكالمات أو مدتها المسموحة",
-  prayerRule: "ممنوع العمل وقت الصلاة",
-  exitRule: "ممنوع الخروج من المصنع بدون إذن رسمي",
-  materialRule: "ممنوع رمي الشغل أو الخامات على الأرض",
-  cleaningRule: "تنظيف صالة العمل بالكامل قبل المغادرة",
-  productionRule: "تأخير الإنتاج مسؤولية الصالة بالكامل",
-  repairRule: "إصلاح خطأ الشغل أو الماكينة بعد الدوام دون أجر إضافي أو خصم مالي"
+  penalties: [],
+  lateRules: []
 };
 
 const WORKFORCE_RULES = [
-  ["smoking", "smokingRule", "smokingFine", "مخالفة مالية"],
-  ["beverage", "beverageRule", "beverageFine", "مخالفة مالية"],
-  ["food", "foodRule", "foodFine", "مخالفة مالية"],
-  ["music", "musicRule", "musicFine", "مخالفة مالية"],
-  ["late", "lateRule", null, "تأخير"],
-  ["phone", "phoneRule", "phoneFine", "مخالفة مالية"],
-  ["absence", "absenceRule", null, "غياب"],
-  ["prayer", "prayerRule", null, "تنبيه تنظيمي"],
-  ["exit", "exitRule", null, "تنبيه تنظيمي"],
-  ["material", "materialRule", null, "تنبيه تنظيمي"],
-  ["cleaning", "cleaningRule", null, "تنبيه تنظيمي"],
-  ["production", "productionRule", "productionFine", "تنبيه تنظيمي"],
-  ["repair", "repairRule", null, "تنبيه تنظيمي"]
+  ["late", "lateRule", null, "تأخير"]
 ];
 
 const WORKFORCE_ATTENDANCE_LABELS = {
   present: "حاضر",
   absent: "غائب",
+  absent_permitted: "غياب بإذن",
+  absent_unexcused: "غياب بدون إذن",
   leave: "إجازة",
   friday_paid: "جمعة مدفوعة",
   friday_unpaid: "جمعة غير مدفوعة",
@@ -3328,45 +3273,33 @@ function workforceSettings(data) {
   return {
     ...WORKFORCE_DEFAULTS,
     ...saved,
-    lateRules: Array.isArray(saved.lateRules) && saved.lateRules.length
-      ? saved.lateRules
-      : WORKFORCE_DEFAULTS.lateRules
+    penalties: Array.isArray(saved.penalties) ? saved.penalties : [],
+    lateRules: Array.isArray(saved.lateRules) ? saved.lateRules : WORKFORCE_DEFAULTS.lateRules
   };
 }
 
 function workforceEmployees(data) {
-  const activeAccounts = data.users
-    .filter((user) => ["worker", "cutting", "sewing"].includes(user.roleKey) && user.status === "active")
-    .map((user) => {
-      const profile = data.workforceProfiles.find((entry) => entry.linkedUserId === user.id)
-        || workforceProfile(data, user.id);
+  return data.workforceProfiles
+    .filter((profile) => profile.workerId && profile.employeeName)
+    .map((profile) => {
+      const linkedUserId = workforceLinkedAccountId({ id: profile.workerId }, data);
+      const account = data.users.find((user) => user.id === linkedUserId && user.status === "active");
+      const roleKey = profile.roleKey || account?.roleKey || "worker";
       return {
-        ...user,
-        id: profile.workerId || user.id,
-        accountId: user.id,
-        jobTitle: profile.jobTitle || user.jobTitle,
-        roleLabel: user.role || roleNames[user.roleKey] || user.roleKey,
-        linkedUserId: workforceLinkedAccountId({ id: user.id }, data)
+        ...profile,
+        id: profile.workerId,
+        name: profile.employeeName,
+        username: account?.username || profile.username || "—",
+        phone: account?.phone || profile.phone || "",
+        roleKey,
+        role: roleNames[roleKey] || roleKey,
+        roleLabel: roleNames[roleKey] || roleKey,
+        jobTitle: profile.jobTitle || account?.jobTitle || "",
+        status: account?.status || "pending",
+        accountId: account?.id || null,
+        linkedUserId
       };
-    });
-  const detachedProfiles = data.workforceProfiles
-    .filter((profile) => profile.workerId
-      && profile.employeeName
-      && ["worker", "cutting", "sewing"].includes(profile.roleKey)
-      && !activeAccounts.some((worker) => worker.id === profile.workerId))
-    .map((profile) => ({
-      id: profile.workerId,
-      name: profile.employeeName,
-      username: profile.username || "—",
-      phone: profile.phone || "",
-      roleKey: profile.roleKey,
-      role: roleNames[profile.roleKey],
-      roleLabel: roleNames[profile.roleKey] || profile.roleKey,
-      jobTitle: profile.jobTitle || "",
-      status: "active",
-      linkedUserId: workforceLinkedAccountId({ id: profile.workerId }, data)
-    }));
-  return [...activeAccounts, ...detachedProfiles]
+    })
     .sort((left, right) => String(left.name).localeCompare(String(right.name), "ar"));
 }
 
@@ -3389,6 +3322,13 @@ function workforceEmployeeProfilePayload(worker, profile, data) {
   };
 }
 
+function workforceAccountCanBeLinked(account) {
+  if (!account) return false;
+  const role = account?.roleKey ?? account?.role ?? null;
+  return ["worker", "cutting", "sewing", "pending", null].includes(role)
+    && ["active", "suspended", "pending", undefined, null].includes(account.status);
+}
+
 function workforceRecordOwnerId(worker, data) {
   return workforceLinkedAccountId(worker, data);
 }
@@ -3408,6 +3348,18 @@ function showWorkforceLateDecisionModal(root, worker, date, delay) {
   modal.hidden = false;
 }
 
+function showWorkforceAbsenceDecisionModal(root, worker, date, notes) {
+  pendingWorkforceAbsenceDecision = { workerId: worker.id, date, notes, permission: "" };
+  const modal = root.querySelector("[data-workforce-absence-modal]");
+  modal.querySelector("[data-workforce-absence-summary]").textContent = `${worker.name} · ${date} · اختر نوع الغياب لتسجيل الخصم.`;
+  modal.querySelectorAll("[data-absence-permission]").forEach((choice) => {
+    choice.classList.remove("active");
+    choice.setAttribute("aria-pressed", "false");
+  });
+  modal.querySelector("[data-save-workforce-absence]").disabled = true;
+  modal.hidden = false;
+}
+
 function workforceLinkedAccountId(worker, data) {
   const profile = workforceProfile(data, worker.id);
   if (Object.hasOwn(profile, "linkedUserId")) return profile.linkedUserId || null;
@@ -3422,14 +3374,13 @@ function workforceAccountLinkOptions(worker, data) {
     .flatMap((profile) => [profile.linkedUserId, profile.previousLinkedUserId, profile.workerId].filter(Boolean)));
   const linkedAccountId = workforceLinkedAccountId(worker, data);
   const accounts = [
-    ...data.users.filter((account) => ["worker", "cutting", "sewing"].includes(account.roleKey)
-      && account.status === "suspended"),
-    ...(data.pendingAccounts || []).filter((account) => !account.role || account.role === "pending")
+    ...data.users.filter(workforceAccountCanBeLinked),
+    ...(data.pendingAccounts || []).filter(workforceAccountCanBeLinked)
   ];
   return [...new Map(accounts
     .filter((account) => account.id !== linkedAccountId && !linkedElsewhere.has(account.id))
     .map((account) => [account.id, account])).values()]
-    .map((account) => `<option value="${escapeHtml(account.id)}">${escapeHtml(account.name)} · ${escapeHtml(account.username)} · ${account.status === "pending" ? "بانتظار الموافقة" : "موقوف"}</option>`)
+    .map((account) => `<option value="${escapeHtml(account.id)}">${escapeHtml(account.name)} · ${escapeHtml(account.username)} · ${account.status === "pending" ? "بانتظار الموافقة" : account.status === "suspended" ? "موقوف" : "نشط غير مرتبط"}</option>`)
     .join("");
 }
 
@@ -3451,8 +3402,38 @@ function workforceMonthDates(monthKey) {
   return Array.from({ length: count }, (_, index) => new Date(year, month - 1, index + 1));
 }
 
+function workforceSettlementOpenDate(monthKey) {
+  const [year, month] = monthKey.split("-").map(Number);
+  return workforceDateKey(new Date(year, month, 5));
+}
+
+function workforceCanSettlePeriod(monthKey, today = workforceDateKey(new Date())) {
+  return today >= workforceSettlementOpenDate(monthKey);
+}
+
 function workforceAttendanceRecord(data, workerId, date) {
   return data.workforceAttendance.find((record) => record.workerId === workerId && record.date === date) || null;
+}
+
+async function workforceCreditPreviousFriday(worker, attendanceDate, data, saturdayAttendance) {
+  const saturday = new Date(`${attendanceDate}T00:00:00`);
+  if (saturday.getDay() !== 6) return false;
+  if (!saturdayAttendance || !["present", "late"].includes(saturdayAttendance.status) || !saturdayAttendance.checkIn) return false;
+  saturday.setDate(saturday.getDate() - 1);
+  const fridayDate = workforceDateKey(saturday);
+  if (workforceAttendanceRecord(data, worker.id, fridayDate)) return false;
+  await saveFlexibleRecord("workforce_attendance", {
+    workerId: worker.id,
+    workerName: worker.name,
+    date: fridayDate,
+    status: "friday_paid",
+    checkIn: "",
+    checkOut: "",
+    paidLeave: false,
+    autoFridayPaid: true,
+    notes: "احتساب تلقائي عند تسجيل حضور يوم السبت"
+  }, null, workforceRecordOwnerId(worker, data));
+  return true;
 }
 
 function workforceTimeMinutes(value) {
@@ -3491,6 +3472,10 @@ function workforceRatePreview(basis, value) {
 }
 
 function workforceRuleTitle(settings, ruleKey) {
+  if (String(ruleKey).startsWith("penalty_")) {
+    return settings.penalties.find((penalty) => `penalty_${penalty.id}` === ruleKey)?.name || "خصم محذوف";
+  }
+  if (ruleKey === "late") return "التأخير";
   const rule = WORKFORCE_RULES.find(([key]) => key === ruleKey);
   if (!rule) return "مخالفة أخرى";
   const [, titleKey] = rule;
@@ -3514,6 +3499,9 @@ function workforceWageRates(profile, settings, monthKey, data, workerId) {
 }
 
 function workforceRuleAmount(ruleKey, settings) {
+  if (String(ruleKey).startsWith("penalty_")) {
+    return Number(settings.penalties.find((penalty) => `penalty_${penalty.id}` === ruleKey)?.amount || 0);
+  }
   const rule = WORKFORCE_RULES.find(([key]) => key === ruleKey);
   const amountKey = rule?.[2];
   return amountKey ? Number(settings[amountKey] || 0) : 0;
@@ -3539,6 +3527,7 @@ function workforceOfficialPenalty(ruleKey, settings, profile, monthKey, data, da
   if (ruleKey === "late") {
     const delay = Math.max(0, Number(minutes) || 0);
     if (delay <= 0) return { amount: 0, description: "أدخل وقت التأخير أولاً" };
+    if (!settings.lateRules.length) return { amount: 0, description: "لا توجد قاعدة تأخير محفوظة" };
     const rule = [...settings.lateRules]
       .sort((left, right) => Number(left.maxMinutes) - Number(right.maxMinutes))
       .find((entry) => delay <= Number(entry.maxMinutes))
@@ -3547,21 +3536,7 @@ function workforceOfficialPenalty(ruleKey, settings, profile, monthKey, data, da
     return { amount: rates.hourly * hours, description: `جزاء تأخير يعادل ${hours} ساعة عمل` };
   }
   if (ruleKey === "absence") {
-    const monthPrefix = date.slice(0, 7);
-    const priorAbsences = data.workforceViolations.filter((record) =>
-      record.workerId === workerId
-      && record.ruleKey === "absence"
-      && record.date?.startsWith(monthPrefix)
-      && record.date < date
-    );
-    const officialDaysAlreadyApplied = priorAbsences
-      .filter((record) => record.decision === "official")
-      .reduce((total, record) => total + Number(record.deductionDays || 0), 0);
-    const absenceCount = priorAbsences.length + 1;
-    const targetDeductionDays = absenceCount >= Number(settings.absenceThreeDayThreshold)
-      ? Number(settings.absenceThreeDayPenaltyDays)
-      : absenceCount * Number(settings.absenceOneDayPenaltyDays);
-    const deductionDays = Math.max(0, targetDeductionDays - officialDaysAlreadyApplied);
+    const deductionDays = 2;
     return { amount: rates.daily * deductionDays, deductionDays, description: `جزاء الغياب يعادل ${deductionDays} يوم عمل` };
   }
   return { amount: workforceRuleAmount(ruleKey, settings), description: "" };
@@ -3588,9 +3563,7 @@ function workforceMonthAccrual(worker, data, settings, monthKey, throughDate) {
     if (dateKey < workforceDateKey(firstDate) || dateKey > throughDate) continue;
     const record = attendanceForWorker.find((entry) => entry.date === dateKey);
     const isFriday = date.getDay() === 5;
-    const status = record?.status || (isFriday
-      ? settings.fridayDefault === "paid" ? "friday_paid" : settings.fridayDefault === "unpaid" ? "friday_unpaid" : ""
-      : "");
+    const status = record?.status || "";
     if (status === "present" || status === "late" || (status === "leave" && record?.paidLeave)) {
       creditedDays += 1;
       const workedMinutes = workforceElapsedMinutes(record?.checkIn, record?.checkOut);
@@ -3600,6 +3573,12 @@ function workforceMonthAccrual(worker, data, settings, monthKey, throughDate) {
       else if (rates.basis === "daily") earned += rates.daily * (record?.status === "leave" ? 1 : Math.min(workedMinutes / workforceShiftMinutes(settings), 1));
       else earned += rates.daily;
     } else if (status === "friday_paid") {
+      creditedDays += 1;
+      earned += rates.basis === "hourly" ? rates.hourly * rates.shiftHours : rates.daily;
+    } else if (status === "absent" && data.workforceViolations.some((violation) =>
+      violation.workerId === worker.id && violation.ruleKey === "absence"
+      && violation.date === dateKey && violation.decision === "official"
+    )) {
       creditedDays += 1;
       earned += rates.basis === "hourly" ? rates.hourly * rates.shiftHours : rates.daily;
     }
@@ -3633,7 +3612,8 @@ function workforceMonthAccrual(worker, data, settings, monthKey, throughDate) {
     .filter((record) => record.workerId === worker.id
       && dateInRange(record.date)
       && ["official", "actual_time"].includes(record.decision))
-    .reduce((total, record) => total + Number(record.deductionAmount || 0), 0);
+    .reduce((total, record) => total + Number(record.deductionAmount
+      || (record.ruleKey === "absence" ? rates.daily * Number(record.deductionDays || 0) : 0)), 0);
   return {
     earned,
     overtimeAmount,
@@ -3658,9 +3638,7 @@ function workforceAttendanceGrid(data, employees, settings) {
     const cells = dates.map((date) => {
       const dateKey = workforceDateKey(date);
       const record = workforceAttendanceRecord(data, worker.id, dateKey);
-      const status = record?.status || (date.getDay() === 5
-        ? settings.fridayDefault === "paid" ? "friday_paid" : settings.fridayDefault === "unpaid" ? "friday_unpaid" : ""
-        : "");
+      const status = record?.status || "";
       const shortStatus = WORKFORCE_ATTENDANCE_LABELS[status] || "غير مسجل";
       return `<td><div class="workforce-cell ${status ? `workforce-cell-${status}` : ""}">
         <button type="button" class="workforce-clock-button workforce-clock-in" data-workforce-clock="in" data-worker-id="${escapeHtml(worker.id)}" data-attendance-date="${dateKey}" aria-label="تسجيل أو تعديل حضور ${escapeHtml(worker.name)} بتاريخ ${dateKey}">حضور <b>${escapeHtml(record?.checkIn || "＋")}</b></button>
@@ -3676,6 +3654,16 @@ function workforceAttendanceGrid(data, employees, settings) {
 function workforceView(data) {
   const employees = workforceEmployees(data);
   const settings = workforceSettings(data);
+  const alreadyLinkedStaffAccounts = new Set(data.workforceProfiles
+    .flatMap((profile) => [profile.linkedUserId, profile.workerId].filter(Boolean)));
+  const pendingStaffAccounts = [
+    ...(data.pendingAccounts || []).filter(workforceAccountCanBeLinked),
+    ...data.users.filter((account) => workforceAccountCanBeLinked(account)
+      && !alreadyLinkedStaffAccounts.has(account.id))
+  ];
+  const pendingStaffOptions = [...new Map(pendingStaffAccounts.map((account) => [account.id, account])).values()]
+    .map((account) => `<option value="${escapeHtml(account.id)}">${escapeHtml(account.name)} · ${escapeHtml(account.username)}${account.phone ? ` · ${escapeHtml(account.phone)}` : ""}${account.status === "pending" ? " · معلق" : account.status === "suspended" ? " · موقوف" : " · نشط"}</option>`)
+    .join("");
   const attendanceRows = workforceAttendanceGrid(data, employees, settings);
   const employeeRows = employees.map((worker) => `<tr>
     <td><strong>${escapeHtml(worker.name)}</strong></td>
@@ -3762,6 +3750,12 @@ function workforceView(data) {
     <label class="field"><span>ساعات الخصم</span><input name="lateRuleHours" type="number" min="0" step="0.25" value="${Number(rule.deductionHours)}" required></label>
     <button type="button" class="row-action order-delete-action" data-remove-late-rule="${index}">حذف القاعدة</button>
   </div>`).join("");
+  const penaltyRows = settings.penalties.map((penalty) => `<div class="workforce-penalty-row">
+    <input type="hidden" name="penaltyId" value="${escapeHtml(penalty.id)}">
+    <label class="field"><span>اسم الخصم / المخالفة</span><input name="penaltyName" value="${escapeHtml(penalty.name)}" maxlength="160" required></label>
+    <label class="field"><span>قيمة الخصم (جنيه)</span><input name="penaltyAmount" type="number" min="0.01" step="0.01" value="${Number(penalty.amount)}" required></label>
+    <button type="button" class="row-action order-delete-action" data-remove-workforce-penalty>حذف</button>
+  </div>`).join("");
   const employeeProfileModal = selectedEmployee ? `<div class="modal-backdrop workforce-profile-backdrop" data-workforce-profile-modal>
     <section class="modal-card workforce-profile-modal" role="dialog" aria-modal="true" aria-labelledby="workforce-profile-title">
       <button class="modal-close" type="button" data-close-workforce-profile aria-label="إغلاق">×</button>
@@ -3797,7 +3791,7 @@ function workforceView(data) {
         ? `الحساب المرتبط: ${escapeHtml(data.users.find((account) => account.id === selectedEmployeeLinkedAccountId)?.username || selectedEmployee.username)}`
         : "ملف العامل غير مرتبط حالياً بحساب تسجيل دخول."}</p>
         <div class="workforce-account-link">
-          <label class="field"><span>اختر حساب عامل / مشرف غير مرتبط</span><select name="linkedUserId" data-workforce-link-account="${escapeHtml(selectedEmployee.id)}"><option value="">اختر الحساب</option>${workforceAccountLinkOptions(selectedEmployee, data)}</select></label>
+          <label class="field"><span>اختر حساب عامل / مشرف غير مرتبط (بما فيها الحسابات المعلقة)</span><select name="linkedUserId" data-workforce-link-account="${escapeHtml(selectedEmployee.id)}"><option value="">اختر الحساب</option>${workforceAccountLinkOptions(selectedEmployee, data)}</select></label>
           <div class="form-actions"><button type="button" class="button button-primary" data-link-workforce-account="${escapeHtml(selectedEmployee.id)}">ربط الحساب</button>${selectedEmployeeLinkedAccountId ? `<button type="button" class="row-action order-delete-action" data-unlink-workforce-account="${escapeHtml(selectedEmployee.id)}">فك الارتباط</button>` : ""}</div>
         </div>`, "فك الارتباط يوقف صلاحية دخول الحساب السابق مع الاحتفاظ بملف العامل وسجلاته.") }
       <div class="stats-grid workforce-profile-stats">
@@ -3831,11 +3825,13 @@ function workforceView(data) {
     const newEmployeeModal = showNewWorkforceEmployeeModal ? `<div class="modal-backdrop workforce-profile-backdrop" data-new-workforce-employee-modal>
       <section class="modal-card workforce-profile-modal workforce-new-employee-modal" role="dialog" aria-modal="true" aria-labelledby="new-workforce-employee-title">
         <button class="modal-close" type="button" data-close-new-workforce-employee aria-label="إغلاق">×</button>
-        <header class="workforce-profile-heading"><div><h2 id="new-workforce-employee-title">إضافة عامل جديد</h2><p>أنشئ ملفاً وظيفياً مستقلاً، ويمكن ربط حساب دخول به لاحقاً.</p></div></header>
+        <header class="workforce-profile-heading"><div><h2 id="new-workforce-employee-title">إضافة ملف عامل جديد</h2><p>يُنشأ الملف من الإدارة أولاً؛ ويمكن ربط طلب تسجيل خارجي به لتفعيل حساب الدخول.</p></div></header>
         <form class="workforce-new-employee-form form-grid">
           <div class="workforce-profile-section wide"><h3>البيانات الأساسية</h3><div class="form-grid">
             <label class="field"><span>اسم العامل</span><input name="employeeName" required maxlength="120" autocomplete="name"></label>
+            <label class="field"><span>نوع الحساب الوظيفي</span><select name="roleKey" required><option value="worker">عامل</option><option value="cutting">مشرف قص</option><option value="sewing">مشرف خياطة</option></select></label>
             <label class="field"><span>المسمى الوظيفي الفعلي</span><select name="jobTitle" required>${WORKER_JOB_TITLES.map((title) => `<option value="${escapeHtml(title)}">${escapeHtml(title)}</option>`).join("")}</select></label>
+            <label class="field wide"><span>حساب تسجيل خارجي معلق (اختياري)</span><select name="linkedUserId"><option value="">إنشاء الملف دون حساب مرتبط</option>${pendingStaffOptions}</select></label>
             <label class="field"><span>الهاتف</span><input name="phone" type="tel" maxlength="40" autocomplete="tel"></label>
             <label class="field"><span>تاريخ التعيين</span><input name="hireDate" type="date" value="${workforceDateKey(new Date())}"></label>
           </div></div>
@@ -3857,7 +3853,7 @@ function workforceView(data) {
         </form>
       </section>
     </div>` : "";
-  const workerOptions = `<option value="all">كل العاملين (لمخالفة تأخير الإنتاج)</option>${employees.map((worker) => `<option value="${escapeHtml(worker.id)}">${escapeHtml(worker.name)}${worker.jobTitle ? ` · ${escapeHtml(worker.jobTitle)}` : ""}</option>`).join("")}`;
+  const workerOptions = employees.map((worker) => `<option value="${escapeHtml(worker.id)}">${escapeHtml(worker.name)}${worker.jobTitle ? ` · ${escapeHtml(worker.jobTitle)}` : ""}</option>`).join("");
   const monthDays = workforceMonthDates(selectedWorkforceMonth);
   const now = new Date();
   const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
@@ -3867,13 +3863,15 @@ function workforceView(data) {
   const cutoffDate = selectedWorkforceCutoffDate.startsWith(`${selectedWorkforceMonth}-`)
     ? selectedWorkforceCutoffDate
     : defaultCutoffDate;
+  const settlementEligibleDate = workforceSettlementOpenDate(selectedWorkforceMonth);
+  const canSettlePeriod = workforceCanSettlePeriod(selectedWorkforceMonth);
   const profileRows = employees.map((worker) => {
     const profile = workforceProfile(data, worker.id);
     return `<tr><td>${escapeHtml(worker.name)}</td><td>${escapeHtml(worker.jobTitle || roleNames[worker.roleKey])}</td><td><form class="workforce-profile-form" data-workforce-profile-form="${escapeHtml(worker.id)}"><select name="wageBasis" aria-label="نوع المرتب"><option value="monthly" ${profile.wageBasis === "monthly" || !profile.wageBasis ? "selected" : ""}>شهري</option><option value="weekly" ${profile.wageBasis === "weekly" ? "selected" : ""}>أسبوعي</option><option value="daily" ${profile.wageBasis === "daily" ? "selected" : ""}>يومي</option><option value="hourly" ${profile.wageBasis === "hourly" ? "selected" : ""}>بالساعة</option></select><input name="wageAmount" type="number" min="0.01" step="0.01" value="${escapeHtml(profile.wageAmount ?? "")}" placeholder="الأجر بالجنيه" aria-label="قيمة الأجر"><button class="row-action" type="submit">حفظ الأجر</button><small class="workforce-inline-rate" data-workforce-rate-preview></small></form></td></tr>`;
   }).join("");
   const settlementRows = employees.map((worker) => {
     const calculation = workforceMonthAccrual(worker, data, settings, selectedWorkforceMonth, cutoffDate);
-    return `<tr><td>${escapeHtml(worker.name)}</td><td>${calculation.creditedDays}</td><td>${workforceMoney(calculation.earned - calculation.overtimeAmount)}</td><td>${workforceMoney(calculation.overtimeAmount)}</td><td>${workforceMoney(calculation.advances)}</td><td>${workforceMoney(calculation.previousPaid)}</td><td>${workforceMoney(calculation.deductions)}</td><td>${workforceMoney(calculation.carryover)}</td><td><strong>${workforceMoney(calculation.netDue)}</strong></td><td><form class="workforce-settlement-form" data-workforce-settlement-form="${escapeHtml(worker.id)}"><input type="hidden" name="throughDate" value="${cutoffDate}"><input name="paidAmount" type="number" step="0.01" value="${Math.max(calculation.netDue, 0).toFixed(2)}" aria-label="المبلغ المدفوع"><button class="row-action" type="submit">حفظ التصفية</button></form></td></tr>`;
+    return `<tr><td>${escapeHtml(worker.name)}</td><td>${calculation.creditedDays}</td><td>${workforceMoney(calculation.earned - calculation.overtimeAmount)}</td><td>${workforceMoney(calculation.overtimeAmount)}</td><td>${workforceMoney(calculation.advances)}</td><td>${workforceMoney(calculation.previousPaid)}</td><td>${workforceMoney(calculation.deductions)}</td><td>${workforceMoney(calculation.carryover)}</td><td><strong>${workforceMoney(calculation.netDue)}</strong></td><td><form class="workforce-settlement-form" data-workforce-settlement-form="${escapeHtml(worker.id)}"><input type="hidden" name="throughDate" value="${cutoffDate}"><input name="paidAmount" type="number" step="0.01" value="${Math.max(calculation.netDue, 0).toFixed(2)}" aria-label="المبلغ المدفوع"><button class="row-action" type="submit" ${canSettlePeriod ? "" : "disabled"}>حفظ التصفية</button></form></td></tr>`;
   }).join("");
   const violationRows = [...data.workforceViolations]
     .sort((left, right) => String(right.date).localeCompare(String(left.date)))
@@ -3885,35 +3883,25 @@ function workforceView(data) {
   const disciplinarySettingsForm = `<form class="workforce-settings-form form-grid">
     <label class="field"><span>بداية الدوام الافتراضية</span><input name="shiftStart" type="time" value="${escapeHtml(settings.shiftStart)}" required></label>
     <label class="field"><span>نهاية الدوام الافتراضية</span><input name="shiftEnd" type="time" value="${escapeHtml(settings.shiftEnd)}" required></label>
-    <label class="field"><span>افتراضي الجمعة</span><select name="fridayDefault"><option value="paid" ${settings.fridayDefault === "paid" ? "selected" : ""}>مدفوعة</option><option value="unpaid" ${settings.fridayDefault === "unpaid" ? "selected" : ""}>غير مدفوعة</option><option value="each_friday" ${settings.fridayDefault === "each_friday" ? "selected" : ""}>تحديد كل جمعة داخل الجدول</option></select></label>
-    <label class="field"><span>خصم التدخين (جنيه)</span><input name="smokingFine" type="number" min="0" step="0.01" value="${settings.smokingFine}"></label>
-    <label class="field"><span>خصم المشروبات (جنيه)</span><input name="beverageFine" type="number" min="0" step="0.01" value="${settings.beverageFine}"></label>
-    <label class="field"><span>خصم الأكل (جنيه)</span><input name="foodFine" type="number" min="0" step="0.01" value="${settings.foodFine}"></label>
-    <label class="field"><span>خصم تشغيل الأغاني (جنيه)</span><input name="musicFine" type="number" min="0" step="0.01" value="${settings.musicFine}"></label>
-    <label class="field"><span>عدد المكالمات المسموح</span><input name="phoneCallsAllowed" type="number" min="0" step="1" value="${settings.phoneCallsAllowed}"></label>
-    <label class="field"><span>أقصى مدة للمكالمة (دقيقة)</span><input name="phoneCallMaxMinutes" type="number" min="0" step="1" value="${settings.phoneCallMaxMinutes}"></label>
-    <label class="field"><span>جزاء مخالفة الهاتف (جنيه)</span><input name="phoneFine" type="number" min="0" step="0.01" value="${settings.phoneFine}"></label>
-    <label class="field"><span>جزاء تأخير الإنتاج لكل عامل بالصالة (جنيه؛ صفر للتنبيه فقط)</span><input name="productionFine" type="number" min="0" step="0.01" value="${settings.productionFine}"></label>
     <label class="field"><span>مضاعف أجر السهر</span><input name="overtimeMultiplier" type="number" min="1" step="0.1" value="${settings.overtimeMultiplier}"></label>
+    <fieldset class="field wide workforce-penalties"><legend>قائمة الخصومات والمخالفات</legend>
+      <p class="muted">أضف البنود التي تعتمدها الإدارة يدويًا؛ لن تُضاف أي بنود افتراضية.</p>
+      <div data-workforce-penalties>${penaltyRows}</div>
+      <button type="button" class="row-action" data-add-workforce-penalty>＋ إضافة خصم جديد</button>
+    </fieldset>
     <fieldset class="field wide workforce-late-rules"><legend>قواعد التأخير والخصم</legend>
       <p class="muted">تُطبّق أول قاعدة يصل حدها إلى مدة التأخير. اترك القاعدة الأخيرة بحد أعلى كبير لتغطية كل التأخيرات.</p>
       <div data-workforce-late-rules>${lateRuleRows}</div>
       <button type="button" class="row-action" data-add-late-rule>＋ إضافة قاعدة تأخير</button>
     </fieldset>
-    <label class="field"><span>جزاء غياب يوم واحد (أيام أجر)</span><input name="absenceOneDayPenaltyDays" type="number" min="0" step="0.5" value="${settings.absenceOneDayPenaltyDays}"></label>
-    <label class="field"><span>حد قاعدة الغياب الشهري (أيام)</span><input name="absenceThreeDayThreshold" type="number" min="1" step="1" value="${settings.absenceThreeDayThreshold}"></label>
-    <label class="field"><span>جزاء الحد الشهري (أيام أجر إجمالاً)</span><input name="absenceThreeDayPenaltyDays" type="number" min="0" step="0.5" value="${settings.absenceThreeDayPenaltyDays}"></label>
-    ${WORKFORCE_RULES.filter(([, titleKey]) => titleKey.endsWith("Rule")).map(([, titleKey]) => `<label class="field wide"><span>نص اللائحة</span><input name="${titleKey}" value="${escapeHtml(settings[titleKey])}" maxlength="240"></label>`).join("")}
-    <div class="form-actions wide"><button class="button button-primary" type="submit">حفظ إعدادات اللائحة والدوام</button></div>
+    <div class="form-actions wide"><button class="button button-primary" type="submit">حفظ إعدادات الدوام والخصومات</button></div>
   </form>`;
   const deductionActionOptions = '<option value="official">تطبيق اللائحة الرسمية</option><option value="actual_time">خصم الوقت الفعلي فقط</option><option value="waived">إعفاء والتغاضي عن الخصم</option>';
   const violationForm = `<form class="workforce-violation-form form-grid">
     <label class="field"><span>العامل</span><select name="workerId" required><option value="">اختر العامل</option>${workerOptions}</select></label>
-    <label class="field"><span>المخالفة</span><select name="ruleKey" required>${WORKFORCE_RULES.map(([key]) => `<option value="${key}">${escapeHtml(workforceRuleTitle(settings, key))}</option>`).join("")}</select></label>
+    <label class="field"><span>المخالفة / الخصم</span><select name="ruleKey" required><option value="">اختر خصماً</option>${WORKFORCE_RULES.map(([key]) => `<option value="${key}">${escapeHtml(workforceRuleTitle(settings, key))}</option>`).join("")}${settings.penalties.map((penalty) => `<option value="penalty_${escapeHtml(penalty.id)}">${escapeHtml(penalty.name)} · ${workforceMoney(penalty.amount)}</option>`).join("")}</select></label>
     <label class="field"><span>تاريخ المخالفة</span><input name="date" type="date" value="${workforceDateKey(new Date())}" required></label>
     <label class="field"><span>مدة التأخير / الوقت الفعلي بالدقائق</span><input name="minutes" type="number" min="0" step="1" value="0"></label>
-    <label class="field"><span>عدد المكالمات في الواقعة (للهاتف)</span><input name="callsCount" type="number" min="0" step="1" value="0"></label>
-    <label class="field"><span>مدة أطول مكالمة (دقيقة)</span><input name="callDuration" type="number" min="0" step="1" value="0"></label>
     <label class="field"><span>قرار الإدارة</span><select name="decision">${deductionActionOptions}</select></label>
     <label class="field wide"><span>ملاحظات</span><textarea name="notes" rows="2" maxlength="500"></textarea></label>
     <p class="workforce-penalty-preview wide" data-workforce-penalty-preview>اختر العامل والمخالفة لمعرفة الخصم المتوقع قبل التسجيل.</p>
@@ -3935,22 +3923,23 @@ function workforceView(data) {
     </div>
     <div class="workforce-panel" data-workforce-panel="attendance"${activeWorkforceTab === "attendance" ? "" : " hidden"}>
       <div class="clients-toolbar"><div><h2>جدول الحضور والغياب الشهري</h2><p>اضغط الحضور لتسجيل وقت بداية الدوام، واضغط مرة أخرى لتعديله. زر الانصراف مستقل ويسجل الوقت الفعلي.</p></div><label class="field workforce-month-picker"><span>الشهر</span><input type="month" data-workforce-month value="${escapeHtml(selectedWorkforceMonth)}"></label></div>
-      ${panel("مصفوفة الحضور", attendanceRows, `الدوام الافتراضي ${settings.shiftStart}–${settings.shiftEnd}. الجمعة: ${settings.fridayDefault === "unpaid" ? "غير مدفوعة" : settings.fridayDefault === "each_friday" ? "تُحدد لكل جمعة من خلية العامل." : "مدفوعة ويمكن تعديل كل يوم."}`)}
+      ${panel("مصفوفة الحضور", attendanceRows, `الدوام الافتراضي ${settings.shiftStart}–${settings.shiftEnd}. الجمعة لا تُحتسب إلا بعد تسجيل حضور السبت التالي، ويمكن تعديلها يدويًا.`)}
     </div>
     <div class="workforce-panel" data-workforce-panel="discipline"${activeWorkforceTab === "discipline" ? "" : " hidden"}>
-      ${panel("تسجيل مخالفة وقرار الخصم", violationForm, "كل مخالفة تُسجل أولاً، ولا يطبق خصم إلا بعد اختيار الإدارة لأحد الخيارات الثلاثة. المخالفة غير الزمنية تُسجل بلا خصم عند اختيار الوقت الفعلي لعدم وجود مدة قابلة للحساب.")}
+      ${panel("تسجيل مخالفة وقرار الخصم", violationForm, "أضف بنود الخصم يدويًا من الإعدادات، ثم اختر العامل والبند وقرار الخصم.")}
       ${panel("سجل المخالفات والقرارات", violationRows.length ? table(["التاريخ","العامل","المخالفة","قرار الخصم","المبلغ","ملاحظات"], violationRows) : '<div class="empty-state">لا توجد مخالفات مسجلة.</div>')}
-      ${panel("إعدادات اللائحة والدوام", disciplinarySettingsForm, "تعديل البنود والمبالغ والحدود الزمنية يطبق على المخالفات الجديدة فقط؛ السجلات السابقة تحتفظ بقرارها.")}
+      ${panel("إعدادات الدوام والخصومات", disciplinarySettingsForm, "تُحفظ البنود التي تضيفها يدويًا وتظهر للاختيار عند تسجيل الخصم؛ السجلات السابقة تحتفظ بقرارها.")}
     </div>
     <div class="workforce-panel" data-workforce-panel="settlements"${activeWorkforceTab === "settlements" ? "" : " hidden"}>
       <div class="clients-toolbar"><div><h2>الأجور وترحيل الرصيد والتصفية</h2><p>حدد أجر كل عامل، ثم راجع الاستحقاق والخصومات والسلف قبل حفظ التصفية.</p></div><label class="field workforce-month-picker"><span>تاريخ التصفية حتى</span><input type="date" data-workforce-cutoff value="${cutoffDate}"></label></div>
       ${panel("إعداد أجور العمال", profileRows.length ? table(["العامل","الوظيفة","الأجر"], profileRows) : '<div class="empty-state">لا توجد ملفات عاملين لإعداد أجورها.</div>', "أجر اليوم = الشهري ÷ 30 أو الأسبوعي ÷ 7، وأجر الساعة = أجر اليوم ÷ 9. تُستخدم هذه القيم تلقائياً في الخصومات والسهر.")}
-      ${panel("حساب المستحقات حتى التاريخ المحدد", employees.length ? table(["العامل","أيام مستحقة","الأجر دون السهر","أجر السهر × 1.5","السلف","مدفوعات راتب سابقة","الخصومات","رصيد مرحّل","صافي قبل الدفع","المبلغ المدفوع / إجراء"], settlementRows) : '<div class="empty-state">لا توجد حسابات عمال نشطة.</div>', "يُرحّل الرصيد بعد كل تصفية إلى الفترة التالية. لا تحتسب الأيام غير المسجلة حضوراً كأيام عمل، والجمعة تتبع إعدادها أو حالة اليوم المسجلة.")}
+      ${panel("حساب المستحقات حتى التاريخ المحدد", employees.length ? table(["العامل","أيام مستحقة","الأجر دون السهر","أجر السهر × 1.5","السلف","مدفوعات راتب سابقة","الخصومات","رصيد مرحّل","صافي قبل الدفع","المبلغ المدفوع / إجراء"], settlementRows) : '<div class="empty-state">لا توجد حسابات عمال نشطة.</div>', canSettlePeriod ? "التصفية متاحة لهذا الشهر؛ لا يُرحّل أي رصيد تلقائيًا قبل حفظها يدويًا." : `تبقى الفترة مفتوحة بلا ترحيل تلقائي. تبدأ التصفية من ${formatRecordDate(settlementEligibleDate)}، أي اليوم الخامس من الشهر التالي.`)}
       ${panel("سجل التصفية", data.workforceSettlements.length ? table(["العامل","الفترة","حتى تاريخ","المستحق","السلف","مدفوعات سابقة","الخصومات","المدفوع","الرصيد المرحّل"], [...data.workforceSettlements].sort((a, b) => String(b.throughDate).localeCompare(String(a.throughDate))).map((record) => `<tr><td>${escapeHtml(employees.find((worker) => worker.id === record.workerId)?.name || record.workerName || "عامل")}</td><td>${escapeHtml(record.period || "—")}</td><td>${formatRecordDate(record.throughDate)}</td><td>${workforceMoney(record.earnedAmount)}</td><td>${workforceMoney(record.advanceAmount)}</td><td>${workforceMoney(record.previousPaidAmount)}</td><td>${workforceMoney(record.deductionAmount)}</td><td>${workforceMoney(record.paidAmount)}</td><td>${workforceMoney(record.balanceAfter)}</td></tr>`)) : '<div class="empty-state">لا توجد تصفيات محفوظة.</div>')}
     </div>
     ${employeeProfileModal}
     ${newEmployeeModal}
     <div class="modal-backdrop" data-workforce-attendance-modal hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="workforce-attendance-title"><button class="modal-close" type="button" data-close-workforce-attendance aria-label="إغلاق">×</button><h2 id="workforce-attendance-title">تعديل حالة اليوم</h2><form class="workforce-attendance-form modal-form"><input type="hidden" name="workerId"><input type="hidden" name="date"><label>حالة اليوم<select name="status"></select></label><label class="workforce-inline-check"><input name="paidLeave" type="checkbox" checked> الإجازة مدفوعة الأجر</label><label>ملاحظات<textarea name="notes" rows="2" maxlength="400"></textarea></label><div class="form-actions"><button class="button button-primary" type="submit">حفظ الحالة</button><button class="row-action" type="button" data-close-workforce-attendance>إلغاء</button></div></form></section></div>
+    <div class="modal-backdrop workforce-absence-backdrop" data-workforce-absence-modal ${pendingWorkforceAbsenceDecision ? "" : "hidden"}><section class="modal-card compact-view-modal" role="dialog" aria-modal="true" aria-labelledby="workforce-absence-title"><button class="modal-close" type="button" data-close-workforce-absence aria-label="إغلاق">×</button><h2 id="workforce-absence-title">تسجيل الغياب وتحديد الخصم</h2><p data-workforce-absence-summary>${pendingWorkforceAbsenceDecision ? `${escapeHtml(workforceEmployees(data).find((worker) => worker.id === pendingWorkforceAbsenceDecision.workerId)?.name || "")} · ${escapeHtml(pendingWorkforceAbsenceDecision.date)}` : ""}</p><div class="workforce-late-actions"><button type="button" class="button button-primary" data-absence-permission="permitted" aria-pressed="false">غياب بإذن · خصم يوم واحد</button><button type="button" class="button button-secondary" data-absence-permission="unexcused" aria-pressed="false">غياب بدون إذن · خصم يومين</button></div><div class="form-actions"><button type="button" class="button button-primary" data-save-workforce-absence disabled>حفظ الغياب والخصم</button></div></section></div>
     <div class="modal-backdrop" data-workforce-clock-modal hidden><section class="modal-card compact-view-modal" role="dialog" aria-modal="true" aria-labelledby="workforce-clock-title"><button class="modal-close" type="button" data-close-workforce-clock aria-label="إغلاق">×</button><h2 id="workforce-clock-title">تعديل الوقت</h2><form class="workforce-clock-form modal-form"><input type="hidden" name="workerId"><input type="hidden" name="date"><input type="hidden" name="clockType"><label>الوقت الجديد<input name="time" type="time" required></label><div class="form-actions"><button class="button button-primary" type="submit">حفظ الوقت</button><button class="row-action" type="button" data-close-workforce-clock>إلغاء</button></div></form></section></div>
     <div class="modal-backdrop workforce-late-backdrop" data-workforce-late-modal ${pendingWorkforceLateDecision ? "" : "hidden"}><section class="modal-card compact-view-modal" role="dialog" aria-modal="true" aria-labelledby="workforce-late-title"><button class="modal-close" type="button" data-close-workforce-late aria-label="إغلاق">×</button><h2 id="workforce-late-title">تم تسجيل حضور متأخر</h2><p data-workforce-late-summary>${pendingWorkforceLateDecision ? `${escapeHtml(workforceEmployees(data).find((worker) => worker.id === pendingWorkforceLateDecision.workerId)?.name || "")} · تأخير ${pendingWorkforceLateDecision.delay} دقيقة · اختر قرار الخصم الآن.` : ""}</p><div class="workforce-late-actions"><button type="button" class="button button-primary${pendingWorkforceLateDecision?.decision === "official" ? " active" : ""}" data-late-decision="official" aria-pressed="${pendingWorkforceLateDecision?.decision === "official"}">تطبيق اللائحة</button><button type="button" class="button button-secondary${pendingWorkforceLateDecision?.decision === "actual_time" ? " active" : ""}" data-late-decision="actual_time" aria-pressed="${pendingWorkforceLateDecision?.decision === "actual_time"}">خصم الوقت الفعلي</button><button type="button" class="row-action${pendingWorkforceLateDecision?.decision === "waived" ? " active" : ""}" data-late-decision="waived" aria-pressed="${pendingWorkforceLateDecision?.decision === "waived"}">إعفاء من الخصم</button></div><div class="form-actions"><button type="button" class="button button-primary" data-save-late-decision ${pendingWorkforceLateDecision?.decision ? "" : "disabled"}>حفظ قرار الخصم</button></div></section></div>
   </section>`;
@@ -3982,22 +3971,46 @@ function bindWorkforceActions(session) {
       const form = event.currentTarget;
       const name = form.elements.employeeName.value.trim();
       const wageAmount = form.elements.wageAmount.value.trim() ? Number(form.elements.wageAmount.value) : 0;
+      const roleKey = form.elements.roleKey.value;
+      const linkedUserId = form.elements.linkedUserId.value || null;
+      const account = linkedUserId
+        ? [...dashboardData.users, ...(dashboardData.pendingAccounts || [])].find((entry) => entry.id === linkedUserId)
+        : null;
       if (!name || (form.elements.wageAmount.value.trim() && (!Number.isFinite(wageAmount) || wageAmount < 0))) {
         window.factoryUI.toast("أدخل اسم العامل ومرتباً صحيحاً أو اترك خانة المرتب فارغة.", "error");
+        return;
+      }
+      if (!["worker", "cutting", "sewing"].includes(roleKey)
+        || (linkedUserId && !workforceAccountCanBeLinked(account))) {
+        window.factoryUI.toast("تحقق من نوع الملف وحساب الدخول المعلق المختار.", "error");
         return;
       }
       const submit = form.querySelector('[type="submit"]');
       submit.disabled = true;
       try {
         const workerId = crypto.randomUUID();
+        if (account) {
+          const { error: accountError } = await supabaseClient.from("users")
+            .update({
+              name,
+              role: roleKey,
+              status: "active",
+              job_title: form.elements.jobTitle.value,
+              updated_at: new Date().toISOString()
+            })
+            .eq("id", account.id)
+            .select("id")
+            .single();
+          if (accountError) throw accountError;
+        }
         await saveFlexibleRecord("workforce_profiles", {
           workerId,
           employeeName: name,
-          username: "—",
-          phone: form.elements.phone.value.trim(),
-          roleKey: "worker",
+          username: account?.username || "—",
+          phone: account?.phone || form.elements.phone.value.trim(),
+          roleKey,
           jobTitle: form.elements.jobTitle.value,
-          linkedUserId: null,
+          linkedUserId: account?.id || null,
           wageBasis: form.elements.wageBasis.value,
           wageAmount,
           hireDate: form.elements.hireDate.value,
@@ -4008,12 +4021,14 @@ function bindWorkforceActions(session) {
           address: form.elements.address.value.trim(),
           emergencyContact: form.elements.emergencyContact.value.trim(),
           employmentNotes: form.elements.employmentNotes.value.trim()
-        });
+        }, null, account?.id || null);
         showNewWorkforceEmployeeModal = false;
         selectedWorkforceEmployeeId = workerId;
         try {
           await refresh();
-          window.factoryUI.toast(`تم إنشاء ملف العامل ${name} بنجاح.`);
+          window.factoryUI.toast(account
+            ? `تم إنشاء ملف ${name} وربط حساب الدخول وتفعيله.`
+            : `تم إنشاء ملف ${name} بنجاح.`);
         } catch (refreshError) {
           reportDashboardFailure(session, "تم حفظ ملف العامل لكن تعذر تحديث القائمة", refreshError);
         }
@@ -4101,7 +4116,7 @@ function bindWorkforceActions(session) {
     const accountId = select?.value;
     const account = [...dashboardData.users, ...(dashboardData.pendingAccounts || [])]
       .find((entry) => entry.id === accountId);
-    if (!worker || !account || !["worker", "cutting", "sewing", null, "pending"].includes(account.roleKey ?? account.role)) {
+    if (!worker || !workforceAccountCanBeLinked(account)) {
       window.factoryUI.toast("اختر حساباً معلقاً أو موقوفاً صالحاً للربط.", "error");
       return;
     }
@@ -4320,6 +4335,7 @@ function bindWorkforceActions(session) {
     button.disabled = true;
     try {
       await saveFlexibleRecord("workforce_attendance", payload, record?._recordId || null, workforceRecordOwnerId(employee, dashboardData));
+      if (clockType === "in") await workforceCreditPreviousFriday(employee, date, dashboardData, payload);
       await refresh();
       window.factoryUI.toast(clockType === "in" ? `تم تسجيل الحضور ${settings.shiftStart}.` : `تم تسجيل الانصراف ${currentTime}.`);
     } catch (error) {
@@ -4345,10 +4361,7 @@ function bindWorkforceActions(session) {
     statusSelect.required = true;
     form.elements.workerId.value = workerId;
     form.elements.date.value = date;
-    const fridayDefault = workforceSettings(dashboardData).fridayDefault;
-    statusSelect.value = record?.status || (isFriday
-      ? fridayDefault === "unpaid" ? "friday_unpaid" : fridayDefault === "each_friday" ? "" : "friday_paid"
-      : "present");
+    statusSelect.value = record?.status || (isFriday ? "" : "present");
     form.elements.paidLeave.checked = record?.paidLeave !== false;
     form.elements.notes.value = record?.notes || "";
     root.querySelector("[data-workforce-attendance-modal]").hidden = false;
@@ -4367,6 +4380,17 @@ function bindWorkforceActions(session) {
       return;
     }
     const status = form.elements.status.value;
+    if (status === "absent") {
+      if (dashboardData.workforceViolations.some((item) =>
+        item.workerId === worker.id && item.ruleKey === "absence" && item.date === date
+      )) {
+        window.factoryUI.toast("تم تسجيل خصم غياب لهذا العامل في هذا التاريخ من قبل.", "error");
+        return;
+      }
+      root.querySelector("[data-workforce-attendance-modal]").hidden = true;
+      showWorkforceAbsenceDecisionModal(root, worker, date, form.elements.notes.value.trim());
+      return;
+    }
     if (status === "late" && !existing?.checkIn) {
       window.factoryUI.toast("سجّل وقت الحضور أولاً حتى يتم حساب التأخير وتحديد قرار الخصم.", "error");
       return;
@@ -4385,6 +4409,9 @@ function bindWorkforceActions(session) {
     submit.disabled = true;
     try {
       await saveFlexibleRecord("workforce_attendance", payload, existing?._recordId || null, workforceRecordOwnerId(worker, dashboardData));
+      if (["present", "late"].includes(status)) {
+        await workforceCreditPreviousFriday(worker, date, dashboardData, payload);
+      }
       root.querySelector("[data-workforce-attendance-modal]").hidden = true;
       const delay = status === "late" && existing?.checkIn
         ? Math.max(0, workforceTimeMinutes(existing.checkIn) - workforceTimeMinutes(workforceSettings(dashboardData).shiftStart))
@@ -4402,6 +4429,78 @@ function bindWorkforceActions(session) {
       reportDashboardFailure(session, "تعذر حفظ الحضور", error);
     } finally {
       submit.disabled = false;
+    }
+  });
+  root.querySelectorAll("[data-absence-permission]").forEach((button) => button.addEventListener("click", () => {
+    if (!pendingWorkforceAbsenceDecision) return;
+    pendingWorkforceAbsenceDecision.permission = button.dataset.absencePermission;
+    const modal = root.querySelector("[data-workforce-absence-modal]");
+    modal.querySelectorAll("[data-absence-permission]").forEach((choice) => {
+      choice.classList.toggle("active", choice === button);
+      choice.setAttribute("aria-pressed", String(choice === button));
+    });
+    modal.querySelector("[data-save-workforce-absence]").disabled = false;
+  }));
+  root.querySelectorAll("[data-close-workforce-absence]").forEach((button) => button.addEventListener("click", () => {
+    pendingWorkforceAbsenceDecision = null;
+    root.querySelector("[data-workforce-absence-modal]").hidden = true;
+  }));
+  root.querySelector("[data-save-workforce-absence]")?.addEventListener("click", async (event) => {
+    event.preventDefault();
+    const button = event.currentTarget;
+    const pending = pendingWorkforceAbsenceDecision;
+    if (!pending || !["permitted", "unexcused"].includes(pending.permission)) {
+      window.factoryUI.toast("اختر غيابًا بإذن أو بدون إذن قبل الحفظ.", "error");
+      return;
+    }
+    const worker = workforceEmployees(dashboardData).find((entry) => entry.id === pending.workerId);
+    if (!worker) {
+      window.factoryUI.toast("تعذر العثور على ملف العامل لتسجيل الغياب.", "error");
+      return;
+    }
+    const existingAttendance = workforceAttendanceRecord(dashboardData, worker.id, pending.date);
+    const deductionDays = pending.permission === "permitted" ? 1 : 2;
+    const profile = workforceProfile(dashboardData, worker.id);
+    const settings = workforceSettings(dashboardData);
+    const amount = workforceWageRates(profile, settings, pending.date.slice(0, 7), dashboardData, worker.id).daily * deductionDays;
+    const decisionDescription = pending.permission === "permitted"
+      ? "غياب بإذن · خصم يوم واحد"
+      : "غياب بدون إذن · خصم يومين (يوم الغياب + يوم جزاء)";
+    button.disabled = true;
+    try {
+      await saveFlexibleRecord("workforce_attendance", {
+        workerId: worker.id,
+        workerName: worker.name,
+        date: pending.date,
+        status: "absent",
+        checkIn: existingAttendance?.checkIn || "",
+        checkOut: existingAttendance?.checkOut || "",
+        paidLeave: false,
+        notes: pending.notes
+      }, existingAttendance?._recordId || null, workforceRecordOwnerId(worker, dashboardData));
+      const existingViolation = dashboardData.workforceViolations.find((record) =>
+        record.workerId === worker.id && record.ruleKey === "absence" && record.date === pending.date
+      );
+      await saveFlexibleRecord("workforce_violations", {
+        workerId: worker.id,
+        workerName: worker.name,
+        ruleKey: "absence",
+        ruleLabel: "غياب",
+        date: pending.date,
+        decision: "official",
+        decisionDescription,
+        deductionAmount: amount,
+        deductionDays,
+        permission: pending.permission,
+        notes: pending.notes
+      }, existingViolation?._recordId || null, workforceRecordOwnerId(worker, dashboardData));
+      pendingWorkforceAbsenceDecision = null;
+      await refresh();
+      window.factoryUI.toast(`تم تسجيل ${decisionDescription}. قيمة الخصم الحالية: ${workforceMoney(amount)}.`);
+    } catch (error) {
+      reportDashboardFailure(session, "تعذر حفظ الغياب أو الخصم", error);
+    } finally {
+      button.disabled = false;
     }
   });
   root.querySelectorAll("[data-close-workforce-clock]").forEach((button) => button.addEventListener("click", () => {
@@ -4441,6 +4540,7 @@ function bindWorkforceActions(session) {
     submit.disabled = true;
     try {
       await saveFlexibleRecord("workforce_attendance", payload, existing._recordId || null, workforceRecordOwnerId(worker, dashboardData));
+      if (clockType === "in") await workforceCreditPreviousFriday(worker, date, dashboardData, payload);
       root.querySelector("[data-workforce-clock-modal]").hidden = true;
       if (delay > 0) showWorkforceLateDecisionModal(root, worker, date, delay);
       try {
@@ -4580,14 +4680,20 @@ function bindWorkforceActions(session) {
     row.innerHTML = `<label class="field"><span>أقصى تأخير بالدقائق</span><input name="lateRuleMax" type="number" min="1" step="1" value="${finiteMaximum + 15}" required></label><label class="field"><span>ساعات الخصم</span><input name="lateRuleHours" type="number" min="0" step="0.25" value="${defaultHours}" required></label><button type="button" class="row-action order-delete-action" data-remove-late-rule>حذف القاعدة</button>`;
     list.append(row);
   });
+  root.querySelector("[data-add-workforce-penalty]")?.addEventListener("click", () => {
+    const row = document.createElement("div");
+    row.className = "workforce-penalty-row";
+    row.innerHTML = `<input type="hidden" name="penaltyId" value="${crypto.randomUUID()}"><label class="field"><span>اسم الخصم / المخالفة</span><input name="penaltyName" maxlength="160" required></label><label class="field"><span>قيمة الخصم (جنيه)</span><input name="penaltyAmount" type="number" min="0.01" step="0.01" required></label><button type="button" class="row-action order-delete-action" data-remove-workforce-penalty>حذف</button>`;
+    root.querySelector("[data-workforce-penalties]").append(row);
+    row.querySelector('[name="penaltyName"]').focus();
+  });
+  root.querySelector("[data-workforce-penalties]")?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-remove-workforce-penalty]");
+    if (button) button.closest(".workforce-penalty-row").remove();
+  });
   root.querySelector("[data-workforce-late-rules]")?.addEventListener("click", (event) => {
     const button = event.target.closest("[data-remove-late-rule]");
     if (!button) return;
-    const rows = root.querySelectorAll(".workforce-late-rule-row");
-    if (rows.length <= 1) {
-      window.factoryUI.toast("يجب الإبقاء على قاعدة تأخير واحدة على الأقل.", "error");
-      return;
-    }
     button.closest(".workforce-late-rule-row").remove();
   });
   root.querySelector(".workforce-settings-form")?.addEventListener("submit", async (event) => {
@@ -4595,15 +4701,27 @@ function bindWorkforceActions(session) {
     const form = event.currentTarget;
     const previous = dashboardData.workforceSettings.find((record) => record.settingKey === "main");
     const values = Object.fromEntries(new FormData(form));
+    const penaltyIds = [...form.querySelectorAll('[name="penaltyId"]')].map((input) => input.value);
+    const penaltyNames = [...form.querySelectorAll('[name="penaltyName"]')].map((input) => input.value.trim());
+    const penaltyAmounts = [...form.querySelectorAll('[name="penaltyAmount"]')].map((input) => Number(input.value));
+    const penalties = penaltyIds.map((id, index) => ({
+      id,
+      name: penaltyNames[index],
+      amount: penaltyAmounts[index]
+    }));
+    if (penalties.some((penalty) => !penalty.id || !penalty.name || !Number.isFinite(penalty.amount) || penalty.amount <= 0)) {
+      window.factoryUI.toast("أدخل اسمًا وقيمة صحيحة لكل خصم، أو احذف السطر غير المكتمل.", "error");
+      return;
+    }
+    values.penalties = penalties;
     const lateRuleMaximums = [...form.querySelectorAll('[name="lateRuleMax"]')].map((input) => Number(input.value));
     const lateRuleHours = [...form.querySelectorAll('[name="lateRuleHours"]')].map((input) => Number(input.value));
     const lateRules = lateRuleMaximums.map((maxMinutes, index) => ({ maxMinutes, deductionHours: lateRuleHours[index] }))
       .sort((left, right) => left.maxMinutes - right.maxMinutes);
-    if (!lateRules.length
-      || lateRules.some((rule, index) => !Number.isFinite(rule.maxMinutes) || rule.maxMinutes <= 0
+    if (lateRules.some((rule, index) => !Number.isFinite(rule.maxMinutes) || rule.maxMinutes <= 0
         || !Number.isFinite(rule.deductionHours) || rule.deductionHours < 0
         || (index > 0 && rule.maxMinutes <= lateRules[index - 1].maxMinutes))
-      || lateRules[lateRules.length - 1].maxMinutes < 999999) {
+      || (lateRules.length && lateRules[lateRules.length - 1].maxMinutes < 999999)) {
       window.factoryUI.toast("تحقق من قواعد التأخير: الحدود موجبة ومتزايدة، وساعات الخصم غير سالبة، وآخر قاعدة تغطي كل مدد التأخير.", "error");
       return;
     }
@@ -4613,6 +4731,9 @@ function bindWorkforceActions(session) {
     for (const key of numericFields) values[key] = Number(values[key] ?? WORKFORCE_DEFAULTS[key]);
     delete values.lateRuleMax;
     delete values.lateRuleHours;
+    delete values.penaltyId;
+    delete values.penaltyName;
+    delete values.penaltyAmount;
     if (workforceTimeMinutes(values.shiftEnd) <= workforceTimeMinutes(values.shiftStart)
       || !Number.isFinite(values.overtimeMultiplier) || values.overtimeMultiplier < 1) {
       window.factoryUI.toast("تحقق من وقت الدوام ومضاعف أجر السهر (لا يقل عن 1).", "error");
@@ -4640,32 +4761,22 @@ function bindWorkforceActions(session) {
       const decision = violationForm.elements.decision.value;
       const settings = workforceSettings(dashboardData);
       const employees = workforceEmployees(dashboardData);
-      const targets = selectedWorkerId === "all" && ruleKey === "production"
-        ? employees
-        : employees.filter((entry) => entry.id === selectedWorkerId);
-      if (!targets.length || !date) return;
+      const targets = employees.filter((entry) => entry.id === selectedWorkerId);
+      if (!targets.length || !date || !ruleKey) return;
       let totalAmount = 0;
       let description = selectedWorkerId === "all" ? "تأخير الإنتاج على الصالة بالكامل" : "";
       for (const worker of targets) {
         const profile = workforceProfile(dashboardData, worker.id);
-        if (decision === "official") {
+        if (decision === "official" || (decision === "actual_time" && ruleKey.startsWith("penalty_"))) {
           const result = workforceOfficialPenalty(ruleKey, settings, profile, date.slice(0, 7), dashboardData, date, minutes, worker.id);
           totalAmount += result.amount;
           if (!description) description = result.description;
-        } else if (decision === "actual_time" && ["late", "absence", "phone"].includes(ruleKey)) {
+        } else if (decision === "actual_time" && ruleKey === "late") {
           totalAmount += workforceWageRates(profile, settings, date.slice(0, 7), dashboardData, worker.id).hourly * minutes / 60;
           description = `${minutes} دقيقة فعلية`;
         }
       }
-      const phoneViolation = ruleKey === "phone"
-        && (Number(violationForm.elements.callsCount.value || 0) > Number(settings.phoneCallsAllowed)
-          || Number(violationForm.elements.callDuration.value || 0) > Number(settings.phoneCallMaxMinutes));
-      if (ruleKey === "phone" && !phoneViolation) {
-        root.querySelector("[data-workforce-penalty-preview]").textContent =
-          `لا تتجاوز الواقعة حدود الهاتف الحالية: ${settings.phoneCallsAllowed} مكالمات، ${settings.phoneCallMaxMinutes} دقائق للمكالمة.`;
-        return;
-      }
-      const noWage = decision !== "waived" && totalAmount === 0 && ["late", "absence"].includes(ruleKey);
+      const noWage = decision !== "waived" && totalAmount === 0 && ruleKey === "late";
       root.querySelector("[data-workforce-penalty-preview]").textContent = decision === "waived"
         ? "سيُحفظ التنبيه دون خصم مالي."
         : `الخصم المتوقع ${selectedWorkerId === "all" ? "للصالة" : "للعامل"}: ${workforceMoney(totalAmount)}${description ? ` · ${description}` : ""}${noWage ? " · أضف أجر العامل لحساب قيمة الخصم" : ""}`;
@@ -4682,28 +4793,15 @@ function bindWorkforceActions(session) {
       const targets = selectedWorkerId === "all" && ruleKey === "production"
         ? employees
         : employees.filter((entry) => entry.id === selectedWorkerId);
-      if (!targets.length || !date || !["official", "actual_time", "waived"].includes(decision)) {
+      if (!targets.length || !date || !ruleKey || !["official", "actual_time", "waived"].includes(decision)) {
         window.factoryUI.toast("أكمل بيانات العامل والتاريخ وقرار المخالفة.", "error");
         return;
       }
-      if (selectedWorkerId === "all" && ruleKey !== "production") {
-        window.factoryUI.toast("اختيار جميع العاملين متاح لمخالفة تأخير الإنتاج فقط.", "error");
+      if (selectedWorkerId === "all") {
+        window.factoryUI.toast("اختر عاملاً واحداً لتسجيل الخصم.", "error");
         return;
       }
       const minutes = workforceActualMinutes(violationForm, ruleKey, settings, dashboardData, selectedWorkerId, date);
-      if (ruleKey === "absence" && targets.some((worker) => dashboardData.workforceViolations.some((item) =>
-        item.workerId === worker.id && item.ruleKey === "absence" && item.date === date
-      ))) {
-        window.factoryUI.toast("تم تسجيل غياب غير مأذون لهذا العامل في هذا التاريخ من قبل.", "error");
-        return;
-      }
-      const phoneViolation = ruleKey === "phone"
-        && (Number(violationForm.elements.callsCount.value || 0) > Number(settings.phoneCallsAllowed)
-          || Number(violationForm.elements.callDuration.value || 0) > Number(settings.phoneCallMaxMinutes));
-      if (ruleKey === "phone" && !phoneViolation) {
-        window.factoryUI.toast("لا تتجاوز الواقعة حدود المكالمات المسموحة في اللائحة.", "error");
-        return;
-      }
       if (ruleKey === "late" && minutes <= 0) {
         window.factoryUI.toast("أدخل مدة التأخير بالدقائق لتحديد الخصم.", "error");
         return;
@@ -4715,27 +4813,25 @@ function bindWorkforceActions(session) {
       for (const worker of targets) {
         const profile = workforceProfile(dashboardData, worker.id);
         const rates = workforceWageRates(profile, settings, date.slice(0, 7), dashboardData, worker.id);
-        if (decision === "actual_time" && ["late", "absence", "phone"].includes(ruleKey) && rates.rate <= 0) {
+        if (decision === "actual_time" && ruleKey === "late" && rates.rate <= 0) {
           window.factoryUI.toast(`سجل أجر العامل ${worker.name} أولاً لحساب خصم الوقت الفعلي.`, "error");
           return;
         }
-        if (decision === "official" && ["late", "absence"].includes(ruleKey) && rates.rate <= 0) {
+        if (decision === "official" && ruleKey === "late" && rates.rate <= 0) {
           window.factoryUI.toast(`سجل أجر العامل ${worker.name} أولاً لحساب جزاء التأخير أو الغياب.`, "error");
           return;
         }
         let amount = 0;
         let deductionDays = 0;
         let description = "";
-        if (decision === "official") {
+        if (decision === "official" || (decision === "actual_time" && ruleKey.startsWith("penalty_"))) {
           const penalty = workforceOfficialPenalty(ruleKey, settings, profile, date.slice(0, 7), dashboardData, date, minutes, worker.id);
           amount = penalty.amount;
           deductionDays = penalty.deductionDays || 0;
-          description = penalty.description || "تطبيق الجزاء الرسمي";
-        } else if (decision === "actual_time" && ["late", "absence", "phone"].includes(ruleKey)) {
+          description = decision === "actual_time" ? "قيمة الخصم المحددة في القائمة" : penalty.description || "تطبيق الخصم المحدد";
+        } else if (decision === "actual_time" && ruleKey === "late") {
           amount = rates.hourly * minutes / 60;
           description = `خصم ${minutes} دقيقة فعلية`;
-        } else if (decision === "actual_time") {
-          description = "تسجيل تنبيه فقط؛ لا توجد مدة فعلية قابلة للحساب";
         } else {
           description = "إعفاء من الخصم المالي";
         }
@@ -4753,8 +4849,6 @@ function bindWorkforceActions(session) {
             decision,
             decisionDescription: description,
             actualMinutes: minutes,
-            callsCount: Number(violationForm.elements.callsCount.value || 0),
-            callDuration: Number(violationForm.elements.callDuration.value || 0),
             deductionAmount: amount,
             deductionDays,
             notes: violationForm.elements.notes.value.trim()
@@ -4788,6 +4882,10 @@ function bindWorkforceActions(session) {
     const settings = workforceSettings(dashboardData);
     if (!worker || !throughDate || throughDate.slice(0, 7) !== selectedWorkforceMonth || throughDate > workforceDateKey(new Date())) {
       window.factoryUI.toast("تعذر تحديد العامل أو تاريخ التصفية.", "error");
+      return;
+    }
+    if (!workforceCanSettlePeriod(selectedWorkforceMonth)) {
+      window.factoryUI.toast(`الفترة تبقى مفتوحة حتى ${formatRecordDate(workforceSettlementOpenDate(selectedWorkforceMonth))}، ولا يمكن تصفيتها قبل ذلك.`, "error");
       return;
     }
     if (dashboardData.workforceSettlements.some((record) => record.workerId === workerId && record.throughDate === throughDate)) {
@@ -7578,45 +7676,6 @@ function bindActions(session) {
       }
       return;
     }
-    if (button.dataset.action === "approve-staff-existing") {
-      const accountId = button.dataset.accountId;
-      const card = button.closest("[data-pending-account]");
-      const selectedSection = button.closest("[data-pending-options]");
-      const profileId = selectedSection?.querySelector("[data-pending-staff-map]")?.value;
-      const profile = dashboardData.users.find((user) => user.id === profileId);
-      const account = (dashboardData.pendingAccounts || []).find((user) => user.id === accountId);
-      if (!profileId || !profile) {
-        window.factoryUI.toast("اختر ملف موظف مسجلاً مسبقاً أولاً.", "error");
-        return;
-      }
-      if (!await window.factoryUI.confirmAction({
-        title: "ربط تسجيل الدخول بملف الموظف",
-        message: `سيُنقل ملف ${profile.name} إلى بيانات الدخول ${account?.username || "للحساب الجديد"}، وتُوقف بيانات الدخول القديمة للموظف. ستبقى المهام والسجلات مرتبطة بملفه.`,
-        confirmLabel: "ربط الحساب",
-        danger: true
-      })) return;
-      button.disabled = true;
-      let mappingSaved = false;
-      try {
-        const { error } = await supabaseClient.rpc("admin_link_factory_staff_account", {
-          requested_profile_user_id: profileId,
-          requested_pending_user_id: accountId
-        });
-        if (error?.code === "PGRST202") {
-          throw new Error("دالة ربط حساب الموظف غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
-        }
-        if (error) throw error;
-        mappingSaved = true;
-        await refreshDashboard(session);
-        window.factoryUI.toast("تم ربط بيانات الدخول بملف الموظف ونقل مهامه وسجلاته.");
-      } catch (error) {
-        button.disabled = false;
-        reportDashboardFailure(session, mappingSaved
-          ? "تم ربط الحساب لكن تعذر تحديث اللوحة"
-          : "تعذر ربط تسجيل الدخول بملف الموظف", error);
-      }
-      return;
-    }
     if (["approve-client-existing", "approve-client-new", "link-client-account"].includes(button.dataset.action)) {
       const isManualLink = button.dataset.action === "link-client-account";
       const isExistingProfileApproval = button.dataset.action === "approve-client-existing";
@@ -7669,57 +7728,6 @@ function bindActions(session) {
         reportDashboardFailure(session, mappingSaved
           ? "تم اعتماد / ربط الحساب لكن تعذر تحديث اللوحة"
           : "تعذر اعتماد / ربط حساب العميل", error);
-      }
-      return;
-    }
-    if (["approve-worker-new", "approve-supervisor-new"].includes(button.dataset.action)) {
-      const isWorker = button.dataset.action === "approve-worker-new";
-      const card = button.closest("[data-pending-account]");
-      const accountId = button.dataset.accountId;
-      const selectedRole = isWorker ? "worker" : card?.querySelector("[data-pending-supervisor-role]")?.value;
-      if (!selectedRole || (isWorker ? selectedRole !== "worker" : !["cutting", "sewing"].includes(selectedRole))) {
-        window.factoryUI.toast(isWorker ? "تعذر تحديد دور العامل." : "اختر نوع الموظف: مشرف قص أو مشرف خياطة.", "error");
-        return;
-      }
-      const selectedWorkerJobTitle = isWorker ? card?.querySelector("[data-pending-worker-job-title]")?.value : "";
-      if (isWorker && !WORKER_JOB_TITLES.includes(selectedWorkerJobTitle)) {
-        window.factoryUI.toast("اختر المسمى الوظيفي الفعلي للعامل قبل الاعتماد.", "error");
-        return;
-      }
-      const account = (dashboardData.pendingAccounts || []).find((user) => user.id === accountId);
-      const jobTitle = selectedRole === "cutting" ? "مشرف قص"
-        : selectedRole === "sewing" ? "مشرف خياطة" : selectedWorkerJobTitle;
-      if (!await window.factoryUI.confirmAction({
-        title: isWorker ? "اعتماد عامل جديد" : "تفعيل موظف جديد",
-        message: `سيتم تفعيل حساب ${account?.name || "المستخدم"} بدور ${jobTitle}.`,
-        confirmLabel: isWorker ? "اعتماد العامل" : "تفعيل الموظف"
-      })) return;
-      button.disabled = true;
-      let accountActivated = false;
-      try {
-        const { data, error } = await supabaseClient.from("users")
-          .update({
-            role: selectedRole,
-            status: "active",
-            job_title: jobTitle,
-            can_submit_production: false,
-            updated_at: new Date().toISOString()
-          })
-          .eq("id", accountId)
-          .eq("status", "pending")
-          .is("role", null)
-          .select("id")
-          .maybeSingle();
-        if (error) throw error;
-        if (!data) throw new Error("لم يعد طلب الحساب معلقاً. حدّث الصفحة وحاول مجدداً.");
-        accountActivated = true;
-        await refreshDashboard(session);
-        window.factoryUI.toast(isWorker ? "تم اعتماد العامل الجديد." : "تم تفعيل الموظف الجديد.");
-      } catch (error) {
-        button.disabled = false;
-        reportDashboardFailure(session, accountActivated
-          ? "تم تفعيل الحساب لكن تعذر تحديث اللوحة"
-          : "تعذر تفعيل الحساب", error);
       }
       return;
     }
@@ -7781,8 +7789,8 @@ function bindActions(session) {
     }
     if (button.dataset.action === "activate-account") {
       const roleSelect = [...document.querySelectorAll("[data-pending-role]")].find((item) => item.dataset.pendingRole === button.dataset.accountId);
-      if (!roleSelect || !["client", "worker", "cutting", "sewing"].includes(roleSelect.value)) {
-        window.factoryUI.toast("اختر دورًا صالحًا قبل تفعيل الحساب.", "error");
+      if (!roleSelect || roleSelect.value !== "client") {
+        window.factoryUI.toast("لا يُفعّل حساب العامل أو المشرف مباشرة؛ أنشئ ملفه من تبويب العاملين واربط الحساب المعلق منه.", "error");
         return;
       }
       const accountName = button.closest("tr")?.cells[0]?.textContent || "";

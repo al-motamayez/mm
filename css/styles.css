@@ -463,10 +463,22 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .worker-finance-stats .stat-card:first-child, .worker-finance-stats .stat-card:nth-child(3) { border-color: #b9d9c3; background: linear-gradient(145deg, #eaf6ed, #fff); }
 .worker-legacy-stats { margin-top: 18px; }
 .workforce-late-backdrop { z-index: 1500; }
+.workforce-absence-backdrop { z-index: 1510; }
+.workforce-penalties { min-width: 0; }
+.workforce-penalties > div { display: grid; gap: 10px; margin-bottom: 12px; }
+.workforce-penalty-row { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(150px, .7fr) auto; align-items: end; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: #fbfdfb; }
+.workforce-penalty-row input[type="hidden"] { display: none; }
 .workforce-late-rules { min-width: 0; }
 .workforce-late-rules > div { display: grid; gap: 8px; margin-bottom: 10px; }
 .workforce-late-rule-row { display: grid; grid-template-columns: minmax(130px, 1fr) minmax(130px, 1fr) auto; align-items: end; gap: 8px; padding: 9px; border: 1px solid var(--line); border-radius: 8px; }
 .workforce-late-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+@media (max-width: 700px) {
+  .workforce-penalty-row { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .workforce-penalty-row > button { grid-column: 1 / -1; justify-self: start; }
+}
+@media (max-width: 460px) {
+  .workforce-penalty-row { grid-template-columns: minmax(0, 1fr); }
+}
 @media (max-width: 700px) {
   .workforce-employee-toolbar { align-items: stretch; flex-direction: column; }
   .workforce-add-employee { width: 100%; }
