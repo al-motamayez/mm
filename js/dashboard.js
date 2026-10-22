@@ -52,7 +52,8 @@ const WORK_STAGES = [
   ["finishing", "تشطيب"],
   ["ironing", "مكوى"],
   ["printing", "طباعة"],
-  ["packaging", "تكييس"]
+  ["packaging", "تكييس / أمبلاج"],
+  ["sorting", "فرز"]
 ];
 const FACTORY_ORDER_STATUSES = [
   "قيد الانتظار",
@@ -814,7 +815,8 @@ function factoryOrderStatusSequence(order) {
     finishing: ["جاري التشطيب", "تم التشطيب"],
     ironing: ["جاري المكواة", "تم الكي"],
     printing: ["جاري الطباعة", "تمت الطباعة"],
-    packaging: ["جاري التكييس", "تم التكييس"]
+    packaging: ["جاري التكييس", "تم التكييس"],
+    sorting: ["جاري الفرز", "تم الفرز"]
   };
   (order.workStages || []).forEach((stage) => {
     if (stageStatuses[stage]) statuses.push(...stageStatuses[stage]);
@@ -1740,8 +1742,8 @@ function bindCustomColorPickers() {
 
 function statusClass(value) {
   if (String(value).startsWith("قيد الفرش")
-    || ["قيد المراجعة", "قيد التنفيذ", "قيد الخياطة", "قيد الإنتاج", "قيد الانتظار", "معلق", "تحت الإنشاء", "تم الفرش", "جاهز للقص", "في انتظار الخياطة", "جاري الخياطة", "جاري التشطيب", "جاري المكواة", "جاري الطباعة", "جاري التكييس", "معلق - في انتظار الخياطة", "جار العمل"].includes(value)) return "warning";
-  if (["جديدة", "جاهز للتسليم", "تم القص", "تم التشطيب", "تم الكي", "تمت الطباعة", "تم التكييس", "في الخياطة", "متاح للخياطة", "متاح للإمبلاج / التعبئة"].includes(value)) return "info";
+    || ["قيد المراجعة", "قيد التنفيذ", "قيد الخياطة", "قيد الإنتاج", "قيد الانتظار", "معلق", "تحت الإنشاء", "تم الفرش", "جاهز للقص", "في انتظار الخياطة", "جاري الخياطة", "جاري التشطيب", "جاري المكواة", "جاري الطباعة", "جاري التكييس", "جاري الفرز", "معلق - في انتظار الخياطة", "جار العمل"].includes(value)) return "warning";
+  if (["جديدة", "جاهز للتسليم", "تم القص", "تم التشطيب", "تم الكي", "تمت الطباعة", "تم التكييس", "تم الفرز", "في الخياطة", "متاح للخياطة", "متاح للإمبلاج / التعبئة"].includes(value)) return "info";
   if (value === "جاهز للتسليم" || value === "تمت الخياطة" || value === "تم التسليم" || value === "تم التسليم بالكامل" || value === "تم التسليم والإغلاق") return "";
   return "muted";
 }
@@ -1863,7 +1865,7 @@ function orderCards(models, withActions = false) {
       && !["متاح للخياطة", "قيد الخياطة", "مكتمل"].includes(item.sewingStageStatus);
     return `<article class="order-card order-compact-row">
       ${modelImageMarkup(item.modelImageUrl)}
-      <div class="order-compact-name"><strong>${escapeHtml(item.name || item.modelNumber || "موديل بدون اسم")}</strong><small>كود المصنع: ${escapeHtml(item.factoryModelCode || "—")} · رقم الموديل: ${escapeHtml(item.modelNumber || "—")}</small><small>كود العميل: ${escapeHtml(item.clientModelCode || "—")} · الأقسام: ${escapeHtml(workStageLabels(item.workStages).join("، ") || "—")}</small></div>
+      <div class="order-compact-name"><strong>${escapeHtml(item.name || item.modelNumber || "موديل بدون اسم")}</strong><small>كود الموديل بالنظام: ${escapeHtml(item.factoryModelCode || "—")} · رقم الموديل: ${escapeHtml(item.modelNumber || "—")}</small><small>كود الموديل لدى العميل: ${escapeHtml(item.clientModelCode || "—")} · الأقسام: ${escapeHtml(workStageLabels(item.workStages).join("، ") || "—")}</small></div>
       <span class="order-compact-client">${escapeHtml(item.client || "غير مربوط بعميل")}</span>
       <span class="order-compact-quantity"><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.quantity)} قطعة</strong>${["تم التسليم", "تم التسليم بالكامل", "تم التسليم والإغلاق"].includes(item.status) ? `<small>الأصلي: ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.originalQuantity)} · المسلّم: ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.deliveredPieces)} · ${item.quantityDifference > 0 ? `زيادة ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.quantityDifference)}` : item.quantityDifference < 0 ? `نقص ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(Math.abs(item.quantityDifference))}` : "مطابق"}</small>` : ""}</span>
       <span class="order-compact-price"><strong>${money(item.pricePerPiece)} / قطعة</strong><small>الإجمالي: ${money(item.totalAmount + item.expectedAmount || item.quantity * item.pricePerPiece + item.operationalExpenses)}</small></span>
@@ -1890,7 +1892,7 @@ function clientOrderRows(orders) {
 function clientOrderCards(orders) {
   if (!orders.length) return '<div class="empty-state">لا توجد طلبيات لعرضها حاليًا.</div>';
   return `<div class="order-cards">${orders.map((item) => `<article class="order-card client-order-card">
-    <header class="order-card-heading">${modelImageMarkup(item.modelImageUrl)}<div><p class="order-card-label">كود المصنع: ${escapeHtml(item.factoryModelCode || "—")} · كود العميل: ${escapeHtml(item.clientModelCode || "—")}${item.modelNumber ? ` · رقم الموديل ${escapeHtml(item.modelNumber)}` : ""}</p><h3>${escapeHtml(item.name || item.modelNumber || "موديل بدون اسم")}</h3></div>${statusTag(item.displayStatus || item.status)}</header>
+    <header class="order-card-heading">${modelImageMarkup(item.modelImageUrl)}<div><p class="order-card-label">كود الموديل بالنظام: ${escapeHtml(item.factoryModelCode || "—")} · كود الموديل لدى العميل: ${escapeHtml(item.clientModelCode || "—")}${item.modelNumber ? ` · رقم الموديل ${escapeHtml(item.modelNumber)}` : ""}</p><h3>${escapeHtml(item.name || item.modelNumber || "موديل بدون اسم")}</h3></div>${statusTag(item.displayStatus || item.status)}</header>
     <dl class="order-card-details">
       <div><dt>كود الموديل لدى العميل</dt><dd>${escapeHtml(item.clientModelCode || "—")}</dd></div>
       ${item.cutterName ? `<div><dt>مين اللي قص القصة؟</dt><dd>${escapeHtml(item.cutterName)}</dd></div>` : ""}
@@ -2319,7 +2321,7 @@ function clientDetailsView(client, data) {
     const locked = Boolean(order.archivedAt) || LOCKED_FACTORY_ORDER_STATUSES.includes(order.status);
     return `<article class="order-card client-history-card">
     <label class="print-model-select"><input type="checkbox" data-print-model-select="${escapeHtml(order.id)}"><span>اختيار للطباعة</span></label>
-    <header class="order-card-heading">${modelImageMarkup(order.modelImageUrl)}<div><p class="order-card-label">${archived ? "طلب مؤرشف" : "طلب حالي"} · كود المصنع ${escapeHtml(order.factoryModelCode || "—")}${order.clientModelCode ? ` · كود العميل ${escapeHtml(order.clientModelCode)}` : ""}${order.modelNumber ? ` · رقم الموديل ${escapeHtml(order.modelNumber)}` : ""}</p><h3>${escapeHtml(order.name || "موديل بدون اسم")}</h3></div>${statusTag(order.displayStatus || order.status)}</header>
+    <header class="order-card-heading">${modelImageMarkup(order.modelImageUrl)}<div><p class="order-card-label">${archived ? "طلب مؤرشف" : "طلب حالي"} · كود الموديل بالنظام: ${escapeHtml(order.factoryModelCode || "—")}${order.clientModelCode ? ` · كود الموديل لدى العميل: ${escapeHtml(order.clientModelCode)}` : ""}${order.modelNumber ? ` · رقم الموديل ${escapeHtml(order.modelNumber)}` : ""}</p><h3>${escapeHtml(order.name || "موديل بدون اسم")}</h3></div>${statusTag(order.displayStatus || order.status)}</header>
     <dl class="order-card-details">
       <div><dt>العدد الإجمالي بعد القص</dt><dd>${order.quantity ? `${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity)} قطعة` : "بانتظار الحصر"}</dd></div>
       <div><dt>المستلم</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.deliveredPieces)} قطعة</dd></div>
@@ -2489,7 +2491,7 @@ function modelDetailsModalView(order, showPricingBreakdown = false) {
   const deliveryHistory = order.deliveryHistory?.length
     ? table(["#", "الكمية", "المستلم", "تاريخ التسليم", ...(canEditDeliveryQuantities ? ["تعديل التسليم"] : [])], order.deliveryHistory.map((delivery, index) => `<tr><td>${index + 1}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(delivery.quantity)} قطعة</td><td>${escapeHtml(delivery.recipient_name || "—")}</td><td>${formatDateTime(delivery.delivered_at)}</td>${canEditDeliveryQuantities ? `<td><label class="field"><span>كمية الدفعة ${index + 1} (صفر لحذفها)</span><input type="number" min="0" step="1" value="${delivery.quantity}" data-edit-delivery-quantity="${escapeHtml(delivery.id)}"></label><button class="row-action" type="button" data-save-delivery-quantity="${escapeHtml(delivery.id)}">حفظ التسليم</button></td>` : ""}</tr>`))
     : '<div class="empty-state">لا توجد دفعات تسليم مسجلة.</div>';
-  return `<header class="modal-view-heading">${modelImageMarkup(order.modelImageUrl)}<div><small>تفاصيل الطلبية / الفرشة</small><h2 id="model-details-title">${escapeHtml(order.name || "موديل بدون اسم")}</h2><p>كود المصنع: ${escapeHtml(order.factoryModelCode || "—")} · كود العميل: ${escapeHtml(order.clientModelCode || "—")} · رقم الموديل: ${escapeHtml(order.modelNumber || "—")}</p><p>العميل: ${escapeHtml(order.client || "—")}</p></div>${statusTag(order.displayStatus || order.status)}</header>
+  return `<header class="modal-view-heading">${modelImageMarkup(order.modelImageUrl)}<div><small>تفاصيل الطلبية / الفرشة</small><h2 id="model-details-title">${escapeHtml(order.name || "موديل بدون اسم")}</h2><p>كود الموديل بالنظام: ${escapeHtml(order.factoryModelCode || "—")} · كود الموديل لدى العميل: ${escapeHtml(order.clientModelCode || "—")} · رقم الموديل: ${escapeHtml(order.modelNumber || "—")}</p><p>العميل: ${escapeHtml(order.client || "—")}</p></div>${statusTag(order.displayStatus || order.status)}</header>
     <div class="compact-detail-grid">
       <div><span>العدد المطلوب الأصلي</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.originalQuantity)} قطعة</strong></div>
       <div><span>العدد</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity)} قطعة</strong></div>
@@ -2824,7 +2826,7 @@ function adminView(data, accounts) {
           <div class="field model-brand-field"><label for="model-brand">اختيار اسم البراند</label><select id="model-brand" name="brandSelection"><option value="">اختر اسم البراند</option>${brandOptions}</select></div>
           <div class="field model-name-field"><label for="model-name">اسم الموديل</label><input id="model-name" name="name"></div>
           <div class="field model-number-field"><label for="model-number">رقم الموديل</label><input id="model-number" name="modelNumber"></div>
-          <div class="field"><label for="model-client-code">كود الموديل لدى العميل</label><input id="model-client-code" name="clientModelCode" maxlength="120" autocomplete="off"><small>كود العميل منفصل عن كود المصنع التلقائي.</small></div>
+          <div class="field"><label for="model-client-code">كود الموديل لدى العميل</label><input id="model-client-code" name="clientModelCode" maxlength="120" autocomplete="off"><small>كود الموديل بالنظام تلقائي ومنفصل عن كود العميل.</small></div>
           <div class="field model-quantity-field"><label for="model-quantity">العدد الكلي</label><input id="model-quantity" name="quantity" type="number" min="0" step="1" placeholder="أدخل العدد أو اتركه حتى انتهاء القص"><small>يمكن إدخال العدد الآن أو تأجيله؛ عند اختيار الألوان والمقاسات يوزع النظام العدد تلقائياً.</small></div>
           <div class="field" data-original-quantity-field hidden><label for="model-original-quantity">العدد المطلوب الأصلي</label><input id="model-original-quantity" name="originalQuantity" type="number" min="0" step="1"></div>
         </div></section>
@@ -2884,7 +2886,7 @@ function adminView(data, accounts) {
         const linkedUser = data.users.find((user) => user.id === client.user_id);
         return `<tr><td>${escapeHtml(client.name)}${client.brand_name ? `<br><small>${escapeHtml(client.brand_name)}</small>` : ""}</td><td><strong>${escapeHtml(client.code_letter || "—")}</strong></td><td>${escapeHtml(client.client_number || "—")}</td><td>${escapeHtml(client.whatsapp || client.phone || "—")}</td><td>${linkedUser ? `${escapeHtml(linkedUser.username)} · ${escapeHtml(linkedUser.status === "suspended" ? "متوقف" : "نشط")}` : "لا يوجد حساب دخول"}</td><td><button class="row-action" type="button" data-open-client-details="${escapeHtml(client.id)}">تفاصيل الحساب والعمولة</button> <button class="row-action" type="button" data-edit-customer="${escapeHtml(client.id)}">تعديل البيانات</button> <button class="row-action order-delete-action" type="button" data-delete-customer="${escapeHtml(client.id)}">حذف العميل</button></td></tr>`;
       })))}
-      <div class="modal-backdrop" id="client-modal" hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="client-modal-title"><button class="modal-close" type="button" data-close-client aria-label="إغلاق">×</button><h2 id="client-modal-title">إضافة عميل جديد</h2><p>بيانات ملف العميل ووسائل التواصل.</p><form id="client-form" class="modal-form client-profile-form"><input type="hidden" name="clientId"><label for="client-name">اسم العميل الشخصي</label><input id="client-name" name="name" required><label for="client-brand">اسم المحل أو البراند</label><input id="client-brand" name="brandName"><label for="client-code-letter">حرف كود العميل</label><input id="client-code-letter" name="codeLetter" maxlength="6" pattern="[A-Za-z]+" placeholder="يُنشأ تلقائياً إذا تُرك فارغاً"><small>يُستخدم الحرف في كود المصنع، مثل A-1.</small><label for="client-number">رقم العميل</label><input id="client-number" name="clientNumber"><label for="client-phone">رقم الهاتف</label><input id="client-phone" name="phone" type="tel"><label for="client-cash-phone">رقم كاش</label><input id="client-cash-phone" name="cashPhone" type="tel"><label for="client-instagram">حساب إنستا</label><input id="client-instagram" name="instagram"><label for="client-whatsapp">رقم واتساب</label><input id="client-whatsapp" name="whatsapp" type="tel"><label for="client-notes">ملاحظات</label><textarea id="client-notes" name="notes" rows="3"></textarea><div class="form-actions"><button class="button button-primary" type="submit">حفظ العميل</button><button class="row-action" type="button" data-close-client>إلغاء</button></div></form></section></div>
+      <div class="modal-backdrop" id="client-modal" hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="client-modal-title"><button class="modal-close" type="button" data-close-client aria-label="إغلاق">×</button><h2 id="client-modal-title">إضافة عميل جديد</h2><p>بيانات ملف العميل ووسائل التواصل.</p><form id="client-form" class="modal-form client-profile-form"><input type="hidden" name="clientId"><label for="client-name">اسم العميل الشخصي</label><input id="client-name" name="name" required><label for="client-brand">اسم المحل أو البراند</label><input id="client-brand" name="brandName"><label for="client-code-letter">حرف كود العميل</label><input id="client-code-letter" name="codeLetter" maxlength="6" pattern="[A-Za-z]+" placeholder="يُنشأ تلقائياً إذا تُرك فارغاً"><small>يُستخدم الحرف في كود الموديل بالنظام، مثل A-1.</small><label for="client-number">رقم العميل</label><input id="client-number" name="clientNumber"><label for="client-phone">رقم الهاتف</label><input id="client-phone" name="phone" type="tel"><label for="client-cash-phone">رقم كاش</label><input id="client-cash-phone" name="cashPhone" type="tel"><label for="client-instagram">حساب إنستا</label><input id="client-instagram" name="instagram"><label for="client-whatsapp">رقم واتساب</label><input id="client-whatsapp" name="whatsapp" type="tel"><label for="client-notes">ملاحظات</label><textarea id="client-notes" name="notes" rows="3"></textarea><div class="form-actions"><button class="button button-primary" type="submit">حفظ العميل</button><button class="row-action" type="button" data-close-client>إلغاء</button></div></form></section></div>
       </div>
     </section>
     <section id="client-details" class="dashboard-section">${data.clients.some((client) => client.id === selectedClientId) ? clientDetailsView(data.clients.find((client) => client.id === selectedClientId), data) : '<div class="empty-state">اختر عميلاً لعرض تفاصيل حسابه.</div>'}</section>
@@ -3064,7 +3066,7 @@ function adminCuttingTransferView(data) {
     hasEnteredSewing(order)
   );
   const orderCard = (order, transferred = false) => `<article class="cutting-admin-order-card">
-    <header class="cutting-admin-order-heading">${modelImageMarkup(order.modelImageUrl)}<div><p>الموديل · ${escapeHtml(order.factoryModelCode || order.modelNumber || "—")}</p><h3>${escapeHtml(order.name || "موديل بدون اسم")}</h3><p>رقم الموديل: ${escapeHtml(order.modelNumber || "—")} · العميل: ${escapeHtml(order.client || "—")}</p></div>${statusTag(order.displayStatus || order.status)}</header>
+    <header class="cutting-admin-order-heading">${modelImageMarkup(order.modelImageUrl)}<div><p>كود الموديل بالنظام: ${escapeHtml(order.factoryModelCode || "—")}</p><h3>${escapeHtml(order.name || "موديل بدون اسم")}</h3><p>رقم الموديل: ${escapeHtml(order.modelNumber || "—")} · العميل: ${escapeHtml(order.client || "—")}</p></div>${statusTag(order.displayStatus || order.status)}</header>
     <div class="cutting-admin-order-facts"><div><span>إجمالي العدد</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity || 0)} قطعة</strong></div><div><span>الألوان</span><strong>${colorSummaryMarkup(order.colors, order.colorNames, order.colorPlyData)}</strong></div><div><span>المقاسات</span><strong>${sizeBadgesMarkup(order.sizes)}</strong></div></div>
     <div class="form-actions">${productionDetailsButton("cutting", order)}${!transferred && ["مكتمل", "تم القص"].includes(order.cuttingStageStatus) && !["متاح للخياطة", "قيد الخياطة", "مكتمل"].includes(order.sewingStageStatus) ? `<button class="button button-primary" type="button" data-make-sewing-available="${escapeHtml(order.id)}">إدخال للخياطة</button>` : ""}</div>
   </article>`;
@@ -7245,7 +7247,8 @@ function bindActions(session) {
     try {
       const stageManagedStatuses = [
         "جاري التشطيب", "تم التشطيب", "جاري المكواة", "تم الكي",
-        "جاري الطباعة", "تمت الطباعة", "جاري التكييس", "تم التكييس", "جاهز للتسليم"
+        "جاري الطباعة", "تمت الطباعة", "جاري التكييس", "تم التكييس",
+        "جاري الفرز", "تم الفرز", "جاهز للتسليم"
       ];
       if (stageManagedStatuses.includes(select.value)) {
         const { error } = await supabaseClient.rpc("admin_update_factory_order_stage_status", {
@@ -8519,7 +8522,7 @@ function bindModelExpenseActions(session) {
     }
     form.reset();
     form.elements.orderId.value = order.id;
-    modal.querySelector("[data-model-expense-name]").textContent = `${order.name} · ${order.factoryModelCode || "دون كود مصنع"}`;
+    modal.querySelector("[data-model-expense-name]").textContent = `${order.name} · ${order.factoryModelCode || "دون كود بالنظام"}`;
     modal.hidden = false;
     form.elements.description.focus();
   });

@@ -786,7 +786,7 @@ alter table public.orders
   add constraint orders_work_stages_check
     check (
       cardinality(work_stages) > 0
-      and work_stages <@ array['cutting', 'sewing', 'finishing', 'ironing', 'printing', 'packaging']::text[]
+      and work_stages <@ array['cutting', 'sewing', 'finishing', 'ironing', 'printing', 'packaging', 'sorting']::text[]
     ),
   drop constraint if exists orders_pricing_mode_check,
   add constraint orders_pricing_mode_check
@@ -819,7 +819,7 @@ alter table public.orders
 create table if not exists public.production_stages (
   id uuid primary key default gen_random_uuid(),
   order_id uuid not null references public.orders (id) on delete cascade,
-  stage_name text not null check (stage_name in ('cutting', 'sewing', 'finishing', 'ironing', 'printing', 'packaging', 'delivery')),
+  stage_name text not null check (stage_name in ('cutting', 'sewing', 'finishing', 'ironing', 'printing', 'packaging', 'sorting', 'delivery')),
   worker_id uuid references auth.users (id) on delete set null,
   worker_name text,
   fabric text,
@@ -908,15 +908,16 @@ set stage_name = case lower(trim(stage_name))
   when 'خياطة' then 'sewing'
   when 'تشطيب' then 'finishing'
   when 'طباعة' then 'printing'
+  when 'فرز' then 'sorting'
   when 'تسليم' then 'delivery'
   else stage_name
 end
-where lower(trim(stage_name)) in ('تقطيع', 'قص', 'خياطة', 'تشطيب', 'طباعة', 'تسليم');
+where lower(trim(stage_name)) in ('تقطيع', 'قص', 'خياطة', 'تشطيب', 'طباعة', 'فرز', 'تسليم');
 
 alter table public.production_stages
   drop constraint if exists production_stages_stage_name_check,
   add constraint production_stages_stage_name_check
-    check (stage_name in ('cutting', 'sewing', 'finishing', 'ironing', 'printing', 'packaging', 'delivery'));
+    check (stage_name in ('cutting', 'sewing', 'finishing', 'ironing', 'printing', 'packaging', 'sorting', 'delivery'));
 
 update public.production_stages as stage
 set target_quantity = greatest(factory_order.total_pieces, stage.completed_quantity)
@@ -995,6 +996,8 @@ set model_name = coalesce(
       when 'تمت الطباعة' then 'تمت الطباعة'
       when 'جاري التكييس' then 'جاري التكييس'
       when 'تم التكييس' then 'تم التكييس'
+      when 'جاري الفرز' then 'جاري الفرز'
+      when 'تم الفرز' then 'تم الفرز'
       when 'متاح للإمبلاج / التعبئة' then 'تمت الخياطة'
       when 'في الخط' then 'جاري الخياطة'
       when 'تحت التصنيع' then 'قيد الفرش'
@@ -1027,7 +1030,7 @@ alter table public.orders
       'قيد الانتظار', 'قيد الفرش', 'تم الفرش', 'جاهز للقص', 'تم القص',
       'في انتظار الخياطة', 'جاري الخياطة', 'تمت الخياطة', 'جاري التشطيب', 'تم التشطيب',
       'جاري المكواة', 'تم الكي', 'جاري الطباعة', 'تمت الطباعة',
-      'جاري التكييس', 'تم التكييس', 'مكتمل', 'جاهز للتسليم', 'تم التسليم'
+      'جاري التكييس', 'تم التكييس', 'جاري الفرز', 'تم الفرز', 'مكتمل', 'جاهز للتسليم', 'تم التسليم'
     )
   );
 
@@ -1281,7 +1284,7 @@ begin
     or requested_production_type is null
     or requested_production_type not in ('full_cutting', 'ready_sewing')
     or coalesce(cardinality(requested_work_stages), 0) = 0
-    or not (requested_work_stages <@ array['cutting', 'sewing', 'finishing', 'ironing', 'printing', 'packaging']::text[])
+    or not (requested_work_stages <@ array['cutting', 'sewing', 'finishing', 'ironing', 'printing', 'packaging', 'sorting']::text[])
     or cardinality(requested_work_stages) <> (
       select count(distinct selected.selected_stage)
       from unnest(requested_work_stages) as selected(selected_stage)
@@ -1299,7 +1302,7 @@ begin
             case when jsonb_typeof(requested_stage_prices) = 'object'
               then requested_stage_prices else '{}'::jsonb end
           ) as stage_price(stage_name, price)
-          where stage_name not in ('cutting', 'sewing', 'finishing', 'ironing', 'printing', 'packaging')
+          where stage_name not in ('cutting', 'sewing', 'finishing', 'ironing', 'printing', 'packaging', 'sorting')
              or price !~ '^[0-9]+([.][0-9]{1,2})?$'
         )
         or (
@@ -1426,7 +1429,7 @@ begin
       'قيد الانتظار', 'قيد الفرش', 'تم الفرش', 'جاهز للقص',
       'تم القص', 'في انتظار الخياطة', 'جاري الخياطة', 'تمت الخياطة', 'جاري التشطيب', 'تم التشطيب',
       'جاري المكواة', 'تم الكي', 'جاري الطباعة', 'تمت الطباعة',
-      'جاري التكييس', 'تم التكييس', 'مكتمل', 'جاهز للتسليم', 'تم التسليم'
+      'جاري التكييس', 'تم التكييس', 'جاري الفرز', 'تم الفرز', 'مكتمل', 'جاهز للتسليم', 'تم التسليم'
     ) then
     raise exception 'Invalid factory order data.';
   end if;
@@ -1454,7 +1457,7 @@ begin
      and requested_status in (
        'في انتظار الخياطة', 'جاري الخياطة', 'تمت الخياطة', 'جاري التشطيب', 'تم التشطيب',
        'جاري المكواة', 'تم الكي', 'جاري الطباعة', 'تمت الطباعة',
-       'جاري التكييس', 'تم التكييس', 'مكتمل', 'جاهز للتسليم'
+       'جاري التكييس', 'تم التكييس', 'جاري الفرز', 'تم الفرز', 'مكتمل', 'جاهز للتسليم'
      ) then
     raise exception 'New orders cannot skip the cutting and sewing handoff workflow.';
   end if;
@@ -1532,14 +1535,14 @@ begin
        and requested_status in (
          'في انتظار الخياطة', 'جاري الخياطة', 'تمت الخياطة', 'جاري التشطيب', 'تم التشطيب',
          'جاري المكواة', 'تم الكي', 'جاري الطباعة', 'تمت الطباعة',
-         'جاري التكييس', 'تم التكييس', 'مكتمل', 'جاهز للتسليم'
+         'جاري التكييس', 'تم التكييس', 'جاري الفرز', 'تم الفرز', 'مكتمل', 'جاهز للتسليم'
        ) then
       raise exception 'Use the production workflow controls to move an order into sewing or finishing.';
     end if;
     if current_status in (
       'في انتظار الخياطة', 'جاري الخياطة', 'تمت الخياطة', 'جاري التشطيب', 'تم التشطيب',
       'جاري المكواة', 'تم الكي', 'جاري الطباعة', 'تمت الطباعة',
-      'جاري التكييس', 'تم التكييس', 'مكتمل', 'جاهز للتسليم'
+      'جاري التكييس', 'تم التكييس', 'جاري الفرز', 'تم الفرز', 'مكتمل', 'جاهز للتسليم'
     )
        and requested_status is distinct from current_status then
       raise exception 'Production workflow statuses can only be changed through their stage controls.';
@@ -1555,7 +1558,7 @@ begin
       select 1
       from public.production_stages as stage
       where stage.order_id = requested_order_id
-        and stage.stage_name in ('cutting', 'sewing', 'finishing', 'ironing', 'printing', 'packaging')
+        and stage.stage_name in ('cutting', 'sewing', 'finishing', 'ironing', 'printing', 'packaging', 'sorting')
         and not (stage.stage_name = any(requested_work_stages))
         and (
           stage.completed_quantity > 0
@@ -1618,7 +1621,7 @@ begin
     );
     delete from public.production_stages as stage
     where stage.order_id = requested_order_id
-      and stage.stage_name in ('cutting', 'sewing', 'finishing', 'ironing', 'printing', 'packaging')
+      and stage.stage_name in ('cutting', 'sewing', 'finishing', 'ironing', 'printing', 'packaging', 'sorting')
       and not (stage.stage_name = any(requested_work_stages));
     if current_price_per_piece is distinct from requested_price_per_piece then
       update public.factory_deliveries
@@ -1672,7 +1675,9 @@ declare
   current_order public.orders%rowtype;
   target_stage_name text;
   earlier_stage record;
-  extra_stage_names text[] := array['finishing', 'ironing', 'printing', 'packaging']::text[];
+  extra_stage_names text[] := array['finishing', 'ironing', 'printing', 'packaging', 'sorting']::text[];
+  next_stage_name text;
+  target_stage_position bigint;
 begin
   if not public.is_active_factory_admin() then
     raise exception 'Only active admins can update additional production stages.';
@@ -1701,6 +1706,8 @@ begin
     when 'تمت الطباعة' then 'printing'
     when 'جاري التكييس' then 'packaging'
     when 'تم التكييس' then 'packaging'
+    when 'جاري الفرز' then 'sorting'
+    when 'تم الفرز' then 'sorting'
     else null
   end;
 
@@ -1711,7 +1718,7 @@ begin
     if current_order.status not in (
       'تمت الخياطة', 'مكتمل', 'جاري التشطيب', 'تم التشطيب',
       'جاري المكواة', 'تم الكي', 'جاري الطباعة', 'تمت الطباعة',
-      'جاري التكييس', 'تم التكييس'
+      'جاري التكييس', 'تم التكييس', 'جاري الفرز', 'تم الفرز'
     ) then
       raise exception 'Complete sewing before updating an additional production stage.';
     end if;
@@ -1739,11 +1746,11 @@ begin
 
     update public.production_stages
     set status = case
-          when requested_status in ('تم التشطيب', 'تم الكي', 'تمت الطباعة', 'تم التكييس') then 'مكتمل'
+          when requested_status in ('تم التشطيب', 'تم الكي', 'تمت الطباعة', 'تم التكييس', 'تم الفرز') then 'مكتمل'
           else 'قيد التنفيذ'
         end,
         completed_quantity = case
-          when requested_status in ('تم التشطيب', 'تم الكي', 'تمت الطباعة', 'تم التكييس') then target_quantity
+          when requested_status in ('تم التشطيب', 'تم الكي', 'تمت الطباعة', 'تم التكييس', 'تم الفرز') then target_quantity
           else least(completed_quantity, target_quantity)
         end,
         updated_at = now()
@@ -1753,9 +1760,57 @@ begin
       raise exception 'The selected additional production stage was not initialized.';
     end if;
 
-    update public.orders
-    set status = requested_status
-    where id = requested_order_id;
+    if requested_status in ('تم التشطيب', 'تم الكي', 'تمت الطباعة', 'تم التكييس', 'تم الفرز') then
+      select selected_stage.position
+        into target_stage_position
+      from unnest(current_order.work_stages) with ordinality as selected_stage(stage_name, position)
+      where selected_stage.stage_name = target_stage_name;
+
+      select selected_stage.stage_name
+        into next_stage_name
+      from unnest(current_order.work_stages) with ordinality as selected_stage(stage_name, position)
+      where selected_stage.stage_name = any(extra_stage_names)
+        and selected_stage.position > target_stage_position
+        and exists (
+          select 1
+          from public.production_stages as next_stage
+          where next_stage.order_id = requested_order_id
+            and next_stage.stage_name = selected_stage.stage_name
+            and next_stage.status <> 'مكتمل'
+        )
+      order by selected_stage.position
+      limit 1;
+
+      if next_stage_name is null then
+        update public.orders
+        set status = 'جاهز للتسليم'
+        where id = requested_order_id;
+        update public.production_stages
+        set status = 'جاهز للتسليم',
+            updated_at = now()
+        where order_id = requested_order_id
+          and stage_name = 'delivery';
+      else
+        update public.production_stages
+        set status = 'قيد التنفيذ',
+            updated_at = now()
+        where order_id = requested_order_id
+          and stage_name = next_stage_name;
+        update public.orders
+        set status = case next_stage_name
+          when 'finishing' then 'جاري التشطيب'
+          when 'ironing' then 'جاري المكواة'
+          when 'printing' then 'جاري الطباعة'
+          when 'packaging' then 'جاري التكييس'
+          when 'sorting' then 'جاري الفرز'
+        end
+        where id = requested_order_id;
+      end if;
+    else
+      update public.orders
+      set status = requested_status
+      where id = requested_order_id;
+    end if;
     return;
   end if;
 
@@ -1763,7 +1818,7 @@ begin
     if current_order.status not in (
       'تمت الخياطة', 'مكتمل', 'جاري التشطيب', 'تم التشطيب',
       'جاري المكواة', 'تم الكي', 'جاري الطباعة', 'تمت الطباعة',
-      'جاري التكييس', 'تم التكييس'
+      'جاري التكييس', 'تم التكييس', 'جاري الفرز', 'تم الفرز'
     ) then
       raise exception 'Finish sewing before marking the order ready for delivery.';
     end if;
@@ -5874,7 +5929,14 @@ begin
   select selected_stage.stage_name
     into next_stage_name
   from unnest(current_order.work_stages) with ordinality as selected_stage(stage_name, stage_position)
-  where selected_stage.stage_name in ('finishing', 'ironing', 'printing', 'packaging')
+  where selected_stage.stage_name in ('finishing', 'ironing', 'printing', 'packaging', 'sorting')
+    and exists (
+      select 1
+      from public.production_stages as extra_stage
+      where extra_stage.order_id = requested_order_id
+        and extra_stage.stage_name = selected_stage.stage_name
+        and extra_stage.status <> 'مكتمل'
+    )
   order by selected_stage.stage_position
   limit 1;
 
@@ -5886,17 +5948,32 @@ begin
 
   if next_stage_name is not null then
     update public.production_stages
-    set status = 'متاح للإمبلاج / التعبئة',
+    set status = 'قيد التنفيذ',
         updated_at = now()
     where order_id = requested_order_id
       and stage_name = next_stage_name;
     if not found then
       raise exception 'The next production stage for this order was not found.';
     end if;
+    update public.orders
+    set status = case next_stage_name
+      when 'finishing' then 'جاري التشطيب'
+      when 'ironing' then 'جاري المكواة'
+      when 'printing' then 'جاري الطباعة'
+      when 'packaging' then 'جاري التكييس'
+      when 'sorting' then 'جاري الفرز'
+    end
+    where id = requested_order_id;
+  else
+    update public.orders
+    set status = 'جاهز للتسليم'
+    where id = requested_order_id;
+    update public.production_stages
+    set status = 'جاهز للتسليم',
+        updated_at = now()
+    where order_id = requested_order_id
+      and stage_name = 'delivery';
   end if;
-  update public.orders
-  set status = 'تمت الخياطة'
-  where id = requested_order_id;
 end;
 $$;
 
