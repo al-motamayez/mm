@@ -14,6 +14,7 @@ let notificationStorageAccount = "";
 let onlineUserCount = 0;
 let onlineUsers = [];
 let activeFinanceTab = "payments";
+let activeAdminCuttingTab = "stories";
 let activeWorkforceTab = "employees";
 let selectedWorkforceEmployeeId = "";
 let showNewWorkforceEmployeeModal = false;
@@ -50,6 +51,18 @@ const WORK_STAGES = [
   ["ironing", "مكوى"],
   ["packaging", "تكييس"]
 ];
+const FACTORY_ORDER_STATUSES = [
+  "قيد الانتظار",
+  "قيد الفرش",
+  "تم الفرش",
+  "جاهز للقص",
+  "تم القص",
+  "جاري الخياطة",
+  "مكتمل",
+  "جاهز للتسليم",
+  "تم التسليم"
+];
+const LOCKED_FACTORY_ORDER_STATUSES = ["تم التسليم"];
 const roleInfo = {
   admin: { title: "لوحة تحكم الإدارة", description: "نظرة شاملة على المصنع وإدارة بيانات التشغيل.", icon: "▦" },
   cutting: { title: "لوحة مشرف القص", description: "متابعة أوامر الإدارة وتسجيل بيانات الفرش والقص.", icon: "✂" },
@@ -495,17 +508,17 @@ async function readDashboardData(session) {
       quantityDifference: deliveredPieces - originalQuantity,
       pricePerPiece: Number(order.price_per_piece || 0),
       totalAmount: Number(order.total_amount || 0),
-      expectedAmount: ["مكتمل", "تم التسليم", "تم التسليم بالكامل", "تم التسليم والإغلاق"].includes(order.status)
+      expectedAmount: ["تم التسليم", "تم التسليم بالكامل", "تم التسليم والإغلاق"].includes(order.status)
         ? 0
         : Number(order.expected_total_amount ?? (Math.max(Number(order.total_pieces || 0) - Number(order.delivered_pieces || 0), 0) * Number(order.price_per_piece || 0))),
       operationalExpenses: Number(order.operational_expenses || 0),
       paidAmount: Number(order.paid_amount || 0),
       remainingAmount: Number(order.remaining_amount || 0),
       expectedDeliveryDate: order.expected_delivery_date || "",
-      status: order.status,
-      displayStatus: order.status === "قيد الفرش" && Number(cuttingStage?.layer_count) > 0
+      status: canonicalFactoryOrderStatus(order.status),
+      displayStatus: canonicalFactoryOrderStatus(order.status) === "قيد الفرش" && Number(cuttingStage?.layer_count) > 0
         ? `قيد الفرش - تم فرش ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(cuttingStage.layer_count)} راقات`
-        : order.status,
+        : canonicalFactoryOrderStatus(order.status),
       cuttingPlys: Number(cuttingStage?.layer_count || 0),
       fabric: cuttingStage?.fabric || "",
       fabricId: cuttingStage?.fabric_id || (cuttingStage?.external_fabric_source ? "external" : ""),
@@ -704,6 +717,22 @@ function escapeHtml(value) {
 function money(value) {
   const rounded = Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
   return `${new Intl.NumberFormat("ar-EG-u-nu-latn", { minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(rounded)} ج.م`;
+}
+
+function canonicalFactoryOrderStatus(status) {
+  const aliases = {
+    "معلق": "قيد الانتظار",
+    "تحت الإنشاء": "قيد الانتظار",
+    "تم الفرش / جاهز للقص": "جاهز للقص",
+    "معلق - في انتظار الخياطة": "جاري الخياطة",
+    "في الخياطة": "جاري الخياطة",
+    "في الخط": "جاري الخياطة",
+    "متاح للإمبلاج / التعبئة": "مكتمل",
+    "تم التسليم بالكامل": "تم التسليم",
+    "تم التسليم والإغلاق": "تم التسليم",
+    "تم الانتهاء": "تم التسليم"
+  };
+  return aliases[status] || status || "قيد الانتظار";
 }
 
 function parseSizeData(value) {
@@ -1553,7 +1582,7 @@ function bindCustomColorPickers() {
 
 function statusClass(value) {
   if (String(value).startsWith("قيد الفرش")
-    || ["قيد المراجعة", "قيد التنفيذ", "قيد الخياطة", "قيد الإنتاج", "قيد الانتظار", "معلق", "تحت الإنشاء", "تم الفرش / جاهز للقص", "معلق - في انتظار الخياطة", "جار العمل"].includes(value)) return "warning";
+    || ["قيد المراجعة", "قيد التنفيذ", "قيد الخياطة", "قيد الإنتاج", "قيد الانتظار", "معلق", "تحت الإنشاء", "تم الفرش", "جاهز للقص", "جاري الخياطة", "معلق - في انتظار الخياطة", "جار العمل"].includes(value)) return "warning";
   if (["جديدة", "جاهز للتسليم", "تم القص", "في الخياطة", "متاح للخياطة", "متاح للإمبلاج / التعبئة"].includes(value)) return "info";
   if (value === "جاهز للتسليم" || value === "مكتمل" || value === "تم التسليم" || value === "تم التسليم بالكامل" || value === "تم التسليم والإغلاق") return "";
   return "muted";
@@ -1684,7 +1713,7 @@ function orderCards(models, withActions = false) {
 }
 
 function orderProgress(status) {
-  const stages = ["قيد الانتظار", "قيد الفرش", "تم الفرش / جاهز للقص", "تم القص", "معلق - في انتظار الخياطة", "في الخياطة", "متاح للإمبلاج / التعبئة", "جاهز للتسليم", "تم التسليم", "تم التسليم بالكامل", "تم التسليم والإغلاق"];
+  const stages = FACTORY_ORDER_STATUSES;
   const activeStatus = status === "معلق" || status === "تحت الإنشاء" ? "قيد الانتظار" : status;
   const activeIndex = Math.max(0, stages.indexOf(activeStatus));
   const steps = stages.map((stage, index) => `<span class="order-progress-step${index <= activeIndex ? " complete" : ""}${index === activeIndex ? " current" : ""}">${stage}</span>`).join("");
@@ -1819,9 +1848,9 @@ function clientAccountCards(data) {
   return `<div class="client-account-grid">${clients.map((client) => {
     const summary = clientAccountSummary(client, data);
     const linkedUser = data.users.find((user) => user.id === client.user_id);
-    const underConstructionOrders = summary.orders.filter((order) => order.status === "تحت الإنشاء");
+    const underConstructionOrders = summary.orders.filter((order) => order.status === "قيد الانتظار");
     const inProductionOrders = summary.orders.filter((order) =>
-      ["قيد الفرش", "تم الفرش / جاهز للقص", "تم القص", "معلق - في انتظار الخياطة", "في الخياطة"].includes(order.status)
+      ["قيد الفرش", "تم الفرش", "جاهز للقص", "تم القص", "جاري الخياطة", "مكتمل"].includes(order.status)
     );
     const unpricedOrders = summary.orders.filter((order) => order.pricePerPiece <= 0);
     const uncountedOrders = summary.orders.filter((order) => order.quantity <= 0);
@@ -1831,7 +1860,7 @@ function clientAccountCards(data) {
       <div class="client-balance-grid"><div><span>المطلوب بعد خصم المدفوع</span><strong>${money(summary.due)}</strong></div><div><span>الإجمالي المتوقع للطلبات</span><strong>${money(summary.expectedTotal)}</strong></div><div><span>المطلوب بعد التسليم</span><strong>${money(summary.requiredAfterDelivery)}</strong></div><div><span>المدفوع</span><strong>${money(summary.paid)}</strong></div><div><span>الرصيد المتبقي</span><strong>${money(summary.balance)}</strong><small>${summary.balance === 0 ? "تم السداد بالكامل" : summary.balance < 0 ? "رصيد دائن للعميل" : "مستحق على العميل"}</small></div></div>
       ${unpricedOrders.length ? '<p class="client-unpriced-alert" role="status">يوجد موديلات لم تحدد أسعارها بعد</p>' : ""}
       <div class="client-activity-grid">
-        ${modelMetric("تحت الإنشاء", underConstructionOrders, `construction-${escapeHtml(client.id)}`)}
+        ${modelMetric("قيد الانتظار", underConstructionOrders, `construction-${escapeHtml(client.id)}`)}
         ${modelMetric("قيد التصنيع", inProductionOrders, `production-${escapeHtml(client.id)}`)}
         ${modelMetric("لم يُحدد سعرها", unpricedOrders, `unpriced-${escapeHtml(client.id)}`)}
         ${modelMetric("لم يُحدد عددها", uncountedOrders, `uncounted-${escapeHtml(client.id)}`)}
@@ -1929,16 +1958,6 @@ function cashLedgerView(data) {
       : '<div class="empty-state">لا توجد حركات نقدية مسجلة.</div>')}`;
 }
 
-const FACTORY_ORDER_STATUSES = [
-  "قيد الانتظار", "معلق", "تحت الإنشاء", "قيد الفرش",
-  "تم الفرش / جاهز للقص", "تم القص", "معلق - في انتظار الخياطة",
-  "في الخياطة", "متاح للإمبلاج / التعبئة", "جاهز للتسليم"
-];
-const MANUAL_FACTORY_ORDER_STATUSES = FACTORY_ORDER_STATUSES.filter((status) =>
-  !["معلق - في انتظار الخياطة", "في الخياطة", "متاح للإمبلاج / التعبئة"].includes(status)
-);
-const LOCKED_FACTORY_ORDER_STATUSES = ["مكتمل", "تم التسليم", "تم التسليم بالكامل", "تم التسليم والإغلاق"];
-
 function adminDashboardView(data) {
   const activeOrders = data.models.filter((order) => !order.archivedAt);
   const deliveredOrders = activeOrders.filter((order) => LOCKED_FACTORY_ORDER_STATUSES.includes(order.status));
@@ -1985,7 +2004,7 @@ function adminDashboardView(data) {
   const groups = [
     ["قيد الانتظار", operatingOrders.filter((order) => order.status === "قيد الانتظار").length],
     ["في الفرش", operatingOrders.filter((order) => order.status === "قيد الفرش").length],
-    ["في الخياطة", operatingOrders.filter((order) => order.status === "في الخياطة").length]
+    ["جاري الخياطة", operatingOrders.filter((order) => order.status === "جاري الخياطة").length]
   ];
   return `<div class="stats-grid">${stat("النقدية في الدرج", money(drawerBalance), "", statDetailList(cashDetails))}${stat("مديونيات العملاء", money(customerReceivables), "", statDetailList(clientDebts.map(({ client, amount }) => ({
     label: `${client.name || "عميل بدون اسم"}${client.brand_name ? ` · ${client.brand_name}` : ""}`,
@@ -2002,21 +2021,17 @@ function adminDashboardView(data) {
 
 function modelStatusReviewView(data) {
   const orders = data.models;
-  const statusOptions = (selected, includeLocked = false) => [...new Set([
-    ...MANUAL_FACTORY_ORDER_STATUSES,
-    ...(includeLocked ? LOCKED_FACTORY_ORDER_STATUSES : []),
-    ...(selected && !MANUAL_FACTORY_ORDER_STATUSES.includes(selected) ? [selected] : [])
-  ])]
+  const statusOptions = (selected) => FACTORY_ORDER_STATUSES
     .map((status) => `<option value="${escapeHtml(status)}"${selected === status ? " selected" : ""}>${escapeHtml(status)}</option>`)
     .join("");
-  return `<div class="clients-toolbar"><div><h2>الموديلات</h2><p>حالة الموديل لا تتغير تلقائياً. تُقفل نهائياً بعد التسليم.</p></div><label class="field model-status-filter"><span>تصفية حسب الحالة</span><select data-filter-model-status><option value="">كل الحالات</option>${statusOptions("", true)}</select></label></div>
+  return `<div class="clients-toolbar"><div><h2>الموديلات</h2><p>حالات الموديل موحدة حسب دورة الإنتاج؛ حالات القص والخياطة تتغير من أدوات مراحلها.</p></div><label class="field model-status-filter"><span>تصفية حسب الحالة</span><select data-filter-model-status><option value="">كل الحالات</option>${statusOptions("")}</select></label></div>
     ${orders.length ? `<div class="model-status-list">${orders.map((order) => {
       const isLocked = Boolean(order.archivedAt) || LOCKED_FACTORY_ORDER_STATUSES.includes(order.status);
-      const workflowManaged = ["معلق - في انتظار الخياطة", "في الخياطة", "متاح للإمبلاج / التعبئة"].includes(order.status);
+      const workflowManaged = ["تم الفرش", "جاهز للقص", "تم القص", "جاري الخياطة", "مكتمل"].includes(order.status);
       return `<article class="model-status-row" data-model-status-row data-current-status="${escapeHtml(order.status)}">
       <div class="model-status-info"><strong>${escapeHtml(order.name)}</strong><span>العميل: ${escapeHtml(order.client || "—")}</span><span>العدد: ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity)} قطعة</span><span>السعر: ${money(order.pricePerPiece)}</span></div>
       ${statusTag(order.displayStatus || order.status)}
-      <label class="model-status-control"><span>الحالة اليدوية${isLocked ? " · مقفلة" : workflowManaged ? " · تُدار من سير الإنتاج" : ""}</span><select data-model-status="${escapeHtml(order.id)}"${isLocked || workflowManaged ? " disabled" : ""}>${statusOptions(order.status, isLocked)}</select></label>
+      <label class="model-status-control"><span>الحالة اليدوية${isLocked ? " · مقفلة" : workflowManaged ? " · تُدار من سير الإنتاج" : ""}</span><select data-model-status="${escapeHtml(order.id)}"${isLocked || workflowManaged ? " disabled" : ""}>${statusOptions(order.status)}</select></label>
       <button class="button button-secondary" type="button" data-save-model-status="${escapeHtml(order.id)}"${isLocked || workflowManaged ? " disabled" : ""}>حفظ الحالة</button>
       ${isLocked ? '<span class="order-delete-protected">لا يمكن تغيير حالة موديل تم تسليمه أو إغلاقه.</span>' : ""}
       ${workflowManaged ? '<span class="order-delete-protected">تُحدّث هذه الحالة من أزرار إتاحة الخياطة وبدء الخياطة والإمبلاج.</span>' : ""}
@@ -2531,7 +2546,7 @@ function adminView(data, accounts) {
           <div class="model-allocation field"><label>توزيع العدد على الألوان والمقاسات</label><div data-model-allocation-grid><p class="muted">أدخل العدد الكلي واختر الألوان والمقاسات لعرض التوزيع.</p></div><input type="hidden" name="colorSizeDistribution" value='{"colors":[]}'></div>
           <label class="field model-image-field"><span>صورة الموديل (اختياري)</span><input type="file" name="modelImage" accept="image/*"><small>يمكن رفع صيغ الصور الشائعة حتى 25 ميجابايت.</small><div data-model-image-preview></div></label>
           <div class="field" data-expected-delivery-field><label for="model-expected-delivery">تاريخ التسليم المتوقع (اختياري)</label><input id="model-expected-delivery" name="expectedDeliveryDate" type="date"></div>
-          <div class="field"><label for="model-status">حالة الطلب</label><select id="model-status" name="status"><option>قيد الانتظار</option><option>معلق</option><option>تحت الإنشاء</option><option>قيد الفرش</option><option>تم الفرش / جاهز للقص</option><option>تم القص</option><option>جاهز للتسليم</option><option>تم التسليم</option></select></div>
+          <div class="field"><label for="model-status">حالة الطلب</label><select id="model-status" name="status">${FACTORY_ORDER_STATUSES.map((status) => `<option>${status}</option>`).join("")}</select></div>
           <div class="field" data-initial-delivery-field hidden><label for="model-delivered-pieces">العدد المسلّم</label><input id="model-delivered-pieces" name="deliveredPieces" type="text" inputmode="numeric" autocomplete="off"><small>يُسجل كدفعة تسليم تاريخية ويُحتسب ضمن حساب العميل.</small></div>
           <div class="field" data-model-priority-field><label for="model-priority">أولوية التنفيذ</label><select id="model-priority" name="priority"><option>عادي</option><option>مرتفع</option><option>عاجل</option></select></div>
         </div></section>
@@ -2600,15 +2615,16 @@ function adminView(data, accounts) {
 
 function cuttingView(data) {
   const priorityOrder = { عاجل: 0, مرتفع: 1, عادي: 2 };
-  const readyStatus = "تم الفرش / جاهز للقص";
+  const readyStatus = "جاهز للقص";
   const activeCutting = data.cutting
-    .filter((item) => ["قيد الانتظار", "معلق", "تحت الإنشاء", "قيد الفرش", readyStatus].includes(item.orderStatus))
+    .filter((item) => ["قيد الانتظار", "قيد الفرش", "تم الفرش", readyStatus].includes(canonicalFactoryOrderStatus(item.orderStatus)))
     .sort((left, right) => (priorityOrder[left.priority] ?? 3) - (priorityOrder[right.priority] ?? 3));
   const cards = activeCutting.length ? `<div class="cutting-order-grid">${activeCutting.map((item) => {
-    const bedReady = item.orderStatus === readyStatus;
-    const displayStatus = item.orderStatus === "قيد الفرش" && item.layerCount > 0
+    const orderStatus = canonicalFactoryOrderStatus(item.orderStatus);
+    const bedReady = orderStatus === readyStatus;
+    const displayStatus = orderStatus === "قيد الفرش" && item.layerCount > 0
       ? `قيد الفرش - تم فرش ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.layerCount)} راقات`
-      : item.orderStatus;
+      : orderStatus;
     return `<article class="order-card cutting-order-card">
     <header class="order-card-heading">${modelImageMarkup(item.modelImageUrl)}<div><p class="order-card-label">أمر قص · ${escapeHtml(item.order.slice(0, 8))} · الأولوية: ${escapeHtml(item.priority)}</p><h3>${escapeHtml(item.model)}</h3>${item.senderName ? `<p>تم الإرسال بواسطة: ${escapeHtml(item.senderName)}</p>` : ""}</div>${statusTag(displayStatus)}</header>
     <p class="cutting-target">${item.total > 0 ? `العدد الحالي: ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.total)} قطعة` : "العدد النهائي: بانتظار اعتماد القص"}</p>
@@ -2636,22 +2652,21 @@ function cuttingView(data) {
 }
 
 function cuttingDashboardView(data) {
-  const active = data.cutting.filter((item) => ["قيد الانتظار", "معلق", "تحت الإنشاء", "قيد الفرش", "تم الفرش / جاهز للقص"].includes(item.orderStatus));
+  const active = data.cutting.filter((item) => ["قيد الانتظار", "قيد الفرش", "تم الفرش", "جاهز للقص"].includes(canonicalFactoryOrderStatus(item.orderStatus)));
   const activeTotal = active.reduce((sum, item) => sum + Number(item.total), 0);
-  const completed = data.cutting.filter((item) => ["تم القص", "معلق - في انتظار الخياطة", "في الخياطة", "مكتمل", "تم التسليم", "تم التسليم بالكامل", "تم التسليم والإغلاق"].includes(item.orderStatus));
+  const completed = data.cutting.filter((item) => ["تم القص", "جاري الخياطة", "مكتمل", "جاهز للتسليم", "تم التسليم"].includes(canonicalFactoryOrderStatus(item.orderStatus)));
   return `<div class="stats-grid">${stat("طلبات الإدارة", active.length, "بانتظار استكمال القص")}${stat("العدد المطلوب لطلبات الإدارة", new Intl.NumberFormat("ar-EG-u-nu-latn").format(activeTotal), "قطعة")}${stat("عمليات قص مكتملة", completed.length, "مسجلة على أوامر الإنتاج")}${stat("أصناف القماش المتاحة", data.fabrics.length, "متابعة مباشرة للمخزون")}</div>${panel("ملخص العمل الحالي", `<div class="empty-state">استخدم «طلبات الإدارة» لمراجعة الأوامر وتسجيل بيانات الفرشة والقص، أو «قصة جديدة» لإنشاء قصة مباشرة.</div>`)}`;
 }
 
-function cuttingRequestsView(data) {
+function cuttingSubmissionFormMarkup(data) {
   const clientOptions = data.clients.map((client) =>
     `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)}</option>`
   ).join("");
   const brandOptions = data.clients.filter((client) => client.brand_name)
     .map((client) => `<option value="${escapeHtml(client.id)}">${escapeHtml(client.brand_name)}</option>`)
     .join("");
-  return `  <section id="admin-requests" class="dashboard-section">${cuttingView(data)}</section>
-  <section id="new-cutting" class="dashboard-section">${panel("قصة جديدة", `<form class="cutting-submit-form modal-form" id="cutting-submit-form">
-    <section class="form-section"><h3>إرسال قصة للمراجعة <span>تظل معلقة حتى اعتماد الإدارة</span></h3><div class="form-section-grid">
+  return `<form class="cutting-submit-form modal-form" id="cutting-submit-form">
+    <section class="form-section"><h3>بيانات القصة <span>تُحفظ كسجل مستقل قبل إنشاء الموديل</span></h3><div class="form-section-grid">
         <input type="hidden" name="customerId">
         <label class="field"><span>اسم العميل</span><select name="customerSelection"><option value="">اختر العميل</option>${clientOptions}</select></label>
         <label class="field"><span>اسم البراند</span><select name="brandSelection"><option value="">اختر البراند</option>${brandOptions}</select></label>
@@ -2671,8 +2686,13 @@ function cuttingRequestsView(data) {
       <div class="cutting-breakdown" data-cutting-breakdown></div>
       <label class="field"><span>صورة الموديل (اختياري)</span><input type="file" name="modelImage" accept="image/*"><small>يمكن رفع صيغ الصور الشائعة حتى 25 ميجابايت.</small></label>
       <label class="field"><span>ملاحظات فنية للفرشة والقص</span><textarea name="technicalNotes" rows="3"></textarea></label>
-      <div class="form-actions"><button type="submit" class="button button-primary">إرسال القصة للإدارة</button></div>
-    </form>`, "تُحفظ القصة في سجل القص المعلق، ولا تُضاف للموديلات أو الخياطة إلا بعد قرار الإدارة.")}</section>`;
+      <div class="form-actions"><button type="submit" class="button button-primary">${data.isAdmin ? "حفظ القصة" : "إرسال القصة للإدارة"}</button></div>
+    </form>`;
+}
+
+function cuttingRequestsView(data) {
+  return `  <section id="admin-requests" class="dashboard-section">${cuttingView(data)}</section>
+  <section id="new-cutting" class="dashboard-section">${panel("قصة جديدة", cuttingSubmissionFormMarkup(data), "تُحفظ القصة في سجل القص المعلق، ولا تُضاف للموديلات أو الخياطة إلا بعد قرار الإدارة.")}</section>`;
 }
 
 function cuttingPersonalAccountView(data) {
@@ -2732,9 +2752,14 @@ function adminCuttingTransferView(data) {
       const colors = parseColorPlyData(story.color_ply_data);
       const sizeData = parseSizeData(story.size_data);
       const sizes = orderedSizeEntries(sizeData);
-      const breakdown = colors.flatMap((color) => sizes.map((size) =>
-        `<tr><td>${escapeHtml(color.name || color.color)}</td><td>${escapeHtml(size)}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(color.plys)}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(color.plys)} قطعة</td></tr>`
-      ));
+      const breakdown = colors.flatMap((color) => {
+        const occurrences = new Map();
+        return sizes.map((size) => {
+          const occurrence = (occurrences.get(size) || 0) + 1;
+          occurrences.set(size, occurrence);
+          return `<tr><td>${escapeHtml(color.name || color.color)}</td><td>${escapeHtml(size)}${(sizeData.multiplicities[size] || 0) > 1 ? ` · التكرار ${occurrence}` : ""}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(color.plys)}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(color.plys)} قطعة</td></tr>`;
+        });
+      });
       const statusLabel = story.status === "added_to_models"
         ? "تم اعتمادها وإضافتها للموديلات"
         : story.status === "sent_to_sewing"
@@ -2747,36 +2772,46 @@ function adminCuttingTransferView(data) {
         : story.approved_order_id
           ? '<a class="row-action" href="#orders">الانتقال إلى الموديلات</a>'
           : "";
-      return `<article class="cutting-story-card">
-        <header class="cutting-story-heading">${modelImageMarkup(story.model_image_url)}<div><h3>${escapeHtml(story.model_name || story.model_number || "قصة بدون اسم")}</h3><p>${escapeHtml(story.model_number || "دون رقم موديل")} · العميل: ${escapeHtml(story.customer_name || "—")}</p><small>أرسلها: ${escapeHtml(story.submitted_by_name || "مشرف القص")} · ${formatDateTime(story.created_at)}</small></div>${statusTag(statusLabel)}</header>
-        <div class="cutting-story-facts"><div><span>إجمالي القطع</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(story.total_pieces)} قطعة</strong></div><div><span>إجمالي الرقات</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(story.ply_count)}</strong></div><div><span>عدد الأتواب</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(story.bolt_count || 0)} توب</strong></div><div><span>كمية القماش المستخدمة</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(story.fabric_quantity)} ${escapeHtml(story.fabric_unit || "")}</strong></div><div><span>القماش</span><strong>${escapeHtml(story.fabric || "—")}</strong></div><div><span>المورد / تفاصيل المصدر</span><strong>${escapeHtml(story.fabric_details || "—")}</strong></div><div><span>كل المقاسات والأعداد</span><strong>${escapeHtml(sizeSummary(story.size_data))}</strong></div></div>
-        ${breakdown.length ? `<details class="cutting-story-breakdown"><summary>تفاصيل المقاسات والراقات والقطع لكل لون</summary>${table(["اللون","المقاس (حسب الترتيب والتكرار)","عدد الراقات","قطع المقاس واللون"], breakdown)}</details>` : ""}
-        ${story.technical_notes ? `<p class="cutting-story-notes"><strong>ملاحظات فنية:</strong> ${escapeHtml(story.technical_notes)}</p>` : ""}
-        ${actions}
-      </article>`;
+      return `<details class="cutting-story-card cutting-story-expandable">
+        <summary class="cutting-story-heading">${modelImageMarkup(story.model_image_url)}<div><h3>${escapeHtml(story.model_name || story.model_number || "قصة بدون اسم")}</h3><p>${escapeHtml(story.model_number || "دون رقم موديل")} · العميل: ${escapeHtml(story.customer_name || "—")}</p><small>المشرف المسؤول: ${escapeHtml(story.submitted_by_name || "مشرف القص")} · ${formatDateTime(story.created_at)}</small></div><span class="cutting-story-summary-facts"><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(story.total_pieces)} قطعة</strong>${statusTag(statusLabel)}<span class="cutting-story-expand-icon" aria-hidden="true">⌄</span></span></summary>
+        <div class="cutting-story-expanded">
+          <div class="cutting-story-facts"><div><span>إجمالي القطع</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(story.total_pieces)} قطعة</strong></div><div><span>عدد الرقات</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(story.ply_count)}</strong></div><div><span>عدد الأتواب</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(story.bolt_count || 0)} توب</strong></div><div><span>كمية القماش المستخدمة</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(story.fabric_quantity)} ${escapeHtml(story.fabric_unit || "")}</strong></div><div><span>القماش</span><strong>${escapeHtml(story.fabric || "—")}</strong></div><div><span>المورد / تفاصيل المصدر</span><strong>${escapeHtml(story.fabric_details || "—")}</strong></div></div>
+          ${breakdown.length ? `<div class="cutting-story-breakdown"><h4>المقاسات والأعداد بالترتيب، مع إظهار التكرار</h4>${table(["اللون","المقاس","عدد الراقات","قطع المقاس واللون"], breakdown)}</div>` : ""}
+          ${story.technical_notes ? `<p class="cutting-story-notes"><strong>ملاحظات فنية:</strong> ${escapeHtml(story.technical_notes)}</p>` : ""}
+          ${actions}
+        </div>
+      </details>`;
     }).join("")}</div>`
     : '<div class="empty-state">لا توجد قصص مرسلة من مشرف القص.</div>';
   const finishedCutting = data.models.filter((order) =>
     !order.archivedAt
-    && ["تم القص", "معلق - في انتظار الخياطة"].includes(order.status)
-    && (order.workStages || []).includes("sewing")
+    && canonicalFactoryOrderStatus(order.status) === "تم القص"
   );
-  return `${panel("قصص القص المرسلة للمراجعة والاعتماد", cuttingStoryRows, "تبقى بيانات القصة محفوظة هنا بعد اعتمادها؛ الإضافة للموديلات أو الإرسال للخياطة لا يحذف سجل القص.")}${panel("قصّات جاهزة للإتاحة للخياطة", finishedCutting.length
-    ? table(["الموديل", "العميل", "الكمية", "حالة الخياطة", "إجراء"], finishedCutting.map((order) => {
+  const sewingReady = finishedCutting.length
+    ? table(["الموديل", "العميل", "الكمية", "الحالة", "إجراء"], finishedCutting.map((order) => {
       const sewing = data.sewing.find((stage) => stage.order === order.id);
       const cutting = data.cutting.find((stage) => stage.order === order.id);
-      const stageStatus = sewing?.status || "مرحلة الخياطة غير موجودة";
       const cuttingFinished = cutting && ["مكتمل", "تم القص"].includes(cutting.status);
-      const canTransfer = cuttingFinished && sewing && !["متاح للخياطة", "قيد الخياطة", "مكتمل"].includes(sewing.status);
+      const canTransfer = cuttingFinished && !["متاح للخياطة", "قيد الخياطة", "مكتمل"].includes(sewing?.status);
       const action = canTransfer
-        ? `<button class="button button-secondary" type="button" data-make-sewing-available="${escapeHtml(order.id)}">إتاحة للخياطة</button>`
+        ? `<button class="button button-secondary" type="button" data-make-sewing-available="${escapeHtml(order.id)}">إدخال للخياطة</button>`
         : !cuttingFinished
           ? `يلزم اعتماد اكتمال القص${cutting?.status ? ` (${escapeHtml(cutting.status)})` : ""}`
           : "—";
-      return `<tr><td>${escapeHtml(order.name)}</td><td>${escapeHtml(order.client || "—")}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity)} قطعة</td><td>${statusTag(stageStatus)}</td><td>${action}</td></tr>`;
+      return `<tr><td>${escapeHtml(order.name)}</td><td>${escapeHtml(order.client || "—")}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity)} قطعة</td><td>${statusTag(canonicalFactoryOrderStatus(order.status))}</td><td>${action}</td></tr>`;
     }))
-    : '<div class="empty-state">لا توجد قصّات مكتملة تنتظر إتاحتها للخياطة.</div>',
-  "لا تبدأ الخياطة تلقائياً عند الإتاحة؛ يستلم المشرف القصّة من لوحته لبدء العمل.")}`;
+    : '<div class="empty-state">لا توجد قصّات مكتملة تنتظر إدخالها للخياطة.</div>';
+  const storyTab = activeAdminCuttingTab === "stories";
+  return `<div class="client-management-tabs cutting-admin-tabs" role="tablist" aria-label="إدارة القص">
+      <button type="button" role="tab" aria-selected="${storyTab}" class="client-management-tab${storyTab ? " active" : ""}" data-admin-cutting-tab="stories">قصص القص</button>
+      <button type="button" role="tab" aria-selected="${!storyTab}" class="client-management-tab${!storyTab ? " active" : ""}" data-admin-cutting-tab="new">إضافة قصة جديدة</button>
+    </div>
+    <div data-admin-cutting-panel="stories"${storyTab ? "" : " hidden"}>
+      ${panel("قصص القص المرسلة للمراجعة والاعتماد", cuttingStoryRows, "افتح السهم لعرض تفاصيل الرقات والأتواب ومصدر القماش والمقاسات كاملة. تبقى القصة محفوظة بعد الاعتماد.")}${panel("قصّات مكتملة تنتظر الخياطة", sewingReady, "يمكن للإدارة إدخال أي أمر مكتمل القص للخياطة مباشرة؛ يظهر بعدها لمشرف الخياطة لاستلامه وبدء العمل.")}
+    </div>
+    <div data-admin-cutting-panel="new"${storyTab ? " hidden" : ""}>
+      ${panel("إضافة قصة جديدة", cuttingSubmissionFormMarkup({ ...data, isAdmin: true }), "ستُحفظ القصة في سجل القص للمراجعة، ثم تعتمدها الإدارة لإضافتها للموديلات أو إرسالها للخياطة.")}
+    </div>`;
 }
 
 function workerProductionColorMarkup(colors) {
@@ -5596,8 +5631,11 @@ function bindCuttingActions(session) {
         if (error?.code === "PGRST202") throw new Error("دالة تسجيل القصة بالدفعة الواحدة غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
         if (error) throw error;
         recordSaved = true;
+        if (session.role === "admin") activeAdminCuttingTab = "stories";
         await refreshDashboard(session);
-        window.factoryUI.toast(`تم إرسال القصة للإدارة للمراجعة، بإجمالي ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(data)} قطعة. لم تُضف إلى الموديلات بعد.`);
+        window.factoryUI.toast(session.role === "admin"
+          ? `تم حفظ القصة في سجل المراجعة بإجمالي ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(data)} قطعة.`
+          : `تم إرسال القصة للإدارة للمراجعة، بإجمالي ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(data)} قطعة. لم تُضف إلى الموديلات بعد.`);
       } catch (error) {
         reportDashboardFailure(session, recordSaved ? "تم حفظ القصة لكن تعذر تحديث الشاشة" : imageUploaded ? "رُفعت الصورة لكن تعذر حفظ بيانات القصة" : "تعذر حفظ القصة", error);
       } finally {
@@ -6491,11 +6529,24 @@ function bindActions(session) {
   bindWorkforceActions(session);
   bindWorkerPermissionActions(session);
   bindWorkerProductionReview(session);
+  bindPickers(document.querySelector("#app"));
+  bindCuttingActions(session);
   document.querySelectorAll("[data-confirm-custom-color], [data-custom-color-trigger]").forEach((item) => {
     item.setAttribute("aria-haspopup", "dialog");
   });
   bindFabricAdminActions(session);
   bindSewingStageActions(session);
+  document.querySelectorAll("[data-admin-cutting-tab]").forEach((button) => button.addEventListener("click", () => {
+    activeAdminCuttingTab = button.dataset.adminCuttingTab;
+    document.querySelectorAll("[data-admin-cutting-tab]").forEach((tab) => {
+      const selected = tab === button;
+      tab.classList.toggle("active", selected);
+      tab.setAttribute("aria-selected", String(selected));
+    });
+    document.querySelectorAll("[data-admin-cutting-panel]").forEach((tabPanel) => {
+      tabPanel.hidden = tabPanel.dataset.adminCuttingPanel !== activeAdminCuttingTab;
+    });
+  }));
   document.querySelectorAll("[data-pending-account-type]").forEach((select) => select.addEventListener("change", () => {
     const card = select.closest("[data-pending-account]");
     card.querySelectorAll("[data-pending-options]").forEach((section) => {

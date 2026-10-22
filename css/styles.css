@@ -472,6 +472,16 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .workforce-late-rules > div { display: grid; gap: 8px; margin-bottom: 10px; }
 .workforce-late-rule-row { display: grid; grid-template-columns: minmax(130px, 1fr) minmax(130px, 1fr) auto; align-items: end; gap: 8px; padding: 9px; border: 1px solid var(--line); border-radius: 8px; }
 .workforce-late-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+.cutting-story-expandable { padding: 0; overflow: hidden; }
+.cutting-story-expandable > .cutting-story-heading { display: grid; grid-template-columns: 76px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 16px; border: 0; cursor: pointer; list-style: none; }
+.cutting-story-expandable > .cutting-story-heading::-webkit-details-marker { display: none; }
+.cutting-story-expandable > .cutting-story-heading::marker { content: ""; }
+.cutting-story-summary-facts { display: flex; align-items: center; gap: 12px; color: var(--green-dark); }
+.cutting-story-expand-icon { display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: #edf5ef; font-size: 20px; transition: transform .18s ease; }
+.cutting-story-expandable[open] .cutting-story-expand-icon { transform: rotate(180deg); }
+.cutting-story-expanded { display: grid; gap: 14px; padding: 0 16px 16px; }
+.cutting-story-breakdown h4 { margin: 0 0 8px; color: var(--green-dark); }
+.cutting-admin-tabs { margin-bottom: 14px; }
 @media (max-width: 700px) {
   .workforce-penalty-row { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
   .workforce-penalty-row > button { grid-column: 1 / -1; justify-self: start; }
@@ -809,6 +819,10 @@ input, select, .modal-form textarea { color: #1d3028; font-size: 16px; }
   .cutting-story-heading { grid-template-columns: 56px minmax(0, 1fr); gap: 9px; }
   .cutting-story-heading .model-thumbnail { width: 56px; height: 56px; }
   .cutting-story-heading > .status { grid-column: 1 / -1; justify-self: start; }
+  .cutting-story-expandable { padding: 0; }
+  .cutting-story-expandable > .cutting-story-heading { grid-template-columns: 56px minmax(0, 1fr); padding: 12px; }
+  .cutting-story-summary-facts { grid-column: 1 / -1; justify-content: space-between; }
+  .cutting-story-expanded { padding: 0 12px 12px; }
   .cutting-story-card .form-actions { flex-direction: column; align-items: stretch; }
   .form-actions { width: 100%; }
   .form-actions > * { flex: 1 1 auto; }

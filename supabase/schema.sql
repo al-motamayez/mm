@@ -775,19 +775,27 @@ set model_name = coalesce(
       when 'تم التسليم' then 'تم التسليم'
       when 'تم التسليم والإغلاق' then 'تم التسليم'
       when 'تم التسليم بالكامل' then 'تم التسليم'
-      when 'مكتمل' then 'تم التسليم'
+      when 'مكتمل' then case
+        when coalesce(factory_order.delivered_pieces, 0) >= greatest(coalesce(factory_order.total_pieces, 0), 0)
+          and coalesce(factory_order.total_pieces, 0) > 0
+          then 'تم التسليم'
+        else 'جاهز للتسليم'
+      end
       when 'تم الانتهاء' then 'تم التسليم'
       when 'جاهز للتسليم' then 'جاهز للتسليم'
       when 'قيد الانتظار' then 'قيد الانتظار'
-      when 'معلق' then 'معلق'
-      when 'تحت الإنشاء' then 'تحت الإنشاء'
+      when 'معلق' then 'قيد الانتظار'
+      when 'تحت الإنشاء' then 'قيد الانتظار'
       when 'قيد الفرش' then 'قيد الفرش'
-      when 'تم الفرش / جاهز للقص' then 'تم الفرش / جاهز للقص'
+      when 'تم الفرش' then 'تم الفرش'
+      when 'جاهز للقص' then 'جاهز للقص'
+      when 'تم الفرش / جاهز للقص' then 'جاهز للقص'
       when 'تم القص' then 'تم القص'
-      when 'معلق - في انتظار الخياطة' then 'معلق - في انتظار الخياطة'
-      when 'في الخياطة' then 'في الخياطة'
-      when 'متاح للإمبلاج / التعبئة' then 'متاح للإمبلاج / التعبئة'
-      when 'في الخط' then 'في الخياطة'
+      when 'معلق - في انتظار الخياطة' then 'جاري الخياطة'
+      when 'في الخياطة' then 'جاري الخياطة'
+      when 'جاري الخياطة' then 'جاري الخياطة'
+      when 'متاح للإمبلاج / التعبئة' then 'مكتمل'
+      when 'في الخط' then 'جاري الخياطة'
       when 'تحت التصنيع' then 'قيد الفرش'
       when 'قيد الإنتاج' then 'قيد الفرش'
       else 'قيد الانتظار'
@@ -815,10 +823,8 @@ alter table public.orders
   add constraint orders_paid_amount_nonnegative check (paid_amount >= 0),
   add constraint orders_factory_status_check check (
     status in (
-      'قيد الانتظار', 'معلق', 'تحت الإنشاء', 'قيد الفرش',
-      'تم الفرش / جاهز للقص', 'تم القص', 'معلق - في انتظار الخياطة',
-      'في الخياطة', 'متاح للإمبلاج / التعبئة', 'جاهز للتسليم', 'تم التسليم', 'تم التسليم بالكامل',
-      'تم التسليم والإغلاق'
+      'قيد الانتظار', 'قيد الفرش', 'تم الفرش', 'جاهز للقص', 'تم القص',
+      'جاري الخياطة', 'مكتمل', 'جاهز للتسليم', 'تم التسليم'
     )
   );
 
@@ -1194,9 +1200,8 @@ begin
     or requested_priority not in ('عادي', 'مرتفع', 'عاجل')
     or requested_status is null
     or requested_status not in (
-      'قيد الانتظار', 'معلق', 'تحت الإنشاء', 'قيد الفرش',
-      'تم الفرش / جاهز للقص', 'تم القص', 'معلق - في انتظار الخياطة',
-      'في الخياطة', 'متاح للإمبلاج / التعبئة', 'جاهز للتسليم', 'تم التسليم'
+      'قيد الانتظار', 'قيد الفرش', 'تم الفرش', 'جاهز للقص',
+      'تم القص', 'جاري الخياطة', 'مكتمل', 'جاهز للتسليم', 'تم التسليم'
     ) then
     raise exception 'Invalid factory order data.';
   end if;
@@ -1221,7 +1226,7 @@ begin
   );
 
   if requested_order_id is null
-     and requested_status in ('معلق - في انتظار الخياطة', 'في الخياطة', 'متاح للإمبلاج / التعبئة') then
+     and requested_status in ('جاري الخياطة', 'مكتمل') then
     raise exception 'New orders cannot skip the cutting and sewing handoff workflow.';
   end if;
 
@@ -1280,15 +1285,15 @@ begin
     ) then
       raise exception 'Archived factory orders cannot be edited.';
     end if;
-    if current_status in ('مكتمل', 'تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق')
+    if current_status in ('تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق')
        and requested_status is distinct from current_status then
       raise exception 'A delivered factory order must remain closed.';
     end if;
     if current_status is distinct from requested_status
-       and requested_status in ('معلق - في انتظار الخياطة', 'في الخياطة', 'متاح للإمبلاج / التعبئة') then
+       and requested_status in ('جاري الخياطة', 'مكتمل') then
       raise exception 'Use the production workflow controls to move an order into sewing or finishing.';
     end if;
-    if current_status in ('معلق - في انتظار الخياطة', 'في الخياطة', 'متاح للإمبلاج / التعبئة')
+    if current_status in ('جاري الخياطة', 'مكتمل')
        and requested_status is distinct from current_status then
       raise exception 'Production workflow statuses can only be changed through their stage controls.';
     end if;
@@ -3224,7 +3229,7 @@ begin
     raise exception 'Factory order changed while the delivery was being recorded.';
   end if;
   if current_order.archived_at is not null
-     or current_order.status in ('مكتمل', 'تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق') then
+     or current_order.status = 'تم التسليم' then
     raise exception 'Closed or archived factory orders cannot receive new deliveries.';
   end if;
   if current_order.total_pieces <= 0 then
@@ -3309,7 +3314,7 @@ begin
   if current_order.archived_at is not null then
     raise exception 'Closed or archived factory orders cannot be completed again.';
   end if;
-  if current_order.status in ('مكتمل', 'تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق') then
+  if current_order.status = 'تم التسليم' then
     raise exception 'Closed factory orders cannot be completed again.';
   end if;
   if current_order.total_pieces <= 0 then
@@ -3424,7 +3429,7 @@ begin
   set delivered_pieces = updated_delivered_quantity,
       status = case
         when updated_delivered_quantity = 0
-          and status in ('مكتمل', 'تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق')
+          and status = 'تم التسليم'
           then 'جاهز للتسليم'
         else status
       end
@@ -3610,8 +3615,11 @@ declare
   total_plys integer;
   fabric_unit text;
 begin
-  if not public.has_active_factory_role(array['cutting']) then
-    raise exception 'Only active cutting supervisors can submit new cutting orders.';
+  if not (
+    public.is_active_factory_admin()
+    or public.has_active_factory_role(array['cutting'])
+  ) then
+    raise exception 'Only active admins or cutting supervisors can submit new cutting orders.';
   end if;
   if requested_order_id is null
      or requested_customer_id is null
@@ -3679,10 +3687,10 @@ begin
     into submitted_by_name
   from public.users
   where id = auth.uid()
-    and role = 'cutting'
+    and role in ('admin', 'cutting')
     and status = 'active';
   if not found then
-    raise exception 'The active cutting supervisor profile could not be identified.';
+    raise exception 'The active admin or cutting supervisor profile could not be identified.';
   end if;
 
   select breakdown.normalized_sizes, breakdown.normalized_colors,
@@ -3779,7 +3787,7 @@ begin
   from jsonb_array_elements(story.color_ply_data -> 'colors') as entry(value);
 
   order_status := case
-    when requested_action = 'send_to_sewing' then 'معلق - في انتظار الخياطة'
+    when requested_action = 'send_to_sewing' then 'جاري الخياطة'
     else 'تم القص'
   end;
   insert into public.orders (
@@ -3938,7 +3946,7 @@ begin
   where id = requested_order_id
   for update;
   if not found or current_order.archived_at is not null
-     or current_order.status in ('مكتمل', 'تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق') then
+     or current_order.status in ('مكتمل', 'تم التسليم') then
     raise exception 'This order is not accepting live cutting updates.';
   end if;
 
@@ -3979,6 +3987,11 @@ begin
     raise exception 'The cutting stage for this order does not exist.';
   end if;
 
+  update public.orders
+  set status = 'تم الفرش'
+  where id = requested_order_id
+    and status not in ('تم القص', 'جاري الخياطة', 'مكتمل', 'جاهز للتسليم', 'تم التسليم');
+
   return total_plys;
 end;
 $$;
@@ -4008,7 +4021,7 @@ begin
   where id = requested_order_id
   for update;
   if not found or current_order.archived_at is not null
-     or current_order.status in ('مكتمل', 'تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق') then
+     or current_order.status in ('مكتمل', 'تم التسليم') then
     raise exception 'The active factory order was not found.';
   end if;
 
@@ -4031,13 +4044,13 @@ begin
   end if;
 
   update public.production_stages
-  set status = 'تم الفرش / جاهز للقص',
+  set status = 'جاهز للقص',
       updated_at = now()
   where order_id = requested_order_id
     and stage_name = 'cutting';
 
   update public.orders
-  set status = 'تم الفرش / جاهز للقص'
+  set status = 'جاهز للقص'
   where id = requested_order_id;
 end;
 $$;
@@ -4132,14 +4145,14 @@ begin
   where id = requested_order_id
   for update;
   if not found or current_order.archived_at is not null
-     or current_order.status in ('مكتمل', 'تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق') then
+     or current_order.status in ('مكتمل', 'تم التسليم') then
     raise exception 'The active factory order was not found.';
   end if;
   if not exists (
     select 1 from public.production_stages
     where order_id = requested_order_id
       and stage_name = 'cutting'
-      and status = 'تم الفرش / جاهز للقص'
+      and status = 'جاهز للقص'
   ) then
     raise exception 'Mark the bed ready for cutting before recording its final piece count.';
   end if;
@@ -4570,7 +4583,7 @@ create policy "Supervisors update their production stages"
         select 1 from public.orders
         where orders.id = production_stages.order_id
           and orders.archived_at is null
-          and orders.status not in ('مكتمل', 'تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق')
+          and orders.status not in ('تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق')
       )
     )
     or (
@@ -4580,7 +4593,7 @@ create policy "Supervisors update their production stages"
         select 1 from public.orders
         where orders.id = production_stages.order_id
           and orders.archived_at is null
-          and orders.status not in ('مكتمل', 'تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق')
+          and orders.status not in ('تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق')
       )
     )
     or (
@@ -4590,7 +4603,7 @@ create policy "Supervisors update their production stages"
         select 1 from public.orders
         where orders.id = production_stages.order_id
           and orders.archived_at is null
-          and orders.status not in ('مكتمل', 'تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق')
+          and orders.status not in ('تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق')
       )
     )
   )
@@ -4601,7 +4614,7 @@ create policy "Supervisors update their production stages"
         select 1 from public.orders
         where orders.id = production_stages.order_id
           and orders.archived_at is null
-          and orders.status not in ('مكتمل', 'تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق')
+          and orders.status not in ('تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق')
       )
     )
     or (
@@ -4611,7 +4624,7 @@ create policy "Supervisors update their production stages"
         select 1 from public.orders
         where orders.id = production_stages.order_id
           and orders.archived_at is null
-          and orders.status not in ('مكتمل', 'تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق')
+          and orders.status not in ('تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق')
       )
     )
     or (
@@ -4621,7 +4634,7 @@ create policy "Supervisors update their production stages"
         select 1 from public.orders
         where orders.id = production_stages.order_id
           and orders.archived_at is null
-          and orders.status not in ('مكتمل', 'تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق')
+          and orders.status not in ('تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق')
       )
     )
   );
@@ -5014,8 +5027,19 @@ begin
   for update;
   if not found
      or current_order.archived_at is not null
-     or current_order.status in ('مكتمل', 'تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق') then
+     or current_order.status in ('تم التسليم') then
     raise exception 'The active factory order was not found.';
+  end if;
+  if requested_action = 'make_available' and public.is_active_factory_admin() then
+    if not coalesce('sewing' = any(current_order.work_stages), false) then
+      update public.orders
+      set work_stages = array_append(work_stages, 'sewing')
+      where id = requested_order_id;
+      current_order.work_stages := array_append(current_order.work_stages, 'sewing');
+    end if;
+    insert into public.production_stages (order_id, stage_name, target_quantity, status)
+    values (requested_order_id, 'sewing', current_order.total_pieces, 'معلق')
+    on conflict (order_id, stage_name) do nothing;
   end if;
   if not coalesce('sewing' = any(current_order.work_stages), false) then
     raise exception 'This order does not include a sewing stage.';
@@ -5032,7 +5056,7 @@ begin
   end if;
 
   if requested_action = 'make_available' then
-    if current_order.status not in ('تم القص', 'معلق - في انتظار الخياطة')
+    if current_order.status <> 'تم القص'
        or current_sewing_stage.status in ('متاح للخياطة', 'قيد الخياطة', 'مكتمل') then
       raise exception 'Only a cut order that has not entered sewing can be made available.';
     end if;
@@ -5051,7 +5075,7 @@ begin
         updated_at = now()
     where id = current_sewing_stage.id;
     update public.orders
-    set status = 'معلق - في انتظار الخياطة'
+    set status = 'جاري الخياطة'
     where id = requested_order_id;
     return;
   end if;
@@ -5065,7 +5089,7 @@ begin
         updated_at = now()
     where id = current_sewing_stage.id;
     update public.orders
-    set status = 'في الخياطة'
+    set status = 'جاري الخياطة'
     where id = requested_order_id;
     return;
   end if;
@@ -5097,7 +5121,7 @@ begin
       raise exception 'The next production stage for this order was not found.';
     end if;
     update public.orders
-    set status = 'متاح للإمبلاج / التعبئة'
+    set status = 'مكتمل'
     where id = requested_order_id;
   else
     update public.orders
