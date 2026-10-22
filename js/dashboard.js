@@ -9,6 +9,8 @@ let realtimeChannel = null;
 let presenceChannel = null;
 let realtimeRefreshTimer = null;
 let realtimeRefreshRunning = false;
+let realtimeRefreshPending = false;
+let realtimeEditProtectionBound = false;
 let realtimeNotifications = [];
 let notificationStorageAccount = "";
 let onlineUserCount = 0;
@@ -1198,7 +1200,9 @@ function updateSizePicker(root) {
       const size = choice.dataset.sizeOccurrences;
       const occurrences = Number(choice.dataset.occurrences || 0);
       if (occurrences > 0) sizeData.multiplicities[size] = occurrences;
-      if (occurrences > 0) sizeData.counts[size] = "0";
+      const countInput = choice.querySelector("[data-size-count]");
+      const count = root.dataset.autoQuantity === "true" ? 0 : Number(countInput?.value || previous.counts[size] || 0);
+      if (occurrences > 0 && count > 0) sizeData.counts[size] = String(count);
     });
     root.querySelector("[data-size-value]").value = selectedType
       ? JSON.stringify(sizeData)
@@ -1394,16 +1398,28 @@ function setSizePicker(root, value) {
   const data = parseSizeData(value);
   root.dataset.sizeLegacy = data.legacy;
   root.querySelector("[data-size-type]").value = data.type;
+  const sizeOrder = orderedSizeEntries(data);
+  root.dataset.sizeOrder = JSON.stringify(sizeOrder);
   root.querySelectorAll("[data-size-toggle]").forEach((button) => {
-    const selected = Object.hasOwn(data.counts, button.dataset.sizeToggle);
+    const size = button.dataset.sizeToggle;
+    const choice = button.closest(".size-choice");
+    const selected = root.dataset.sizeDuplicates === "true"
+      ? Number(data.multiplicities[size] || sizeOrder.filter((entry) => entry === size).length) > 0
+      : Object.hasOwn(data.counts, size);
     button.setAttribute("aria-pressed", String(selected));
-    button.closest(".size-choice").classList.toggle("active", selected);
+    choice.classList.toggle("active", selected);
+    if (root.dataset.sizeDuplicates === "true") {
+      const occurrences = Number(data.multiplicities[size] || sizeOrder.filter((entry) => entry === size).length);
+      choice.dataset.occurrences = String(occurrences);
+      choice.querySelector("[data-size-occurrence-count]").textContent = String(occurrences);
+      choice.querySelector("[data-size-occurrence-remove]").disabled = occurrences === 0;
+    }
     const label = button.nextElementSibling;
     if (label?.matches(".size-count-label")) {
       const input = label.querySelector("input");
       label.hidden = !selected;
       input.disabled = !selected;
-      input.value = selected ? data.counts[button.dataset.sizeToggle] : "";
+      input.value = selected ? data.counts[size] || "" : "";
     }
   });
   updateSizePicker(root);
@@ -2459,8 +2475,8 @@ function modelExpenseTypeLabel(expenseType) {
   })[expenseType] || "مصروف خارجي";
 }
 
-function adminCuttingEditFormMarkup(order) {
-  return `<details class="admin-cutting-edit">
+function adminCuttingEditFormMarkup(order, expanded = false, pickerPrefix = `admin-cutting-${order.id}`) {
+  return `<details class="admin-cutting-edit"${expanded ? " open" : ""}>
     <summary class="button button-secondary">تعديل البيانات</summary>
     <form class="admin-cutting-editor-form" data-admin-cutting-edit="${escapeHtml(order.id)}" data-customer-id="${escapeHtml(order.customerId || "")}" data-saved-fabric="false">
       <div class="form-section-grid cutting-bed-inputs">
@@ -2472,8 +2488,8 @@ function adminCuttingEditFormMarkup(order) {
         <input type="hidden" name="externalFabricUnit" value="${order.externalFabricUnit || "متر"}">
       </div>
       <label class="field"><span>المورد / تفاصيل مصدر القماش</span><input name="fabricDetails" maxlength="240" value="${escapeHtml(order.fabricDetails || "")}"></label>
-      ${sizePickerMarkup(order.sizes, `admin-cutting-${order.id}`, false, true)}
-      ${cuttingColorPlyMarkup(order.colorPlyData, order.colors, order.layerCount, `admin-cutting-${order.id}`)}
+      ${sizePickerMarkup(order.sizes, pickerPrefix, false, true)}
+      ${cuttingColorPlyMarkup(order.colorPlyData, order.colors, order.layerCount, pickerPrefix)}
       <p class="cutting-calculated-total">إجمالي الراقات: <strong data-cutting-plys>0</strong> · إجمالي قطع القصة: <strong data-cutting-total>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity || 0)}</strong> قطعة</p>
       <div class="cutting-breakdown" data-cutting-breakdown></div>
       <label class="field"><span>مسؤول القص</span><input name="cutterName" maxlength="120" value="${escapeHtml(order.cutterName || "")}"></label>
@@ -2836,7 +2852,7 @@ function adminView(data, accounts) {
         <section class="form-section"><h3>التفاصيل التشغيلية <span>اختياري</span></h3><div class="form-section-grid">
           <fieldset class="field work-stage-picker"><legend>الأقسام المطلوبة</legend><div class="work-stage-options">${WORK_STAGES.map(([key, label]) => `<label><input type="checkbox" name="workStage" value="${key}" ${["cutting", "sewing", "finishing"].includes(key) ? "checked" : ""}><span>${label}</span></label>`).join("")}</div></fieldset>
           ${colorPickerMarkup("", "model-colors")}
-          ${sizePickerMarkup("", "model-sizes")}
+          ${sizePickerMarkup("", "model-sizes", true, true)}
           <div class="model-allocation field"><label>توزيع العدد على الألوان والمقاسات</label><div data-model-allocation-grid><p class="muted">أدخل العدد الكلي واختر الألوان والمقاسات لعرض التوزيع.</p></div><input type="hidden" name="colorSizeDistribution" value='{"colors":[]}'></div>
           <label class="field model-image-field"><span>صورة الموديل (اختياري)</span><input type="file" name="modelImage" accept="image/*"><small>يمكن رفع صيغ الصور الشائعة حتى 25 ميجابايت.</small><div data-model-image-preview></div></label>
           <div class="field" data-expected-delivery-field><label for="model-expected-delivery">تاريخ التسليم المتوقع (اختياري)</label><input id="model-expected-delivery" name="expectedDeliveryDate" type="date"></div>
@@ -2857,7 +2873,7 @@ function adminView(data, accounts) {
           <div class="field"><label for="client-balance-preview">الرصيد المتوقع للعميل بعد الحفظ</label><output id="client-balance-preview" class="calculated-value">اختر العميل</output></div>
         </div></section>
         <div class="form-actions"><button class="button button-primary" type="submit">حفظ الطلبية</button><button class="row-action" type="button" data-cancel-edit hidden>إلغاء التعديل</button><button class="row-action" type="button" data-close-order>إغلاق</button></div>
-      </form></section></div>
+      </form><div data-order-cutting-editor hidden></div></section></div>
       <div class="modal-backdrop" id="delivery-modal" hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="delivery-modal-title"><button class="modal-close" type="button" data-close-delivery aria-label="إغلاق">×</button><h2 id="delivery-modal-title">تسجيل تسليم جديد</h2><p id="delivery-modal-description">أدخل كمية هذه الدفعة واسم مستلمها؛ ستُضاف إلى إجمالي ما تم تسليمه حتى الآن.</p><form id="delivery-form" class="modal-form"><input type="hidden" name="orderId"><input type="hidden" name="finalize" value=""><label for="delivery-settlement-choice" data-settlement-choice-field hidden>طريقة التسوية</label><select id="delivery-settlement-choice" name="settlementChoice" data-settlement-choice-field hidden></select><label for="delivery-quantity" id="delivery-quantity-label">كمية التسليم</label><input id="delivery-quantity" name="quantity" type="number" min="1" step="1" required><label for="delivery-recipient">اسم المستلم</label><input id="delivery-recipient" name="recipientName" required><div class="form-actions"><button class="button button-primary" type="submit">تسجيل التسليم</button><button class="row-action" type="button" data-close-delivery>إلغاء</button></div></form></section></div>
     </section>
     ${clientModelRequestsAdminView(data)}
@@ -5539,6 +5555,7 @@ function recordRealtimeNotification(payload = {}) {
 }
 
 function subscribeToFactoryUpdates(session) {
+  bindRealtimeEditProtection(session);
   if (realtimeChannel) supabaseClient.removeChannel(realtimeChannel);
   if (presenceChannel) supabaseClient.removeChannel(presenceChannel);
   let channel = supabaseClient
@@ -5621,8 +5638,53 @@ async function revalidateSessionAfterAccountChange(session) {
     }
 }
 
+function hasActiveDashboardEditor() {
+  const hasOpenModal = [...document.querySelectorAll(".modal-backdrop:not([hidden])")]
+    .some((modal) => modal.getClientRects().length > 0);
+  if (hasOpenModal) return true;
+  const focusedForm = document.activeElement?.closest?.("form");
+  if (focusedForm?.getClientRects().length) return true;
+  return [...document.querySelectorAll("form[data-dashboard-dirty='true']")]
+    .some((form) => form.getClientRects().length > 0);
+}
+
+function bindRealtimeEditProtection(session) {
+  if (realtimeEditProtectionBound) return;
+  realtimeEditProtectionBound = true;
+  const resumePendingRefresh = () => {
+    if (!realtimeRefreshPending || hasActiveDashboardEditor() || realtimeRefreshRunning) return;
+    realtimeRefreshPending = false;
+    void refreshFromRealtime(session, "تحديث مؤجل بعد إغلاق نموذج التحرير");
+  };
+  document.addEventListener("input", (event) => {
+    const form = event.target.closest("form");
+    if (form) form.dataset.dashboardDirty = "true";
+  }, true);
+  document.addEventListener("change", (event) => {
+    const form = event.target.closest("form");
+    if (form) form.dataset.dashboardDirty = "true";
+  }, true);
+  document.addEventListener("reset", (event) => {
+    const form = event.target;
+    window.setTimeout(() => delete form.dataset.dashboardDirty);
+  }, true);
+  document.addEventListener("click", () => window.setTimeout(resumePendingRefresh, 0), true);
+  document.addEventListener("focusout", () => window.setTimeout(resumePendingRefresh, 0), true);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") window.setTimeout(resumePendingRefresh, 0);
+  }, true);
+}
+
 function scheduleRealtimeRefresh(session, source, payload) {
   recordRealtimeNotification(payload);
+  if (hasActiveDashboardEditor()) {
+    realtimeRefreshPending = true;
+    if (realtimeRefreshTimer) {
+      window.clearTimeout(realtimeRefreshTimer);
+      realtimeRefreshTimer = null;
+    }
+    return;
+  }
   if (realtimeRefreshTimer) window.clearTimeout(realtimeRefreshTimer);
   realtimeRefreshTimer = window.setTimeout(() => {
     realtimeRefreshTimer = null;
@@ -5631,6 +5693,10 @@ function scheduleRealtimeRefresh(session, source, payload) {
 }
 
 async function refreshFromRealtime(session, source) {
+  if (hasActiveDashboardEditor()) {
+    realtimeRefreshPending = true;
+    return;
+  }
   if (realtimeRefreshRunning) {
     if (realtimeRefreshTimer) window.clearTimeout(realtimeRefreshTimer);
     realtimeRefreshTimer = window.setTimeout(() => {
@@ -5641,7 +5707,7 @@ async function refreshFromRealtime(session, source) {
   }
   realtimeRefreshRunning = true;
   try {
-    await refreshDashboard(session);
+    await refreshDashboard(session, true);
   } catch (error) {
     reportDashboardFailure(session, "وصل تحديث جديد لكن تعذر تحميل البيانات", error);
   } finally {
@@ -5653,10 +5719,25 @@ function enrichRealtimeNotifications() {
   filterRealtimeNotifications();
 }
 
-async function refreshDashboard(session) {
+async function refreshDashboard(session, protectEdits = false) {
+  if (!protectEdits) {
+    realtimeRefreshPending = false;
+    if (realtimeRefreshTimer) {
+      window.clearTimeout(realtimeRefreshTimer);
+      realtimeRefreshTimer = null;
+    }
+  }
   const data = await readDashboardData(session);
+  if (protectEdits && hasActiveDashboardEditor()) {
+    realtimeRefreshPending = true;
+    return;
+  }
   dashboardData = data;
   const accounts = await readAccounts(session);
+  if (protectEdits && hasActiveDashboardEditor()) {
+    realtimeRefreshPending = true;
+    return;
+  }
   enrichRealtimeNotifications();
   render(session, data, accounts);
 }
@@ -5921,6 +6002,10 @@ function bindCuttingActions(session) {
     const summary = event.target.closest(".admin-cutting-edit > summary");
     if (!summary) return;
     const form = summary.parentElement.querySelector("[data-admin-cutting-edit]");
+    if (form) bindAdminCuttingEditor(form);
+  });
+  document.addEventListener("focusin", (event) => {
+    const form = event.target.closest("form[data-admin-cutting-edit]");
     if (form) bindAdminCuttingEditor(form);
   });
   document.querySelectorAll("[data-ready-cutting]").forEach((button) => button.addEventListener("click", async () => {
@@ -7361,6 +7446,9 @@ function bindActions(session) {
     orderModal.hidden = true;
     removeWorkflowStatusOptions();
     orderForm.reset();
+    const cuttingEditor = orderForm.parentElement.querySelector("[data-order-cutting-editor]");
+    cuttingEditor.hidden = true;
+    cuttingEditor.replaceChildren();
     orderForm.elements.editIndex.value = "";
     orderForm.elements.status.disabled = false;
     orderForm.elements.operationalExpenses.readOnly = false;
@@ -7413,10 +7501,18 @@ function bindActions(session) {
     orderForm.elements.quantity.value = currentOrder.quantity || "";
     orderForm.elements.deliveredPieces.value = currentOrder.deliveredPieces;
     updateOrderConditionalFields();
-    setSizePicker(orderForm.querySelector("[data-size-picker]"), currentOrder.sizes);
+    setSizePicker(orderForm.querySelector("[data-size-picker]"), cuttingSizePickerValue(currentOrder.sizes, currentOrder.colorPlyData));
     setColorPicker(orderForm.querySelector("[data-color-picker]"), currentOrder.colors, currentOrder.colorNames);
     renderModelAllocation(orderForm, currentOrder.colorSizeDistribution);
     orderForm.querySelector("[data-cutting-pricing-details]").innerHTML = cuttingDetailsMarkup(currentOrder);
+    const cuttingEditor = orderForm.parentElement.querySelector("[data-order-cutting-editor]");
+    if (currentOrder.cuttingStageStatus) {
+      cuttingEditor.innerHTML = `<section class="form-section"><h3>تعديل بيانات القصة والخامات</h3>${adminCuttingEditFormMarkup(currentOrder, true, `admin-cutting-edit-order-${currentOrder.id}`)}</section>`;
+      cuttingEditor.hidden = false;
+    } else {
+      cuttingEditor.hidden = true;
+      cuttingEditor.replaceChildren();
+    }
     orderForm.querySelector("[data-model-image-preview]").innerHTML = modelImageMarkup(currentOrder.modelImageUrl);
     orderForm.querySelector("#model-price-history-note").hidden = currentOrder.deliveredPieces <= 0;
     orderForm.querySelector('[type="submit"]').textContent = "حفظ التعديلات";
