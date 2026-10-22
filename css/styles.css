@@ -168,6 +168,23 @@ input:focus, select:focus { border-color: #5e9b83; box-shadow: 0 0 0 3px #5e9b83
 .stat-detail-empty { padding: 0 !important; }
 .sewing-order-grid { display: grid; gap: 14px; padding: 14px; }
 .sewing-order-card { display: grid; min-width: 0; gap: 12px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
+.sewing-order-quantity { margin: 0; color: var(--muted); }
+.sewing-order-quantity strong { color: var(--green-dark); }
+.production-details-modal { z-index: 1500; }
+.production-details-modal-card { width: min(1120px, 100%); max-height: min(92vh, 900px); }
+.production-details-heading { display: flex; min-width: 0; align-items: center; gap: 14px; padding: 4px 42px 14px 0; border-bottom: 1px solid #edf1ed; }
+.production-details-heading > div { flex: 1; min-width: 0; }
+.production-details-heading small, .production-details-heading p { color: var(--muted); font-size: 12px; }
+.production-details-heading h2 { margin: 3px 0; overflow-wrap: anywhere; color: var(--green-dark); font-size: 20px; }
+.production-details-heading p { margin: 4px 0 0; }
+.production-details-heading .model-image-trigger { flex: 0 0 76px; width: 76px; height: 76px; }
+.production-details-heading .model-thumbnail { width: 76px; height: 76px; }
+.production-details-modal-card > [data-production-details-content] > .sewing-order-facts { margin-top: 14px; }
+.production-details-modal-card .cutting-details-section { margin-top: 18px; }
+.production-details-modal-card .cutting-details-section .table-wrap { max-width: 100%; overflow-x: auto; }
+.production-details-modal-card .cutting-details-section table { white-space: normal; }
+.production-details-modal-card .cutting-details-section th,
+.production-details-modal-card .cutting-details-section td { min-width: 100px; }
 .sewing-order-heading { display: flex; min-width: 0; align-items: center; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid #edf1ed; }
 .sewing-order-heading > div { flex: 1; min-width: 0; }
 .sewing-order-heading p, .sewing-order-heading h3 { margin: 0 0 4px; overflow-wrap: anywhere; }
@@ -420,6 +437,19 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .cutting-calculated-total strong { font-size: 20px; }
 .cutting-order-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; padding: 10px; }
 .cutting-order-card { min-width: 0; padding: 12px; }
+.cutting-admin-order-grid { display: grid; gap: 12px; padding: 12px; }
+.cutting-admin-order-card { display: grid; min-width: 0; gap: 12px; padding: 15px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
+.cutting-admin-order-heading { display: flex; min-width: 0; align-items: center; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid #edf1ed; }
+.cutting-admin-order-heading > div { flex: 1; min-width: 0; }
+.cutting-admin-order-heading h3, .cutting-admin-order-heading p { margin: 0 0 4px; overflow-wrap: anywhere; }
+.cutting-admin-order-heading h3 { color: var(--green-dark); font-size: 17px; }
+.cutting-admin-order-heading p { color: var(--muted); font-size: 12px; }
+.cutting-admin-order-heading .model-image-trigger { flex: 0 0 70px; width: 70px; height: 70px; }
+.cutting-admin-order-heading .model-thumbnail { width: 70px; height: 70px; }
+.cutting-admin-order-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr)); gap: 9px; }
+.cutting-admin-order-facts > div { display: grid; min-width: 0; gap: 5px; padding: 10px 12px; border: 1px solid #e7ece8; border-radius: 8px; background: #f8faf8; }
+.cutting-admin-order-facts span { color: var(--muted); font-size: 11px; }
+.cutting-admin-order-facts strong { overflow-wrap: anywhere; color: var(--green-dark); font-size: 13px; }
 .cutting-story-list { display: grid; gap: 12px; padding: 12px; }
 .cutting-story-card { display: grid; min-width: 0; gap: 14px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
 .cutting-story-heading { display: grid; grid-template-columns: 76px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid #edf1ed; }
@@ -918,6 +948,15 @@ input, select, .modal-form textarea { color: #1d3028; font-size: 16px; }
   .section-heading .button { width: 100%; min-height: 46px; }
   .settlement-card { grid-template-columns: minmax(0, 1fr); }
   .modal-card { padding: 22px 18px; }
+  .production-details-modal-card { max-height: 94vh; padding: 22px 14px; }
+  .production-details-heading { align-items: flex-start; flex-wrap: wrap; }
+  .production-details-heading > .status { margin-inline-start: auto; }
+  .production-details-heading .model-image-trigger { flex-basis: 58px; width: 58px; height: 58px; }
+  .production-details-heading .model-thumbnail { width: 58px; height: 58px; }
+  .cutting-admin-order-heading { align-items: flex-start; flex-wrap: wrap; }
+  .cutting-admin-order-heading > .status { margin-inline-start: auto; }
+  .cutting-admin-order-heading .model-image-trigger { flex-basis: 56px; width: 56px; height: 56px; }
+  .cutting-admin-order-heading .model-thumbnail { width: 56px; height: 56px; }
   .compact-view-modal { max-height: 86vh; padding: 17px 14px; }
   .compact-model-item { grid-template-columns: minmax(0, 1fr) auto; }
   .compact-model-item > .status { grid-column: 1 / -1; justify-self: start; }

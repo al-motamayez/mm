@@ -982,7 +982,8 @@ set model_name = coalesce(
       when 'جاهز للقص' then 'جاهز للقص'
       when 'تم الفرش / جاهز للقص' then 'جاهز للقص'
       when 'تم القص' then 'تم القص'
-      when 'معلق - في انتظار الخياطة' then 'جاري الخياطة'
+      when 'في انتظار الخياطة' then 'في انتظار الخياطة'
+      when 'معلق - في انتظار الخياطة' then 'في انتظار الخياطة'
       when 'في الخياطة' then 'جاري الخياطة'
       when 'جاري الخياطة' then 'جاري الخياطة'
       when 'تمت الخياطة' then 'تمت الخياطة'
@@ -1024,10 +1025,21 @@ alter table public.orders
   add constraint orders_factory_status_check check (
     status in (
       'قيد الانتظار', 'قيد الفرش', 'تم الفرش', 'جاهز للقص', 'تم القص',
-      'جاري الخياطة', 'تمت الخياطة', 'جاري التشطيب', 'تم التشطيب',
+      'في انتظار الخياطة', 'جاري الخياطة', 'تمت الخياطة', 'جاري التشطيب', 'تم التشطيب',
       'جاري المكواة', 'تم الكي', 'جاري الطباعة', 'تمت الطباعة',
       'جاري التكييس', 'تم التكييس', 'مكتمل', 'جاهز للتسليم', 'تم التسليم'
     )
+  );
+
+update public.orders as factory_order
+set status = 'في انتظار الخياطة'
+where factory_order.status = 'جاري الخياطة'
+  and exists (
+    select 1
+    from public.production_stages as sewing_stage
+    where sewing_stage.order_id = factory_order.id
+      and sewing_stage.stage_name = 'sewing'
+      and sewing_stage.status = 'متاح للخياطة'
   );
 
 do $$
@@ -1412,7 +1424,7 @@ begin
     or requested_status is null
     or requested_status not in (
       'قيد الانتظار', 'قيد الفرش', 'تم الفرش', 'جاهز للقص',
-      'تم القص', 'جاري الخياطة', 'تمت الخياطة', 'جاري التشطيب', 'تم التشطيب',
+      'تم القص', 'في انتظار الخياطة', 'جاري الخياطة', 'تمت الخياطة', 'جاري التشطيب', 'تم التشطيب',
       'جاري المكواة', 'تم الكي', 'جاري الطباعة', 'تمت الطباعة',
       'جاري التكييس', 'تم التكييس', 'مكتمل', 'جاهز للتسليم', 'تم التسليم'
     ) then
@@ -1440,7 +1452,7 @@ begin
 
   if requested_order_id is null
      and requested_status in (
-       'جاري الخياطة', 'تمت الخياطة', 'جاري التشطيب', 'تم التشطيب',
+       'في انتظار الخياطة', 'جاري الخياطة', 'تمت الخياطة', 'جاري التشطيب', 'تم التشطيب',
        'جاري المكواة', 'تم الكي', 'جاري الطباعة', 'تمت الطباعة',
        'جاري التكييس', 'تم التكييس', 'مكتمل', 'جاهز للتسليم'
      ) then
@@ -1518,14 +1530,14 @@ begin
     end if;
     if current_status is distinct from requested_status
        and requested_status in (
-         'جاري الخياطة', 'تمت الخياطة', 'جاري التشطيب', 'تم التشطيب',
+         'في انتظار الخياطة', 'جاري الخياطة', 'تمت الخياطة', 'جاري التشطيب', 'تم التشطيب',
          'جاري المكواة', 'تم الكي', 'جاري الطباعة', 'تمت الطباعة',
          'جاري التكييس', 'تم التكييس', 'مكتمل', 'جاهز للتسليم'
        ) then
       raise exception 'Use the production workflow controls to move an order into sewing or finishing.';
     end if;
     if current_status in (
-      'جاري الخياطة', 'تمت الخياطة', 'جاري التشطيب', 'تم التشطيب',
+      'في انتظار الخياطة', 'جاري الخياطة', 'تمت الخياطة', 'جاري التشطيب', 'تم التشطيب',
       'جاري المكواة', 'تم الكي', 'جاري الطباعة', 'تمت الطباعة',
       'جاري التكييس', 'تم التكييس', 'مكتمل', 'جاهز للتسليم'
     )
@@ -4308,7 +4320,7 @@ begin
   from jsonb_array_elements(story.color_ply_data -> 'colors') as entry(value);
 
   order_status := case
-    when requested_action = 'send_to_sewing' then 'جاري الخياطة'
+    when requested_action = 'send_to_sewing' then 'في انتظار الخياطة'
     else 'تم القص'
   end;
   insert into public.orders (
@@ -5291,6 +5303,16 @@ create policy "Users read relevant production stages"
   using (
     public.is_active_factory_admin()
     or (stage_name = 'cutting' and public.has_active_factory_role(array['cutting']))
+    or (
+      stage_name = 'cutting'
+      and public.has_active_factory_role(array['sewing'])
+      and exists (
+        select 1
+        from public.orders as sewing_order
+        where sewing_order.id = production_stages.order_id
+          and 'sewing' = any(sewing_order.work_stages)
+      )
+    )
     or (stage_name = 'sewing' and public.has_active_factory_role(array['sewing']))
     or exists (
       select 1
@@ -5816,7 +5838,7 @@ begin
         updated_at = now()
     where id = current_sewing_stage.id;
     update public.orders
-    set status = 'جاري الخياطة'
+    set status = 'في انتظار الخياطة'
     where id = requested_order_id;
     return;
   end if;
