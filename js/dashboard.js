@@ -1150,6 +1150,30 @@ function sizeSummary(value) {
     : sizeData.legacy || "—";
 }
 
+function sizeBadgesMarkup(value) {
+  const sizeData = parseSizeData(value);
+  const sizes = orderedSizeEntries(sizeData);
+  if (!sizes.length) {
+    const legacySizes = sizeData.legacy.split(/[،,]/).map((size) => size.trim()).filter(Boolean);
+    return legacySizes.length
+      ? `<span class="size-summary-list">${legacySizes.map((size) => `<span class="size-summary-chip"><strong>${escapeHtml(size)}</strong></span>`).join("")}</span>`
+      : "—";
+  }
+  const totals = sizes.reduce((result, size) => {
+    result[size] = Number(result[size] || 0) + 1;
+    return result;
+  }, {});
+  const occurrences = {};
+  return `<span class="size-summary-list">${sizes.map((size) => {
+    occurrences[size] = Number(occurrences[size] || 0) + 1;
+    const sizeCount = Number(sizeData.counts[size] || 0);
+    const count = Math.floor(sizeCount / totals[size])
+      + (occurrences[size] <= sizeCount % totals[size] ? 1 : 0);
+    const repeated = totals[size] > 1 ? ` · ${occurrences[size]}/${totals[size]}` : "";
+    return `<span class="size-summary-chip"><strong>${escapeHtml(size)}${repeated}</strong><span>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(count)} قطعة</span></span>`;
+  }).join("")}</span>`;
+}
+
 function updateSizePicker(root) {
   const typeSelect = root.querySelector("[data-size-type]");
   const selectedType = typeSelect.value;
@@ -2893,7 +2917,7 @@ function cuttingView(data) {
       ? `قيد الفرش - تم فرش ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.layerCount)} راقات`
       : orderStatus;
     return `<article class="order-card cutting-order-card">
-    <header class="order-card-heading">${modelImageMarkup(item.modelImageUrl)}<div><p class="order-card-label">أمر قص · ${escapeHtml(item.order.slice(0, 8))} · الأولوية: ${escapeHtml(item.priority)}</p><h3>${escapeHtml(item.model)}</h3><p>رقم الموديل: ${escapeHtml(item.modelNumber || "—")} · العميل: ${escapeHtml(item.client || "—")}</p>${item.senderName ? `<p>تم الإرسال بواسطة: ${escapeHtml(item.senderName)}</p>` : ""}<p>الألوان: ${colorSummaryMarkup(item.colors, item.colorNames, item.colorPlyData)} · المقاسات: ${escapeHtml(sizeSummary(item.sizes) || "—")}</p></div>${statusTag(displayStatus)}</header>
+    <header class="order-card-heading">${modelImageMarkup(item.modelImageUrl)}<div><p class="order-card-label">أمر قص · ${escapeHtml(item.order.slice(0, 8))} · الأولوية: ${escapeHtml(item.priority)}</p><h3>${escapeHtml(item.model)}</h3><p>رقم الموديل: ${escapeHtml(item.modelNumber || "—")} · العميل: ${escapeHtml(item.client || "—")}</p>${item.senderName ? `<p>تم الإرسال بواسطة: ${escapeHtml(item.senderName)}</p>` : ""}<div class="cutting-order-summary"><span><strong>الألوان</strong>${colorSummaryMarkup(item.colors, item.colorNames, item.colorPlyData)}</span><span><strong>المقاسات</strong>${sizeBadgesMarkup(item.sizes)}</span></div></div>${statusTag(displayStatus)}</header>
     <p class="cutting-target">${item.total > 0 ? `العدد الحالي: ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.total)} قطعة` : "العدد النهائي: بانتظار اعتماد القص"}</p>
     <div class="form-actions">${productionDetailsButton("cutting", item)}</div>
     <form class="cutting-finish-form" data-finish-cutting="${escapeHtml(item.order)}" data-customer-id="${escapeHtml(item.customerId || "")}" data-saved-fabric="${hasSavedFabric ? "true" : "false"}" data-saved-fabric-id="${escapeHtml(item.fabricId || "")}" data-saved-fabric-name="${escapeHtml(item.fabric || "")}" data-saved-fabric-quantity="${escapeHtml(item.fabricQuantity || "")}" data-saved-fabric-unit="${escapeHtml(item.fabricUnit || "")}" data-saved-fabric-bolt-count="${escapeHtml(item.boltCount || 0)}" data-saved-external-fabric-source="${escapeHtml(item.externalFabricSource || "")}" data-saved-external-fabric-unit="${escapeHtml(item.externalFabricUnit || "")}">
@@ -2994,7 +3018,8 @@ function sewingOrderRows(orders, actionLabel = "", action = "") {
   return orders.length
     ? `<div class="sewing-order-grid">${orders.map((item) => `<article class="sewing-order-card">
       <header class="sewing-order-heading">${modelImageMarkup(item.modelImageUrl)}<div><h3>${escapeHtml(item.model)}</h3><span>رقم الموديل: ${escapeHtml(item.modelNumber || "—")}</span></div></header>
-      <p class="sewing-order-quantity">إجمالي العدد: <strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.target)} قطعة</strong></p>
+      <div class="sewing-order-summary"><span><strong>الألوان</strong>${colorSummaryMarkup(item.colors, item.colorNames, item.colorPlyData)}</span><span><strong>المقاسات</strong>${sizeBadgesMarkup(item.sizes)}</span></div>
+      <p class="sewing-order-quantity"><span>الإجمالي</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.target)} قطعة</strong></p>
       <div class="form-actions">${productionDetailsButton("sewing", item)}${action ? `<button class="button button-primary" type="button" data-sewing-action="${action}" data-sewing-order="${escapeHtml(item.order)}">${actionLabel}</button>` : ""}</div>
     </article>`).join("")}</div>`
     : '<div class="empty-state">لا توجد قصّات في هذه القائمة.</div>';
@@ -3005,7 +3030,7 @@ function sewingView(data) {
   const inProgress = data.sewing.filter((item) => item.stageStatus === "قيد الخياطة");
   const completed = data.sewing.filter((item) => item.stageStatus === "مكتمل");
   return `<div class="stats-grid">${stat("قصّات متاحة للبدء", available.length)}${stat("قيد الخياطة الفعلية", inProgress.length)}${stat("محوّلة للإمبلاج / التعبئة", completed.length)}</div>
-    ${panel("قصّات متاحة للبدء", sewingOrderRows(available, "بدء الخياطة / استلام على المكنة", "start"), "لا يبدأ العمل إلا بعد استلام المشرف للقصّة")}
+    ${panel("قصّات متاحة للبدء", sewingOrderRows(available, "بدء الخياطة", "start"), "لا يبدأ العمل إلا بعد استلام المشرف للقصّة")}
     ${panel("قصّات قيد الخياطة الفعلية", sewingOrderRows(inProgress, "تحويل للإمبلاج / التعبئة", "finish"))}
     ${panel("قصّات مكتملة الخياطة", sewingOrderRows(completed), "تم تسليمها للمرحلة التالية")}`;
 }
@@ -3015,7 +3040,7 @@ function adminSewingView(data) {
   const inProgress = data.sewing.filter((item) => item.stageStatus === "قيد الخياطة");
   const completed = data.sewing.filter((item) => item.stageStatus === "مكتمل");
   return `<div class="stats-grid">${stat("متاحة للخياطة", available.length)}${stat("بدأت الخياطة", inProgress.length)}${stat("مكتملة / محوّلة", completed.length)}</div>
-    ${panel("قصّات متاحة للخياطة", sewingOrderRows(available))}
+    ${panel("قصّات متاحة للخياطة", sewingOrderRows(available, "بدء الخياطة", "start"))}
     ${panel("قصّات بدأ المشرف خياطتها", sewingOrderRows(inProgress))}
     ${panel("قصّات مكتملة ومحوّلة للإمبلاج / التعبئة", sewingOrderRows(completed))}`;
 }
@@ -3040,7 +3065,7 @@ function adminCuttingTransferView(data) {
   );
   const orderCard = (order, transferred = false) => `<article class="cutting-admin-order-card">
     <header class="cutting-admin-order-heading">${modelImageMarkup(order.modelImageUrl)}<div><p>الموديل · ${escapeHtml(order.factoryModelCode || order.modelNumber || "—")}</p><h3>${escapeHtml(order.name || "موديل بدون اسم")}</h3><p>رقم الموديل: ${escapeHtml(order.modelNumber || "—")} · العميل: ${escapeHtml(order.client || "—")}</p></div>${statusTag(order.displayStatus || order.status)}</header>
-    <div class="cutting-admin-order-facts"><div><span>إجمالي العدد</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity || 0)} قطعة</strong></div><div><span>الألوان</span><strong>${colorSummaryMarkup(order.colors, order.colorNames, order.colorPlyData)}</strong></div><div><span>المقاسات</span><strong>${escapeHtml(sizeSummary(order.sizes) || "—")}</strong></div></div>
+    <div class="cutting-admin-order-facts"><div><span>إجمالي العدد</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity || 0)} قطعة</strong></div><div><span>الألوان</span><strong>${colorSummaryMarkup(order.colors, order.colorNames, order.colorPlyData)}</strong></div><div><span>المقاسات</span><strong>${sizeBadgesMarkup(order.sizes)}</strong></div></div>
     <div class="form-actions">${productionDetailsButton("cutting", order)}${!transferred && ["مكتمل", "تم القص"].includes(order.cuttingStageStatus) && !["متاح للخياطة", "قيد الخياطة", "مكتمل"].includes(order.sewingStageStatus) ? `<button class="button button-primary" type="button" data-make-sewing-available="${escapeHtml(order.id)}">إدخال للخياطة</button>` : ""}</div>
   </article>`;
   const activeOrderCards = activeOrders.length

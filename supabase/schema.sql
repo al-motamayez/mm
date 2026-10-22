@@ -5777,9 +5777,13 @@ begin
   if requested_action = 'make_available'
      and not public.is_active_factory_admin() then
     raise exception 'Only active admins can make sewing orders available.';
-  elsif requested_action in ('start', 'finish')
+  elsif requested_action = 'start'
+     and not public.is_active_factory_admin()
      and not public.has_active_factory_role(array['sewing']) then
-    raise exception 'Only active sewing supervisors can update sewing stages.';
+    raise exception 'Only active admins or sewing supervisors can start sewing.';
+  elsif requested_action = 'finish'
+     and not public.has_active_factory_role(array['sewing']) then
+    raise exception 'Only active sewing supervisors can finish sewing.';
   end if;
 
   select *
