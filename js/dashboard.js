@@ -41,7 +41,7 @@ const WORKER_JOB_TITLES = ["غير محدد", "مشرف أصل", "مشرف خي�
 const SIZE_OPTIONS = {
   men: ["XS", "S", "M", "L", "XL", "2XL", "3XL", "4XL"],
   women: ["XS", "S", "M", "L", "XL", "2XL", "3XL", "4XL"],
-  children: Array.from({ length: 16 }, (_, index) => String(index + 1))
+  children: Array.from({ length: 8 }, (_, index) => String((index + 1) * 2))
 };
 const SIZE_TYPE_LABELS = { men: "رجالي", women: "حريمي", children: "أطفال" };
 const WORK_STAGES = [
@@ -154,9 +154,17 @@ function emptyDashboardData() {
 function reportDashboardFailure(session, publicMessage, error) {
   console.error(publicMessage, error);
   const message = session.role === "admin"
-    ? `${publicMessage}: ${error?.message || error}`
+    ? `${publicMessage}: ${dashboardErrorMessage(error)}`
     : `${publicMessage}. حاول مرة أخرى لاحقًا أو تواصل مع الإدارة.`;
   window.factoryUI.toast(message, "error");
+}
+
+function dashboardErrorMessage(error) {
+  if (!error || typeof error !== "object") return String(error || "خطأ غير معروف");
+  const parts = [error.message, error.details, error.hint]
+    .filter((value, index, values) => typeof value === "string" && value && values.indexOf(value) === index);
+  if (error.code && !parts.some((part) => part.includes(error.code))) parts.push(`رمز الخطأ: ${error.code}`);
+  return parts.join(" · ") || "خطأ غير معروف";
 }
 
 async function readFlexibleRecords(collection) {
