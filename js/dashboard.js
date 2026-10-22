@@ -167,6 +167,16 @@ function dashboardErrorMessage(error) {
   return parts.join(" · ") || "خطأ غير معروف";
 }
 
+function logSupabaseRpcError(rpcName, error) {
+  console.error(`Supabase RPC ${rpcName} failed`, {
+    code: error?.code || "",
+    message: error?.message || String(error || "Unknown error"),
+    details: error?.details || "",
+    hint: error?.hint || "",
+    status: error?.status || ""
+  });
+}
+
 async function readFlexibleRecords(collection) {
   const { data, error } = await supabaseClient
     .from("factory_records")
@@ -410,14 +420,14 @@ async function readDashboardData(session) {
   } else {
     let ordersQuery = supabaseClient
       .from("orders")
-      .select("id, model_name, model_number, sender_name, colors, color_size_distribution, production_type, work_stages, sizes, total_pieces, model_image_url, priority, archived_at, status, created_at")
+      .select("id, customer_id, model_name, model_number, sender_name, colors, color_size_distribution, production_type, work_stages, sizes, total_pieces, model_image_url, priority, archived_at, status, created_at")
       .is("archived_at", null)
       .order("created_at", { ascending: false });
     ({ data: orders, error: ordersError } = await ordersQuery);
     if (ordersError?.code === "42703") {
       ordersQuery = supabaseClient
         .from("orders")
-        .select("id, model_name, model_number, sender_name, colors, sizes, total_pieces, model_image_url, priority, status, created_at")
+        .select("id, customer_id, model_name, model_number, sender_name, colors, sizes, total_pieces, model_image_url, priority, status, created_at")
         .order("created_at", { ascending: false });
       ({ data: orders, error: ordersError } = await ordersQuery);
     }
@@ -568,7 +578,7 @@ async function readDashboardData(session) {
     .map((stage) => ({
       id: stage.id,
       order: stage.order_id,
-      customerId: ordersById.get(stage.order_id)?.client_id || ordersById.get(stage.order_id)?.customer_id || "",
+      customerId: ordersById.get(stage.order_id)?.customer_id || "",
       model: ordersById.get(stage.order_id)?.model_name || ordersById.get(stage.order_id)?.model_number || "موديل غير محدد",
       modelNumber: ordersById.get(stage.order_id)?.model_number || "",
       sizes: cuttingSizePickerValue(ordersById.get(stage.order_id)?.sizes, stage.color_ply_data),
@@ -2399,7 +2409,9 @@ function printClientAccount(client, data) {
 }
 
 function fabricSelectOptions(fabrics, selectedId = "", clients = [], allowExternal = false) {
-  const selectableFabrics = allowExternal ? fabrics.filter((fabric) => fabric.unit === "توب") : fabrics;
+  const selectableFabrics = allowExternal
+    ? fabrics.filter((fabric) => fabric.stock_scope === "incoming")
+    : fabrics;
   return `<option value="">اختر خامة من المخزون</option>${allowExternal ? `<option value="external" ${selectedId === "external" ? "selected" : ""}>خامة أخرى / خارجية غير مسجلة بالمخزن</option>` : ""}${selectableFabrics.map((fabric) =>
     `<option value="${escapeHtml(fabric.id)}" data-name="${escapeHtml(fabric.name)}" data-unit="${escapeHtml(fabric.unit)}" data-customer="${escapeHtml(fabric.customer_id || "")}" data-color="${escapeHtml(fabric.color_name || "")}" data-available="${escapeHtml(fabric.quantity_available)}" ${fabric.stock_scope === "incoming" && !fabric.customer_id ? "disabled" : ""} ${fabric.id === selectedId ? "selected" : ""}>${escapeHtml(fabric.name)}${fabric.customer_id ? ` · ${escapeHtml(clients.find((client) => client.id === fabric.customer_id)?.name || "عميل مرتبط")}` : fabric.stock_scope === "incoming" ? " · بانتظار تعيين العميل" : ""} · ${escapeHtml(fabric.color_name || fabric.color_hex)} · متاح ${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(fabric.quantity_available)} ${escapeHtml(fabric.unit)}</option>`
   ).join("")}`;
@@ -2718,7 +2730,7 @@ function cuttingView(data) {
         <label class="field"><span>وحدة السحب</span><select name="fabricUnit" data-fabric-unit-select><option value="توب" ${item.fabricUnit === "توب" ? "selected" : ""}>عدد التوب</option><option value="متر" ${item.fabricUnit === "متر" ? "selected" : ""}>الكمية بالمتر</option></select></label>
         <label class="field"><span>الكمية المستخدمة</span><input name="fabricQuantity" type="number" min="0.001" step="0.001" value="${item.fabricQuantity || ""}" required></label>
         <input type="hidden" name="boltCount" value="${item.boltCount || 0}">
-        <label class="field" data-external-fabric-source-field hidden><span>مصدر الخامة الخارجية</span><input name="externalFabricSource" maxlength="160" value="${escapeHtml(item.externalFabricSource || "")}" placeholder="مثال: بواقي قماش قديم من المخزن"></label>
+        <label class="field" data-external-fabric-source-field hidden><span>اسم المورد / مصدر الخامة الخارجية</span><input name="externalFabricSource" maxlength="120" value="${escapeHtml(item.externalFabricSource || "")}" placeholder="اسم المورد أو مصدر القماش"></label>
         <input type="hidden" name="externalFabricUnit" value="متر">
       </div>
       ${sizePickerMarkup(item.sizes, `cutting-${item.order}`, false, true)}
@@ -2760,7 +2772,7 @@ function cuttingSubmissionFormMarkup(data) {
         <label class="field"><span>وحدة السحب</span><select name="fabricUnit" data-fabric-unit-select><option value="توب">عدد التوب</option><option value="متر">الكمية بالمتر</option></select></label>
         <label class="field"><span>الكمية المستخدمة</span><input name="fabricQuantity" type="number" min="0.001" step="0.001" placeholder="الكمية"></label>
         <input type="hidden" name="boltCount" value="0">
-        <label class="field" data-external-fabric-source-field hidden><span>مصدر الخامة الخارجية</span><input name="externalFabricSource" maxlength="160" placeholder="مثال: بواقي قماش قديم من المخزن"></label>
+        <label class="field" data-external-fabric-source-field hidden><span>اسم المورد / مصدر الخامة الخارجية</span><input name="externalFabricSource" maxlength="120" placeholder="اسم المورد أو مصدر القماش"></label>
         <input type="hidden" name="externalFabricUnit" value="">
         <label class="field wide"><span>المورد / تفاصيل مصدر القماش</span><input name="fabricDetails" maxlength="240" placeholder="اسم المورد أو أي تفاصيل إضافية عن الخامة"></label>
       </div></section>
@@ -5543,15 +5555,18 @@ function bindCuttingActions(session) {
     const selectedFabricId = form.elements.fabricId.value;
     const isExternal = selectedFabricId === "external";
     const fabricUnit = form.elements.fabricUnit.value;
-    const fabricId = isExternal ? null : selectedFabricId;
+    const fabricId = isExternal ? null : selectedFabricId || null;
     const fabricQuantity = Number(form.elements.fabricQuantity.value);
     const boltCount = fabricUnit === "توب" ? fabricQuantity : 0;
-    const externalFabricSource = isExternal ? String(form.elements.externalFabricSource.value).trim() : "";
+    const externalFabricSource = isExternal
+      ? String(form.elements.externalFabricSource?.value || form.elements.fabricDetails?.value || "").trim()
+      : "";
     const fabric = isExternal ? externalFabricSource : form.elements.fabricId.selectedOptions[0]?.dataset.name || "";
     const { sizeData, total } = cuttingData;
     if ((!isExternal && !fabricId) || !fabric || !Number.isFinite(fabricQuantity) || fabricQuantity <= 0
       || !["متر", "توب"].includes(fabricUnit)
       || (!isExternal && fabricUnit !== form.elements.fabricId.selectedOptions[0]?.dataset.unit)
+      || (isExternal && externalFabricSource.length > 120)
       || (fabricUnit === "توب" && !Number.isSafeInteger(boltCount))
       || !Number.isSafeInteger(boltCount)
       || (requireFinal && (!sizeData.type || !Object.keys(sizeData.counts).length || !Number.isSafeInteger(total) || total <= 0
@@ -5571,7 +5586,7 @@ function bindCuttingActions(session) {
       fabricId,
       fabricQuantity,
       fabricUnit,
-      externalFabricUnit: isExternal ? fabricUnit : "",
+      externalFabricUnit: isExternal ? fabricUnit : null,
       boltCount,
       externalFabricSource,
       technicalNotes: String(form.elements.technicalNotes.value).trim()
@@ -5642,6 +5657,7 @@ function bindCuttingActions(session) {
         requested_external_fabric_unit: cuttingData.externalFabricUnit,
         requested_cutter_name: String(form.elements.cutterName?.value || "").trim()
       });
+      if (error) logSupabaseRpcError("finish_factory_cutting", error);
       if (error?.code === "PGRST202") throw new Error("دالة إنهاء القص غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
       if (error) throw error;
       await refreshDashboard(session);
