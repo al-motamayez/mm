@@ -49,6 +49,7 @@ const WORK_STAGES = [
   ["sewing", "خياطة"],
   ["finishing", "تشطيب"],
   ["ironing", "مكوى"],
+  ["printing", "طباعة"],
   ["packaging", "تكييس"]
 ];
 const FACTORY_ORDER_STATUSES = [
@@ -58,7 +59,7 @@ const FACTORY_ORDER_STATUSES = [
   "جاهز للقص",
   "تم القص",
   "جاري الخياطة",
-  "مكتمل",
+  "تمت الخياطة",
   "جاهز للتسليم",
   "تم التسليم"
 ];
@@ -464,7 +465,7 @@ async function readDashboardData(session) {
   if (session.role === "admin" || orders.length) {
     let stagesQuery = supabaseClient
       .from("production_stages")
-      .select("id, order_id, stage_name, worker_name, cutter_name, fabric, fabric_id, external_fabric_source, external_fabric_unit, fabric_quantity, bolt_count, layer_count, color_ply_data, technical_notes, line_name, target_quantity, completed_quantity, status, updated_at");
+      .select("id, order_id, stage_name, worker_name, cutter_name, fabric, fabric_details, fabric_id, external_fabric_source, external_fabric_unit, fabric_quantity, bolt_count, layer_count, color_ply_data, technical_notes, line_name, target_quantity, completed_quantity, status, updated_at");
     if (session.role !== "admin") {
       stagesQuery = stagesQuery.in("order_id", orders.map((order) => order.id));
     }
@@ -498,7 +499,7 @@ async function readDashboardData(session) {
     const cuttingStage = orderStages.find((stage) => ["cutting", "قص", "تقطيع"].includes(stage.stage_name));
     const sewingStage = orderStages.find((stage) => ["sewing", "خياطة"].includes(stage.stage_name));
     const completedPieces = orderStages
-      .filter((stage) => ["cutting", "sewing", "finishing", "ironing", "packaging"].includes(stage.stage_name))
+      .filter((stage) => ["cutting", "sewing", "finishing", "ironing", "printing", "packaging"].includes(stage.stage_name))
       .reduce((maximum, stage) => Math.max(maximum, Number(stage.completed_quantity || 0)), 0);
     const originalQuantity = Number(order.original_total_pieces ?? order.total_pieces ?? 0);
     const deliveredPieces = Number(order.delivered_pieces || 0);
@@ -550,11 +551,13 @@ async function readDashboardData(session) {
       remainingAmount: Number(order.remaining_amount || 0),
       expectedDeliveryDate: order.expected_delivery_date || "",
       status: canonicalFactoryOrderStatus(order.status),
+      storedStatus: order.status,
       displayStatus: canonicalFactoryOrderStatus(order.status) === "قيد الفرش" && Number(cuttingStage?.layer_count) > 0
         ? `قيد الفرش - تم فرش ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(cuttingStage.layer_count)} راقات`
         : canonicalFactoryOrderStatus(order.status),
       cuttingPlys: Number(cuttingStage?.layer_count || 0),
       fabric: cuttingStage?.fabric || "",
+      fabricDetails: cuttingStage?.fabric_details || "",
       fabricId: cuttingStage?.fabric_id || (cuttingStage?.external_fabric_source ? "external" : ""),
       externalFabricSource: cuttingStage?.external_fabric_source || "",
       externalFabricUnit: cuttingStage?.external_fabric_unit || "متر",
@@ -585,6 +588,7 @@ async function readDashboardData(session) {
       colors: ordersById.get(stage.order_id)?.colors || "",
       modelImageUrl: ordersById.get(stage.order_id)?.model_image_url || "",
       fabric: stage.fabric || data.fabrics.find((fabric) => fabric.id === stage.fabric_id)?.name || stage.external_fabric_source || "",
+      fabricDetails: stage.fabric_details || "",
       fabricId: stage.fabric_id || (stage.external_fabric_source ? "external" : ""),
       externalFabricSource: stage.external_fabric_source || "",
       externalFabricUnit: stage.external_fabric_unit || "متر",
@@ -761,12 +765,53 @@ function canonicalFactoryOrderStatus(status) {
     "معلق - في انتظار الخياطة": "جاري الخياطة",
     "في الخياطة": "جاري الخياطة",
     "في الخط": "جاري الخياطة",
-    "متاح للإمبلاج / التعبئة": "مكتمل",
+    "متاح للإمبلاج / التعبئة": "تمت الخياطة",
+    "مكتمل": "تمت الخياطة",
     "تم التسليم بالكامل": "تم التسليم",
     "تم التسليم والإغلاق": "تم التسليم",
     "تم الانتهاء": "تم التسليم"
   };
   return aliases[status] || status || "قيد الانتظار";
+}
+
+function factoryOrderStatusSequence(order) {
+  const statuses = [...FACTORY_ORDER_STATUSES.slice(0, 7)];
+  const stageStatuses = {
+    finishing: ["جاري التشطيب", "تم التشطيب"],
+    ironing: ["جاري المكواة", "تم الكي"],
+    printing: ["جاري الطباعة", "تمت الطباعة"],
+    packaging: ["جاري التكييس", "تم التكييس"]
+  };
+  (order.workStages || []).forEach((stage) => {
+    if (stageStatuses[stage]) statuses.push(...stageStatuses[stage]);
+  });
+  statuses.push(...FACTORY_ORDER_STATUSES.slice(7));
+  return statuses;
+}
+
+function cuttingDetailsMarkup(order) {
+  const sizeData = parseSizeData(order.sizes);
+  const sizes = orderedSizeEntries(sizeData);
+  const colors = parseColorPlyData(order.colorPlyData, order.colors);
+  const breakdown = colors.flatMap((color) => sizes.map((size, index) => {
+    const occurrence = sizes.slice(0, index + 1).filter((entry) => entry === size).length;
+    const totalOccurrences = sizes.filter((entry) => entry === size).length;
+    const colorName = order.colorNames?.[color.color] || color.name || color.color;
+    return `<tr><td>${escapeHtml(colorName)}</td><td>${escapeHtml(size)}${totalOccurrences > 1 ? ` · تكرار ${occurrence} من ${totalOccurrences}` : ""}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(color.plys)} راقات</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(color.plys)} قطعة</td></tr>`;
+  }));
+  const cuttingDetails = [
+    ["مسؤول القص", order.cutterName || "—"],
+    ["الخامة", order.fabric || order.externalFabricSource || "—"],
+    ...(order.fabricDetails ? [["تفاصيل الخامة", order.fabricDetails]] : []),
+    ["مصدر الخامة", order.fabricId === "external" ? "خامة خارجية / مورد" : order.fabricId ? "خامة العميل من المخزن" : "—"],
+    ["كمية القماش", `${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(order.fabricQuantity || 0)} ${order.fabricUnit || "متر"}`],
+    ["عدد الأتواب", new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.boltCount || 0)],
+    ["إجمالي الراقات", new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.layerCount || order.cuttingPlys || 0)]
+  ];
+  return `<section class="cutting-details-section"><h3 class="modal-subheading">تفاصيل القص والخامات</h3><dl class="cutting-details-grid">${cuttingDetails.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`).join("")}</dl>
+    ${breakdown.length ? table(["اللون","المقاس","الرقات","العدد الناتج"], breakdown) : '<p class="empty-state">لم تُسجل تفاصيل المقاسات والرقات بعد.</p>'}
+    ${order.cuttingNotes ? `<p class="cutting-details-notes"><strong>ملاحظات القص:</strong> ${escapeHtml(order.cuttingNotes)}</p>` : ""}
+  </section>`;
 }
 
 function parseSizeData(value) {
@@ -1616,9 +1661,9 @@ function bindCustomColorPickers() {
 
 function statusClass(value) {
   if (String(value).startsWith("قيد الفرش")
-    || ["قيد المراجعة", "قيد التنفيذ", "قيد الخياطة", "قيد الإنتاج", "قيد الانتظار", "معلق", "تحت الإنشاء", "تم الفرش", "جاهز للقص", "جاري الخياطة", "معلق - في انتظار الخياطة", "جار العمل"].includes(value)) return "warning";
-  if (["جديدة", "جاهز للتسليم", "تم القص", "في الخياطة", "متاح للخياطة", "متاح للإمبلاج / التعبئة"].includes(value)) return "info";
-  if (value === "جاهز للتسليم" || value === "مكتمل" || value === "تم التسليم" || value === "تم التسليم بالكامل" || value === "تم التسليم والإغلاق") return "";
+    || ["قيد المراجعة", "قيد التنفيذ", "قيد الخياطة", "قيد الإنتاج", "قيد الانتظار", "معلق", "تحت الإنشاء", "تم الفرش", "جاهز للقص", "جاري الخياطة", "جاري التشطيب", "جاري المكواة", "جاري الطباعة", "جاري التكييس", "معلق - في انتظار الخياطة", "جار العمل"].includes(value)) return "warning";
+  if (["جديدة", "جاهز للتسليم", "تم القص", "تم التشطيب", "تم الكي", "تمت الطباعة", "تم التكييس", "في الخياطة", "متاح للخياطة", "متاح للإمبلاج / التعبئة"].includes(value)) return "info";
+  if (value === "جاهز للتسليم" || value === "تمت الخياطة" || value === "تم التسليم" || value === "تم التسليم بالكامل" || value === "تم التسليم والإغلاق") return "";
   return "muted";
 }
 
@@ -1747,16 +1792,16 @@ function orderCards(models, withActions = false) {
   }).join("")}</div>`;
 }
 
-function orderProgress(status) {
-  const stages = FACTORY_ORDER_STATUSES;
-  const activeStatus = status === "معلق" || status === "تحت الإنشاء" ? "قيد الانتظار" : status;
+function orderProgress(status, workStages = []) {
+  const stages = factoryOrderStatusSequence({ workStages });
+  const activeStatus = canonicalFactoryOrderStatus(status);
   const activeIndex = Math.max(0, stages.indexOf(activeStatus));
   const steps = stages.map((stage, index) => `<span class="order-progress-step${index <= activeIndex ? " complete" : ""}${index === activeIndex ? " current" : ""}">${stage}</span>`).join("");
   return `<div class="order-progress" aria-label="تقدم الطلب: ${escapeHtml(activeStatus)}">${steps}</div>`;
 }
 
 function clientOrderRows(orders) {
-  return orders.map((item) => `<tr><td>${escapeHtml(item.name)}</td><td>${colorSummaryMarkup(item.colors, item.colorNames, item.colorPlyData)}</td><td>${escapeHtml(item.sizes || "—")}</td><td>${item.quantity ? new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.quantity) : "بانتظار الحصر"}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.deliveredPieces)}</td><td>${item.quantity ? new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.remainingPieces) : "بانتظار الحصر"}</td><td>${statusTag(item.displayStatus || item.status)}</td><td>${orderProgress(item.status)}</td></tr>`);
+  return orders.map((item) => `<tr><td>${escapeHtml(item.name)}</td><td>${colorSummaryMarkup(item.colors, item.colorNames, item.colorPlyData)}</td><td>${escapeHtml(item.sizes || "—")}</td><td>${item.quantity ? new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.quantity) : "بانتظار الحصر"}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.deliveredPieces)}</td><td>${item.quantity ? new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.remainingPieces) : "بانتظار الحصر"}</td><td>${statusTag(item.displayStatus || item.status)}</td><td>${orderProgress(item.status, item.workStages)}</td></tr>`);
 }
 
 function clientOrderCards(orders) {
@@ -1766,6 +1811,9 @@ function clientOrderCards(orders) {
     <dl class="order-card-details">
       <div><dt>كود الموديل لدى العميل</dt><dd>${escapeHtml(item.clientModelCode || "—")}</dd></div>
       ${item.cutterName ? `<div><dt>مين اللي قص القصة؟</dt><dd>${escapeHtml(item.cutterName)}</dd></div>` : ""}
+      <div><dt>الخامة المستخدمة</dt><dd>${escapeHtml(item.fabric || item.externalFabricSource || "—")}</dd></div>
+      <div><dt>كمية القماش والأتواب</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(item.fabricQuantity || 0)} ${escapeHtml(item.fabricUnit || "متر")} · ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.boltCount || 0)} توب</dd></div>
+      <div><dt>الراقات</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.layerCount || item.cuttingPlys || 0)}</dd></div>
       <div><dt>العدد المطلوب الأصلي</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.originalQuantity)}</dd></div><div><dt>العدد الفعلي بعد القص</dt><dd>${item.quantity ? new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.quantity) : "بانتظار الحصر"}</dd></div><div><dt>الكمية المنجزة</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.completedPieces)}</dd></div>
       <div><dt>الكمية المسلّمة</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.deliveredPieces)}</dd></div><div><dt>المتبقي</dt><dd>${item.quantity ? new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.remainingPieces) : "بانتظار الحصر بعد القص"}</dd></div>
       ${["تم التسليم", "تم التسليم بالكامل", "تم التسليم والإغلاق"].includes(item.status) ? `<div><dt>فرق التسليم عن العدد المطلوب الأصلي</dt><dd>${item.quantityDifference > 0 ? `زيادة ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.quantityDifference)} قطعة` : item.quantityDifference < 0 ? `نقص ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(Math.abs(item.quantityDifference))} قطعة` : "مطابق للعدد المطلوب"}</dd></div>` : ""}
@@ -1775,7 +1823,8 @@ function clientOrderCards(orders) {
       <div><dt>المدفوع على الطلب</dt><dd>${money(item.paidAmount)}</dd></div><div><dt>المتبقي</dt><dd>${money(item.remainingAmount)}</dd></div>
     </dl>
     <h4 class="modal-subheading">توزيع المقاسات والألوان</h4>${modelSizeColorCardsMarkup(item)}
-    ${orderProgress(item.status)}
+    ${cuttingDetailsMarkup(item)}
+    ${orderProgress(item.status, item.workStages)}
   </article>`).join("")}</div>`;
 }
 
@@ -1887,7 +1936,8 @@ function clientAccountCards(data) {
     const linkedUser = data.users.find((user) => user.id === client.user_id);
     const underConstructionOrders = summary.orders.filter((order) => order.status === "قيد الانتظار");
     const inProductionOrders = summary.orders.filter((order) =>
-      ["قيد الفرش", "تم الفرش", "جاهز للقص", "تم القص", "جاري الخياطة", "مكتمل"].includes(order.status)
+      ["قيد الفرش", "تم الفرش", "جاهز للقص", "تم القص", "جاري الخياطة", "تمت الخياطة"].includes(order.status)
+      || factoryOrderStatusSequence(order).slice(7, -2).includes(order.status)
     );
     const unpricedOrders = summary.orders.filter((order) => order.pricePerPiece <= 0);
     const uncountedOrders = summary.orders.filter((order) => order.quantity <= 0);
@@ -2038,11 +2088,13 @@ function adminDashboardView(data) {
   ];
   const activeOrderDetails = operatingOrders.map((order) => orderDetail(order, order.remainingPieces ?? order.quantity, order.expectedAmount));
   const deliveredOrderDetails = deliveredOrders.map((order) => orderDetail(order, order.deliveredPieces, order.totalAmount));
-  const groups = [
-    ["قيد الانتظار", operatingOrders.filter((order) => order.status === "قيد الانتظار").length],
-    ["في الفرش", operatingOrders.filter((order) => order.status === "قيد الفرش").length],
-    ["جاري الخياطة", operatingOrders.filter((order) => order.status === "جاري الخياطة").length]
-  ];
+  const groups = [...new Set(operatingOrders.map((order) => canonicalFactoryOrderStatus(order.status)))]
+    .sort((left, right) => {
+      const leftOrder = operatingOrders.find((order) => canonicalFactoryOrderStatus(order.status) === left);
+      const rightOrder = operatingOrders.find((order) => canonicalFactoryOrderStatus(order.status) === right);
+      return factoryOrderStatusSequence(leftOrder).indexOf(left) - factoryOrderStatusSequence(rightOrder).indexOf(right);
+    })
+    .map((status) => [status, operatingOrders.filter((order) => canonicalFactoryOrderStatus(order.status) === status).length]);
   return `<div class="stats-grid">${stat("النقدية في الدرج", money(drawerBalance), "", statDetailList(cashDetails))}${stat("مديونيات العملاء", money(customerReceivables), "", statDetailList(clientDebts.map(({ client, amount }) => ({
     label: `${client.name || "عميل بدون اسم"}${client.brand_name ? ` · ${client.brand_name}` : ""}`,
     value: money(amount)
@@ -2058,20 +2110,31 @@ function adminDashboardView(data) {
 
 function modelStatusReviewView(data) {
   const orders = data.models;
-  const statusOptions = (selected) => FACTORY_ORDER_STATUSES
+  const statusOptions = (statuses, selected) => statuses
     .map((status) => `<option value="${escapeHtml(status)}"${selected === status ? " selected" : ""}>${escapeHtml(status)}</option>`)
     .join("");
-  return `<div class="clients-toolbar"><div><h2>الموديلات</h2><p>حالات الموديل موحدة حسب دورة الإنتاج؛ حالات القص والخياطة تتغير من أدوات مراحلها.</p></div><label class="field model-status-filter"><span>تصفية حسب الحالة</span><select data-filter-model-status><option value="">كل الحالات</option>${statusOptions("")}</select></label></div>
+  const allStatuses = [...new Set(orders.flatMap((order) => factoryOrderStatusSequence(order)))];
+  return `<div class="clients-toolbar"><div><h2>الموديلات</h2><p>حالات الموديل موحدة حسب دورة الإنتاج، وتُضاف المراحل الإضافية وفق الأقسام المختارة.</p></div><label class="field model-status-filter"><span>تصفية حسب الحالة</span><select data-filter-model-status><option value="">كل الحالات</option>${statusOptions(allStatuses, "")}</select></label></div>
     ${orders.length ? `<div class="model-status-list">${orders.map((order) => {
       const isLocked = Boolean(order.archivedAt) || LOCKED_FACTORY_ORDER_STATUSES.includes(order.status);
-      const workflowManaged = ["تم الفرش", "جاهز للقص", "تم القص", "جاري الخياطة", "مكتمل"].includes(order.status);
+      const selectedStatus = canonicalFactoryOrderStatus(order.status);
+      const allOrderStatuses = factoryOrderStatusSequence(order);
+      const additionalStatuses = allOrderStatuses.slice(7, -2);
+      const canManageStageStatus = selectedStatus === "تمت الخياطة" || additionalStatuses.includes(selectedStatus);
+      const statuses = canManageStageStatus
+        ? [...new Set([selectedStatus, ...additionalStatuses, "جاهز للتسليم"])]
+        : selectedStatus === "قيد الانتظار"
+          ? ["قيد الانتظار", "قيد الفرش"]
+          : allOrderStatuses.filter((status) => status !== "تم التسليم");
+      if (selectedStatus === "تم التسليم") statuses.push(selectedStatus);
+      const workflowManaged = !canManageStageStatus && selectedStatus !== "قيد الانتظار";
       return `<article class="model-status-row" data-model-status-row data-current-status="${escapeHtml(order.status)}">
       <div class="model-status-info"><strong>${escapeHtml(order.name)}</strong><span>العميل: ${escapeHtml(order.client || "—")}</span><span>العدد: ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity)} قطعة</span><span>السعر: ${money(order.pricePerPiece)}</span></div>
-      ${statusTag(order.displayStatus || order.status)}
-      <label class="model-status-control"><span>الحالة اليدوية${isLocked ? " · مقفلة" : workflowManaged ? " · تُدار من سير الإنتاج" : ""}</span><select data-model-status="${escapeHtml(order.id)}"${isLocked || workflowManaged ? " disabled" : ""}>${statusOptions(order.status)}</select></label>
+      ${statusTag(order.displayStatus || selectedStatus)}
+      <label class="model-status-control"><span>الحالة${isLocked ? " · مقفلة" : workflowManaged ? " · تُدار من سير الإنتاج" : " · إدارة المرحلة الإضافية"}</span><select data-model-status="${escapeHtml(order.id)}"${isLocked || workflowManaged ? " disabled" : ""}>${statusOptions(statuses, selectedStatus)}</select></label>
       <button class="button button-secondary" type="button" data-save-model-status="${escapeHtml(order.id)}"${isLocked || workflowManaged ? " disabled" : ""}>حفظ الحالة</button>
       ${isLocked ? '<span class="order-delete-protected">لا يمكن تغيير حالة موديل تم تسليمه أو إغلاقه.</span>' : ""}
-      ${workflowManaged ? '<span class="order-delete-protected">تُحدّث هذه الحالة من أزرار إتاحة الخياطة وبدء الخياطة والإمبلاج.</span>' : ""}
+      ${workflowManaged ? '<span class="order-delete-protected">تُحدّث الحالة من إجراءات القص والخياطة.</span>' : ""}
     </article>`;
     }).join("")}</div>` : '<div class="empty-state">لا توجد موديلات لمراجعتها.</div>'}`;
 }
@@ -2171,6 +2234,10 @@ function clientDetailsView(client, data) {
       <div><dt>العدد الإجمالي بعد القص</dt><dd>${order.quantity ? `${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity)} قطعة` : "بانتظار الحصر"}</dd></div>
       <div><dt>المستلم</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.deliveredPieces)} قطعة</dd></div>
       <div><dt>المتبقي</dt><dd>${order.quantity ? `${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.remainingPieces)} قطعة` : "بانتظار الحصر"}</dd></div>
+      <div><dt>مسؤول القص</dt><dd>${escapeHtml(order.cutterName || "—")}</dd></div>
+      <div><dt>الخامة المستخدمة</dt><dd>${escapeHtml(order.fabric || order.externalFabricSource || "—")}</dd></div>
+      <div><dt>كمية القماش والأتواب</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(order.fabricQuantity || 0)} ${escapeHtml(order.fabricUnit || "متر")} · ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.boltCount || 0)} توب</dd></div>
+      <div><dt>الراقات</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.layerCount || order.cuttingPlys || 0)}</dd></div>
       <div><dt>كود الموديل لدى العميل</dt><dd>${escapeHtml(order.clientModelCode || "—")}</dd></div>
       ${order.pricePerPiece > 0 ? `<div><dt>سعر القطعة</dt><dd>${money(order.pricePerPiece)}</dd></div>` : '<div><dt>التسعير</dt><dd>لم يُسعّر بعد</dd></div>'}
       <div><dt>مصاريف التشغيل الإضافية</dt><dd>${money(order.operationalExpenses)}</dd></div>
@@ -2182,6 +2249,7 @@ function clientDetailsView(client, data) {
       ${archived ? `<div><dt>تاريخ الأرشفة</dt><dd>${formatDateTime(order.archivedAt)}</dd></div>` : ""}
     </dl>
     <h4 class="modal-subheading">توزيع المقاسات والألوان</h4>${modelSizeColorCardsMarkup(order)}
+    ${cuttingDetailsMarkup(order)}
     ${!archived ? `<footer class="order-card-actions"><button class="row-action" type="button" data-edit-client-order="${escapeHtml(order.id)}">تعديل السعر أو بيانات الموديل</button>${locked ? '<span class="status">تم التسليم / مغلق</span>' : order.customerId ? `<button class="row-action" type="button" data-action="record-delivery" data-index="${index}"${order.quantity ? "" : " disabled"}>تسجيل تسليم</button><button class="row-action order-close-action" type="button" data-action="complete-handover" data-index="${index}"${order.quantity ? "" : " disabled"}>تسوية التسليم وإغلاق الطلب</button>` : ""}${orderCanBeDeleted(order) ? `<button class="row-action order-delete-action" type="button" data-action="delete-order" data-order-id="${escapeHtml(order.id)}">حذف الموديل</button>` : '<span class="order-delete-protected" title="لا يمكن حذف طلب له تسليمات أو مصروفات تشغيل أو مبالغ مسجلة">محمي بسجل مالي / مصروفات / تسليم</span>'}</footer>` : ""}
   </article>`;
   };
@@ -2288,6 +2356,30 @@ function modelExpenseEntriesMarkup(order) {
     : '<div class="empty-state">لا توجد بنود مصروفات منفصلة لهذا الموديل.</div>';
 }
 
+function adminCuttingEditFormMarkup(order) {
+  return `<details class="admin-cutting-edit">
+    <summary class="button button-secondary">تعديل البيانات</summary>
+    <form class="admin-cutting-editor-form" data-admin-cutting-edit="${escapeHtml(order.id)}" data-customer-id="${escapeHtml(order.customerId || "")}" data-saved-fabric="false">
+      <div class="form-section-grid cutting-bed-inputs">
+        <label class="field"><span>الخامة المستخدمة</span><select name="fabricId" data-fabric-select required>${fabricSelectOptions(dashboardData.fabrics, order.fabricId || "", dashboardData.clients, true)}</select><small data-fabric-stock-hint></small></label>
+        <label class="field"><span>وحدة السحب</span><select name="fabricUnit" data-fabric-unit-select><option value="توب" ${order.fabricUnit === "توب" ? "selected" : ""}>عدد التوب</option><option value="متر" ${order.fabricUnit !== "توب" ? "selected" : ""}>الكمية بالمتر</option></select></label>
+        <label class="field"><span>الكمية المستخدمة</span><input name="fabricQuantity" type="number" min="0.001" step="0.001" value="${order.fabricQuantity || ""}" required></label>
+        <input type="hidden" name="boltCount" value="${order.boltCount || 0}">
+        <label class="field" data-external-fabric-source-field hidden><span>اسم المورد / مصدر الخامة الخارجية</span><input name="externalFabricSource" maxlength="120" value="${escapeHtml(order.externalFabricSource || "")}"></label>
+        <input type="hidden" name="externalFabricUnit" value="${order.externalFabricUnit || "متر"}">
+      </div>
+      <label class="field"><span>المورد / تفاصيل مصدر القماش</span><input name="fabricDetails" maxlength="240" value="${escapeHtml(order.fabricDetails || "")}"></label>
+      ${sizePickerMarkup(order.sizes, `admin-cutting-${order.id}`, false, true)}
+      ${cuttingColorPlyMarkup(order.colorPlyData, order.colors, order.layerCount, `admin-cutting-${order.id}`)}
+      <p class="cutting-calculated-total">إجمالي الراقات: <strong data-cutting-plys>0</strong> · إجمالي قطع القصة: <strong data-cutting-total>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity || 0)}</strong> قطعة</p>
+      <div class="cutting-breakdown" data-cutting-breakdown></div>
+      <label class="field"><span>مسؤول القص</span><input name="cutterName" maxlength="120" value="${escapeHtml(order.cutterName || "")}"></label>
+      <label class="field"><span>ملاحظات فنية للفرشة والقص</span><textarea name="technicalNotes" rows="3">${escapeHtml(order.cuttingNotes || "")}</textarea></label>
+      <div class="form-actions"><button type="submit" class="button button-primary">حفظ بيانات القص</button></div>
+    </form>
+  </details>`;
+}
+
 function modelDetailsModalView(order, showPricingBreakdown = false) {
   const canEditDeliveryQuantities = showPricingBreakdown && !order.archivedAt;
   const pricingDetails = showPricingBreakdown && order.pricingMode === "stages"
@@ -2312,15 +2404,18 @@ function modelDetailsModalView(order, showPricingBreakdown = false) {
       <div><span>المدفوع</span><strong>${money(order.paidAmount)}</strong></div>
       <div><span>المتبقي الحالي</span><strong>${money(order.remainingAmount)}</strong></div>
       <div><span>القماش / الفرشة</span><strong>${escapeHtml(order.fabric || "—")} · ${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(order.fabricQuantity)} ${escapeHtml(order.fabricUnit || "متر")} · ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.layerCount)} راقات</strong></div>
+      <div><span>مسؤول القص</span><strong>${escapeHtml(order.cutterName || "—")}</strong></div>
+      <div><span>عدد الأتواب</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.boltCount || 0)}</strong></div>
       <div><span>أقسام الشغل</span><strong>${escapeHtml(workStageLabels(order.workStages).join(" · ") || "—")}</strong></div>
       <div><span>طريقة التسعير</span><strong>${order.pricingMode === "stages" ? "سعر مستقل لكل قسم" : "سعر إجمالي للقطعة"}</strong></div>
       ${pricingDetails}
-      <div><span>ملاحظات القص</span><strong>${escapeHtml(order.cuttingNotes || "—")}</strong></div>
       <div><span>تم الإرسال بواسطة</span><strong>${escapeHtml(order.senderName || "—")}</strong></div>
       <div><span>التسليم المتوقع</span><strong>${formatDateOnly(order.expectedDeliveryDate)}</strong></div>
     </div>
     <h3 class="modal-subheading">توزيع المقاسات والألوان</h3>
     ${modelSizeColorCardsMarkup(order)}
+    ${cuttingDetailsMarkup(order)}
+    ${showPricingBreakdown && !order.archivedAt && !LOCKED_FACTORY_ORDER_STATUSES.includes(order.status) ? adminCuttingEditFormMarkup(order) : ""}
     ${showPricingBreakdown ? `<h3 class="modal-subheading">سجل المصروفات الخارجية والإضافية</h3>${modelExpenseEntriesMarkup(order)}` : ""}
     <h3 class="modal-subheading">سجل دفعات التسليم</h3>${deliveryHistory}
     ${showPricingBreakdown && order.quantity > 0 && !order.archivedAt && !LOCKED_FACTORY_ORDER_STATUSES.includes(order.status)
@@ -2646,6 +2741,7 @@ function adminView(data, accounts) {
           <div class="field" data-initial-delivery-field hidden><label for="model-delivered-pieces">العدد المسلّم</label><input id="model-delivered-pieces" name="deliveredPieces" type="text" inputmode="numeric" autocomplete="off"><small>يُسجل كدفعة تسليم تاريخية ويُحتسب ضمن حساب العميل.</small></div>
           <div class="field" data-model-priority-field><label for="model-priority">أولوية التنفيذ</label><select id="model-priority" name="priority"><option>عادي</option><option>مرتفع</option><option>عاجل</option></select></div>
         </div></section>
+        <section class="form-section cutting-pricing-preview-section"><h3>بيانات القص الفعلية</h3><div data-cutting-pricing-details class="cutting-pricing-details"><p class="muted">تظهر تفاصيل القص والخامة هنا عند تسعير موديل مسجل.</p></div></section>
         <section class="form-section"><h3>التفاصيل المالية <span>اختياري</span></h3><div class="form-section-grid">
           <div class="field"><label for="model-pricing-mode">طريقة التسعير</label><select id="model-pricing-mode" name="pricingMode"><option value="total">سعر إجمالي للقطعة</option><option value="stages">تسعير كل قسم للقطعة</option></select></div>
           <div class="field stage-prices-field" data-stage-prices-field hidden><label>سعر القطعة لكل قسم (ج.م)</label><div class="stage-prices-list" data-stage-prices-list></div><small>سعر القطعة الإجمالي يساوي مجموع أسعار الأقسام المختارة.</small></div>
@@ -2753,7 +2849,10 @@ function cuttingView(data) {
 function cuttingDashboardView(data) {
   const active = data.cutting.filter((item) => ["قيد الانتظار", "قيد الفرش", "تم الفرش", "جاهز للقص"].includes(canonicalFactoryOrderStatus(item.orderStatus)));
   const activeTotal = active.reduce((sum, item) => sum + Number(item.total), 0);
-  const completed = data.cutting.filter((item) => ["تم القص", "جاري الخياطة", "مكتمل", "جاهز للتسليم", "تم التسليم"].includes(canonicalFactoryOrderStatus(item.orderStatus)));
+  const completed = data.cutting.filter((item) => {
+    const orderStatus = canonicalFactoryOrderStatus(item.orderStatus);
+    return factoryOrderStatusSequence({ workStages: WORK_STAGES.map(([key]) => key) }).indexOf(orderStatus) >= 4;
+  });
   return `<div class="stats-grid">${stat("طلبات الإدارة", active.length, "بانتظار استكمال القص")}${stat("العدد المطلوب لطلبات الإدارة", new Intl.NumberFormat("ar-EG-u-nu-latn").format(activeTotal), "قطعة")}${stat("عمليات قص مكتملة", completed.length, "مسجلة على أوامر الإنتاج")}${stat("أصناف القماش المتاحة", data.fabrics.length, "متابعة مباشرة للمخزون")}</div>${panel("ملخص العمل الحالي", `<div class="empty-state">استخدم «طلبات الإدارة» لمراجعة الأوامر وتسجيل بيانات الفرشة والقص، أو «قصة جديدة» لإنشاء قصة مباشرة.</div>`)}`;
 }
 
@@ -2846,6 +2945,13 @@ function adminSewingView(data) {
 
 function adminCuttingTransferView(data) {
   const cuttingStories = data.cuttingStories || [];
+  const recordedCuttingDetails = data.models
+    .filter((order) => order.layerCount > 0 || order.fabricQuantity > 0 || order.cutterName || order.cuttingNotes)
+    .map((order) => `<details class="cutting-story-details">
+      <summary>${escapeHtml(order.name)} · ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity || 0)} قطعة · ${escapeHtml(order.client || "بدون عميل")}</summary>
+      ${cuttingDetailsMarkup(order)}
+      <button class="row-action" type="button" data-open-model-id="${escapeHtml(order.id)}">عرض الملف وتعديل بيانات القص</button>
+    </details>`);
   const cuttingStoryRows = cuttingStories.length
     ? `<div class="cutting-story-list">${cuttingStories.map((story) => {
       const colors = parseColorPlyData(story.color_ply_data);
@@ -2906,6 +3012,7 @@ function adminCuttingTransferView(data) {
       <button type="button" role="tab" aria-selected="${!storyTab}" class="client-management-tab${!storyTab ? " active" : ""}" data-admin-cutting-tab="new">إضافة قصة جديدة</button>
     </div>
     <div data-admin-cutting-panel="stories"${storyTab ? "" : " hidden"}>
+      ${panel("بيانات القص المسجلة على الموديلات", recordedCuttingDetails.length ? `<div class="cutting-story-list">${recordedCuttingDetails.join("")}</div>` : '<div class="empty-state">لا توجد بيانات قص مسجلة على الموديلات بعد.</div>', "تُحفظ بيانات مسؤول القص والخامة والأتواب والرقات والمقاسات في سجل الإنتاج، ويمكن للإدارة فتح الملف لتعديلها.")}
       ${panel("قصص القص المرسلة للمراجعة والاعتماد", cuttingStoryRows, "افتح السهم لعرض تفاصيل الرقات والأتواب ومصدر القماش والمقاسات كاملة. تبقى القصة محفوظة بعد الاعتماد.")}${panel("قصّات مكتملة تنتظر الخياطة", sewingReady, "يمكن للإدارة إدخال أي أمر مكتمل القص للخياطة مباشرة؛ يظهر بعدها لمشرف الخياطة لاستلامه وبدء العمل.")}
     </div>
     <div data-admin-cutting-panel="new"${storyTab ? " hidden" : ""}>
@@ -5517,7 +5624,7 @@ function bindCuttingActions(session) {
       } else {
         unitSelect.disabled = false;
       }
-      const requiresFabric = form.classList.contains("cutting-finish-form");
+      const requiresFabric = form.classList.contains("cutting-finish-form") || form.hasAttribute("data-admin-cutting-edit");
       const quantityInput = form.elements.fabricQuantity;
       quantityInput.step = selectedUnit === "توب" ? "1" : "0.001";
       quantityInput.min = selectedUnit === "توب" ? "1" : "0.001";
@@ -5607,6 +5714,7 @@ function bindCuttingActions(session) {
       usesSavedFabric: useSavedFabric,
       boltCount,
       externalFabricSource,
+      fabricDetails: String(form.elements.fabricDetails?.value || "").trim(),
       technicalNotes: String(form.elements.technicalNotes.value).trim()
     };
   };
@@ -5626,6 +5734,88 @@ function bindCuttingActions(session) {
     if (error) throw error;
     return data;
   };
+  const bindAdminCuttingEditor = (form) => {
+    if (form.dataset.bound === "true") return;
+    form.dataset.bound = "true";
+    bindPickers(form);
+    const fabricSelect = form.elements.fabricId;
+    const applyFabricClientFilter = () => {
+      const customerId = form.dataset.customerId || "";
+      [...fabricSelect.options].forEach((option) => {
+        if (!option.value || option.value === "external") return;
+        const allowed = !customerId || option.dataset.customer === customerId;
+        option.disabled = !allowed;
+        option.hidden = !allowed;
+      });
+    };
+    const refreshFabricFields = () => {
+      const selected = fabricSelect.selectedOptions[0];
+      const external = fabricSelect.value === "external";
+      const fabricUnit = form.elements.fabricUnit;
+      const quantity = form.elements.fabricQuantity;
+      if (!external && fabricSelect.value) {
+        fabricUnit.value = selected.dataset.unit || "متر";
+        fabricUnit.disabled = true;
+      } else {
+        fabricUnit.disabled = false;
+        if (!fabricUnit.value) fabricUnit.value = "متر";
+      }
+      quantity.step = fabricUnit.value === "توب" ? "1" : "0.001";
+      quantity.min = fabricUnit.value === "توب" ? "1" : "0.001";
+      form.elements.boltCount.value = fabricUnit.value === "توب" ? quantity.value || "0" : "0";
+      form.elements.externalFabricUnit.value = external ? fabricUnit.value : "";
+      form.querySelectorAll("[data-external-fabric-source-field]").forEach((field) => { field.hidden = !external; });
+      if (form.elements.externalFabricSource) form.elements.externalFabricSource.required = external;
+      const hint = form.querySelector("[data-fabric-stock-hint]");
+      if (hint) hint.textContent = external
+        ? "الخامة الخارجية لا تخصم من مخزون القماش."
+        : selected?.dataset.available
+          ? `المتاح حاليًا: ${selected.dataset.available} ${selected.dataset.unit || ""}`
+          : "اختر صنفًا من مخزون القماش.";
+    };
+    fabricSelect.addEventListener("change", refreshFabricFields);
+    form.elements.fabricUnit.addEventListener("change", refreshFabricFields);
+    form.elements.fabricQuantity.addEventListener("input", refreshFabricFields);
+    applyFabricClientFilter();
+    refreshFabricFields();
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const cuttingData = readCuttingInputs(form, true);
+      if (!cuttingData) return;
+      const button = form.querySelector('[type="submit"]');
+      button.disabled = true;
+      try {
+        const { error } = await supabaseClient.rpc("admin_update_factory_cutting_details", {
+          requested_order_id: form.dataset.adminCuttingEdit,
+          requested_size_data: cuttingData.sizeData,
+          requested_color_ply_data: cuttingData.colorPlyData,
+          requested_fabric: cuttingData.fabric,
+          requested_fabric_details: cuttingData.fabricDetails,
+          requested_bolt_count: cuttingData.boltCount,
+          requested_technical_notes: cuttingData.technicalNotes,
+          requested_fabric_id: cuttingData.fabricId,
+          requested_fabric_quantity: cuttingData.fabricQuantity,
+          requested_external_fabric_unit: cuttingData.externalFabricUnit,
+          requested_cutter_name: String(form.elements.cutterName.value || "").trim()
+        });
+        if (error?.code === "PGRST202") {
+          throw new Error("دالة تعديل بيانات القص غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+        }
+        if (error) throw error;
+        await refreshDashboard(session);
+        window.factoryUI.toast("تم حفظ بيانات القص وتحديث إجمالي القصة دون تغيير حالتها.");
+      } catch (error) {
+        button.disabled = false;
+        reportDashboardFailure(session, "تعذر حفظ بيانات القص", error);
+      }
+    });
+  };
+  document.querySelector("#app").addEventListener("click", (event) => {
+    const summary = event.target.closest(".admin-cutting-edit > summary");
+    if (!summary) return;
+    const form = summary.parentElement.querySelector("[data-admin-cutting-edit]");
+    if (form) bindAdminCuttingEditor(form);
+  });
   document.querySelectorAll("[data-ready-cutting]").forEach((button) => button.addEventListener("click", async () => {
     const form = button.closest("form");
     const cuttingData = readCuttingInputs(form, true);
@@ -6862,9 +7052,28 @@ function bindActions(session) {
       window.factoryUI.toast("تم تسليم الموديل أو إغلاقه؛ لا يمكن تغيير حالته.", "error");
       return;
     }
+    if (canonicalFactoryOrderStatus(select.value) === canonicalFactoryOrderStatus(order.status)) {
+      window.factoryUI.toast("الحالة المحددة هي الحالة الحالية بالفعل.");
+      return;
+    }
     button.disabled = true;
     try {
-      await persistFactoryOrder(order, { status: select.value });
+      const stageManagedStatuses = [
+        "جاري التشطيب", "تم التشطيب", "جاري المكواة", "تم الكي",
+        "جاري الطباعة", "تمت الطباعة", "جاري التكييس", "تم التكييس", "جاهز للتسليم"
+      ];
+      if (stageManagedStatuses.includes(select.value)) {
+        const { error } = await supabaseClient.rpc("admin_update_factory_order_stage_status", {
+          requested_order_id: order.id,
+          requested_status: select.value
+        });
+        if (error?.code === "PGRST202") {
+          throw new Error("دالة تحديث حالة المراحل الإضافية غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+        }
+        if (error) throw error;
+      } else {
+        await persistFactoryOrder(order, { status: select.value });
+      }
       activeOrdersTab = "status";
       await refreshDashboard(session);
       activateDashboardView("orders");
@@ -6968,6 +7177,7 @@ function bindActions(session) {
     updateOrderConditionalFields();
     updateStagePricing(orderForm);
     orderForm.querySelector("#model-price-history-note").hidden = true;
+    orderForm.querySelector("[data-cutting-pricing-details]").innerHTML = '<p class="muted">تظهر تفاصيل القص والخامة هنا عند تسعير موديل مسجل.</p>';
     if (modelPreviewObjectUrl) URL.revokeObjectURL(modelPreviewObjectUrl);
     modelPreviewObjectUrl = "";
     orderForm.querySelector("[data-model-image-preview]").innerHTML = "";
@@ -7014,6 +7224,7 @@ function bindActions(session) {
     setSizePicker(orderForm.querySelector("[data-size-picker]"), currentOrder.sizes);
     setColorPicker(orderForm.querySelector("[data-color-picker]"), currentOrder.colors, currentOrder.colorNames);
     renderModelAllocation(orderForm, currentOrder.colorSizeDistribution);
+    orderForm.querySelector("[data-cutting-pricing-details]").innerHTML = cuttingDetailsMarkup(currentOrder);
     orderForm.querySelector("[data-model-image-preview]").innerHTML = modelImageMarkup(currentOrder.modelImageUrl);
     orderForm.querySelector("#model-price-history-note").hidden = currentOrder.deliveredPieces <= 0;
     orderForm.querySelector('[type="submit"]').textContent = "حفظ التعديلات";
@@ -7131,6 +7342,7 @@ function bindActions(session) {
   }
   document.querySelector("[data-open-order-modal]").addEventListener("click", () => {
     closeOrderModal();
+    orderForm.querySelector("[data-cutting-pricing-details]").innerHTML = '<p class="muted">تظهر تفاصيل القص والخامة هنا عند تسعير موديل مسجل.</p>';
     updateOrderConditionalFields();
     orderModal.hidden = false;
     orderForm.elements.customerSelection.focus();
@@ -7489,6 +7701,7 @@ function bindActions(session) {
       orderForm.reset();
       orderForm.elements.editIndex.value = "";
       orderForm.elements.operationalExpenses.readOnly = false;
+      orderForm.querySelector("[data-cutting-pricing-details]").innerHTML = '<p class="muted">تظهر تفاصيل القص والخامة هنا عند تسعير موديل مسجل.</p>';
       updateOrderConditionalFields();
       syncOrderCustomerSelection(orderForm, newOrderButton.dataset.openOrderForClient);
       updateStagePricing(orderForm);
@@ -7561,6 +7774,9 @@ function bindActions(session) {
     const quantity = quantityValue ? Number(quantityValue) : sizeQuantity;
     const deliveredPieces = Number(formData.get("deliveredPieces"));
     const requestedStatus = String(formData.get("status"));
+    const statusForSave = existingOrder && canonicalFactoryOrderStatus(requestedStatus) === existingOrder.status
+      ? existingOrder.storedStatus || requestedStatus
+      : requestedStatus;
     const pricePerPiece = Number(formData.get("pricePerPiece"));
     const paidAmount = Number(formData.get("paidAmount"));
     const operationalExpenses = Number(formData.get("operationalExpenses") || 0);
@@ -7644,15 +7860,13 @@ function bindActions(session) {
         paidAmount,
         operationalExpenses,
         status: existingOrder && LOCKED_FACTORY_ORDER_STATUSES.includes(existingOrder.status)
-          ? existingOrder.status
-          : requestedStatus,
+          ? existingOrder.storedStatus || existingOrder.status
+          : statusForSave,
         priority: String(formData.get("priority")),
         productionType: String(formData.get("productionType") || existingOrder?.productionType || "full_cutting"),
         workStages,
         pricingMode,
         stagePrices: pricingMode === "stages" ? stagePrices : {},
-        fabric: String(formData.get("fabric") || "").trim(),
-        line: String(formData.get("line") || "").trim(),
         colors,
         colorNames,
         colorSizeDistribution,

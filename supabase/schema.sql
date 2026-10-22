@@ -786,7 +786,7 @@ alter table public.orders
   add constraint orders_work_stages_check
     check (
       cardinality(work_stages) > 0
-      and work_stages <@ array['cutting', 'sewing', 'finishing', 'ironing', 'packaging']::text[]
+      and work_stages <@ array['cutting', 'sewing', 'finishing', 'ironing', 'printing', 'packaging']::text[]
     ),
   drop constraint if exists orders_pricing_mode_check,
   add constraint orders_pricing_mode_check
@@ -819,10 +819,11 @@ alter table public.orders
 create table if not exists public.production_stages (
   id uuid primary key default gen_random_uuid(),
   order_id uuid not null references public.orders (id) on delete cascade,
-  stage_name text not null check (stage_name in ('cutting', 'sewing', 'finishing', 'ironing', 'packaging', 'delivery')),
+  stage_name text not null check (stage_name in ('cutting', 'sewing', 'finishing', 'ironing', 'printing', 'packaging', 'delivery')),
   worker_id uuid references auth.users (id) on delete set null,
   worker_name text,
   fabric text,
+  fabric_details text not null default '',
   external_fabric_source text not null default '',
   external_fabric_unit text not null default '',
   bolt_count integer not null default 0 check (bolt_count >= 0),
@@ -841,6 +842,7 @@ alter table public.production_stages
   add column if not exists worker_id uuid references auth.users (id) on delete set null,
   add column if not exists cutter_name text not null default '',
   add column if not exists fabric text,
+  add column if not exists fabric_details text not null default '',
   add column if not exists external_fabric_source text not null default '',
   add column if not exists external_fabric_unit text not null default '',
   add column if not exists fabric_id uuid,
@@ -905,15 +907,16 @@ set stage_name = case lower(trim(stage_name))
   when 'قص' then 'cutting'
   when 'خياطة' then 'sewing'
   when 'تشطيب' then 'finishing'
+  when 'طباعة' then 'printing'
   when 'تسليم' then 'delivery'
   else stage_name
 end
-where lower(trim(stage_name)) in ('تقطيع', 'قص', 'خياطة', 'تشطيب', 'تسليم');
+where lower(trim(stage_name)) in ('تقطيع', 'قص', 'خياطة', 'تشطيب', 'طباعة', 'تسليم');
 
 alter table public.production_stages
   drop constraint if exists production_stages_stage_name_check,
   add constraint production_stages_stage_name_check
-    check (stage_name in ('cutting', 'sewing', 'finishing', 'ironing', 'packaging', 'delivery'));
+    check (stage_name in ('cutting', 'sewing', 'finishing', 'ironing', 'printing', 'packaging', 'delivery'));
 
 update public.production_stages as stage
 set target_quantity = greatest(factory_order.total_pieces, stage.completed_quantity)
@@ -967,7 +970,7 @@ set model_name = coalesce(
         when coalesce(factory_order.delivered_pieces, 0) >= greatest(coalesce(factory_order.total_pieces, 0), 0)
           and coalesce(factory_order.total_pieces, 0) > 0
           then 'تم التسليم'
-        else 'جاهز للتسليم'
+        else 'تمت الخياطة'
       end
       when 'تم الانتهاء' then 'تم التسليم'
       when 'جاهز للتسليم' then 'جاهز للتسليم'
@@ -982,7 +985,16 @@ set model_name = coalesce(
       when 'معلق - في انتظار الخياطة' then 'جاري الخياطة'
       when 'في الخياطة' then 'جاري الخياطة'
       when 'جاري الخياطة' then 'جاري الخياطة'
-      when 'متاح للإمبلاج / التعبئة' then 'مكتمل'
+      when 'تمت الخياطة' then 'تمت الخياطة'
+      when 'جاري التشطيب' then 'جاري التشطيب'
+      when 'تم التشطيب' then 'تم التشطيب'
+      when 'جاري المكواة' then 'جاري المكواة'
+      when 'تم الكي' then 'تم الكي'
+      when 'جاري الطباعة' then 'جاري الطباعة'
+      when 'تمت الطباعة' then 'تمت الطباعة'
+      when 'جاري التكييس' then 'جاري التكييس'
+      when 'تم التكييس' then 'تم التكييس'
+      when 'متاح للإمبلاج / التعبئة' then 'تمت الخياطة'
       when 'في الخط' then 'جاري الخياطة'
       when 'تحت التصنيع' then 'قيد الفرش'
       when 'قيد الإنتاج' then 'قيد الفرش'
@@ -1012,7 +1024,9 @@ alter table public.orders
   add constraint orders_factory_status_check check (
     status in (
       'قيد الانتظار', 'قيد الفرش', 'تم الفرش', 'جاهز للقص', 'تم القص',
-      'جاري الخياطة', 'مكتمل', 'جاهز للتسليم', 'تم التسليم'
+      'جاري الخياطة', 'تمت الخياطة', 'جاري التشطيب', 'تم التشطيب',
+      'جاري المكواة', 'تم الكي', 'جاري الطباعة', 'تمت الطباعة',
+      'جاري التكييس', 'تم التكييس', 'مكتمل', 'جاهز للتسليم', 'تم التسليم'
     )
   );
 
@@ -1255,7 +1269,7 @@ begin
     or requested_production_type is null
     or requested_production_type not in ('full_cutting', 'ready_sewing')
     or coalesce(cardinality(requested_work_stages), 0) = 0
-    or not (requested_work_stages <@ array['cutting', 'sewing', 'finishing', 'ironing', 'packaging']::text[])
+    or not (requested_work_stages <@ array['cutting', 'sewing', 'finishing', 'ironing', 'printing', 'packaging']::text[])
     or cardinality(requested_work_stages) <> (
       select count(distinct selected.selected_stage)
       from unnest(requested_work_stages) as selected(selected_stage)
@@ -1273,7 +1287,7 @@ begin
             case when jsonb_typeof(requested_stage_prices) = 'object'
               then requested_stage_prices else '{}'::jsonb end
           ) as stage_price(stage_name, price)
-          where stage_name not in ('cutting', 'sewing', 'finishing', 'ironing', 'packaging')
+          where stage_name not in ('cutting', 'sewing', 'finishing', 'ironing', 'printing', 'packaging')
              or price !~ '^[0-9]+([.][0-9]{1,2})?$'
         )
         or (
@@ -1398,7 +1412,9 @@ begin
     or requested_status is null
     or requested_status not in (
       'قيد الانتظار', 'قيد الفرش', 'تم الفرش', 'جاهز للقص',
-      'تم القص', 'جاري الخياطة', 'مكتمل', 'جاهز للتسليم', 'تم التسليم'
+      'تم القص', 'جاري الخياطة', 'تمت الخياطة', 'جاري التشطيب', 'تم التشطيب',
+      'جاري المكواة', 'تم الكي', 'جاري الطباعة', 'تمت الطباعة',
+      'جاري التكييس', 'تم التكييس', 'مكتمل', 'جاهز للتسليم', 'تم التسليم'
     ) then
     raise exception 'Invalid factory order data.';
   end if;
@@ -1423,7 +1439,11 @@ begin
   );
 
   if requested_order_id is null
-     and requested_status in ('جاري الخياطة', 'مكتمل') then
+     and requested_status in (
+       'جاري الخياطة', 'تمت الخياطة', 'جاري التشطيب', 'تم التشطيب',
+       'جاري المكواة', 'تم الكي', 'جاري الطباعة', 'تمت الطباعة',
+       'جاري التكييس', 'تم التكييس', 'مكتمل', 'جاهز للتسليم'
+     ) then
     raise exception 'New orders cannot skip the cutting and sewing handoff workflow.';
   end if;
 
@@ -1497,10 +1517,18 @@ begin
       raise exception 'A delivered factory order must remain closed.';
     end if;
     if current_status is distinct from requested_status
-       and requested_status in ('جاري الخياطة', 'مكتمل') then
+       and requested_status in (
+         'جاري الخياطة', 'تمت الخياطة', 'جاري التشطيب', 'تم التشطيب',
+         'جاري المكواة', 'تم الكي', 'جاري الطباعة', 'تمت الطباعة',
+         'جاري التكييس', 'تم التكييس', 'مكتمل', 'جاهز للتسليم'
+       ) then
       raise exception 'Use the production workflow controls to move an order into sewing or finishing.';
     end if;
-    if current_status in ('جاري الخياطة', 'مكتمل')
+    if current_status in (
+      'جاري الخياطة', 'تمت الخياطة', 'جاري التشطيب', 'تم التشطيب',
+      'جاري المكواة', 'تم الكي', 'جاري الطباعة', 'تمت الطباعة',
+      'جاري التكييس', 'تم التكييس', 'مكتمل', 'جاهز للتسليم'
+    )
        and requested_status is distinct from current_status then
       raise exception 'Production workflow statuses can only be changed through their stage controls.';
     end if;
@@ -1515,7 +1543,7 @@ begin
       select 1
       from public.production_stages as stage
       where stage.order_id = requested_order_id
-        and stage.stage_name in ('cutting', 'sewing', 'finishing', 'ironing', 'packaging')
+        and stage.stage_name in ('cutting', 'sewing', 'finishing', 'ironing', 'printing', 'packaging')
         and not (stage.stage_name = any(requested_work_stages))
         and (
           stage.completed_quantity > 0
@@ -1540,7 +1568,6 @@ begin
       when stage_name = 'delivery' then requested_delivered_pieces
           else least(completed_quantity, requested_quantity)
         end,
-        fabric = nullif(trim(requested_fabric), ''),
         line_name = nullif(trim(requested_line_name), '')
     where order_id = requested_order_id;
     update public.orders
@@ -1579,7 +1606,7 @@ begin
     );
     delete from public.production_stages as stage
     where stage.order_id = requested_order_id
-      and stage.stage_name in ('cutting', 'sewing', 'finishing', 'ironing', 'packaging')
+      and stage.stage_name in ('cutting', 'sewing', 'finishing', 'ironing', 'printing', 'packaging')
       and not (stage.stage_name = any(requested_work_stages));
     if current_price_per_piece is distinct from requested_price_per_piece then
       update public.factory_deliveries
@@ -1615,6 +1642,143 @@ begin
   end if;
 
   return saved_order_id;
+end;
+$$;
+
+create or replace function public.admin_update_factory_order_stage_status(
+  requested_order_id uuid,
+  requested_status text
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  current_order public.orders%rowtype;
+  target_stage_name text;
+  earlier_stage record;
+  extra_stage_names text[] := array['finishing', 'ironing', 'printing', 'packaging']::text[];
+begin
+  if not public.is_active_factory_admin() then
+    raise exception 'Only active admins can update additional production stages.';
+  end if;
+  if requested_order_id is null or requested_status is null then
+    raise exception 'Choose an order and a valid production status.';
+  end if;
+
+  select *
+    into current_order
+  from public.orders
+  where id = requested_order_id
+  for update;
+  if not found
+     or current_order.archived_at is not null
+     or current_order.status = 'تم التسليم' then
+    raise exception 'This order is closed or unavailable for production updates.';
+  end if;
+
+  target_stage_name := case requested_status
+    when 'جاري التشطيب' then 'finishing'
+    when 'تم التشطيب' then 'finishing'
+    when 'جاري المكواة' then 'ironing'
+    when 'تم الكي' then 'ironing'
+    when 'جاري الطباعة' then 'printing'
+    when 'تمت الطباعة' then 'printing'
+    when 'جاري التكييس' then 'packaging'
+    when 'تم التكييس' then 'packaging'
+    else null
+  end;
+
+  if target_stage_name is not null then
+    if not (target_stage_name = any(current_order.work_stages)) then
+      raise exception 'This order does not include the selected additional production stage.';
+    end if;
+    if current_order.status not in (
+      'تمت الخياطة', 'مكتمل', 'جاري التشطيب', 'تم التشطيب',
+      'جاري المكواة', 'تم الكي', 'جاري الطباعة', 'تمت الطباعة',
+      'جاري التكييس', 'تم التكييس'
+    ) then
+      raise exception 'Complete sewing before updating an additional production stage.';
+    end if;
+
+    for earlier_stage in
+      select selected_stage.stage_name
+      from unnest(current_order.work_stages) with ordinality as selected_stage(stage_name, position)
+      where selected_stage.stage_name = any(extra_stage_names)
+        and selected_stage.position < (
+          select selected_stage_target.position
+          from unnest(current_order.work_stages) with ordinality as selected_stage_target(stage_name, position)
+          where selected_stage_target.stage_name = target_stage_name
+        )
+    loop
+      if not exists (
+        select 1
+        from public.production_stages
+        where order_id = requested_order_id
+          and stage_name = earlier_stage.stage_name
+          and status = 'مكتمل'
+      ) then
+        raise exception 'Complete the earlier additional production stages first.';
+      end if;
+    end loop;
+
+    update public.production_stages
+    set status = case
+          when requested_status in ('تم التشطيب', 'تم الكي', 'تمت الطباعة', 'تم التكييس') then 'مكتمل'
+          else 'قيد التنفيذ'
+        end,
+        completed_quantity = case
+          when requested_status in ('تم التشطيب', 'تم الكي', 'تمت الطباعة', 'تم التكييس') then target_quantity
+          else least(completed_quantity, target_quantity)
+        end,
+        updated_at = now()
+    where order_id = requested_order_id
+      and stage_name = target_stage_name;
+    if not found then
+      raise exception 'The selected additional production stage was not initialized.';
+    end if;
+
+    update public.orders
+    set status = requested_status
+    where id = requested_order_id;
+    return;
+  end if;
+
+  if requested_status = 'جاهز للتسليم' then
+    if current_order.status not in (
+      'تمت الخياطة', 'مكتمل', 'جاري التشطيب', 'تم التشطيب',
+      'جاري المكواة', 'تم الكي', 'جاري الطباعة', 'تمت الطباعة',
+      'جاري التكييس', 'تم التكييس'
+    ) then
+      raise exception 'Finish sewing before marking the order ready for delivery.';
+    end if;
+    if exists (
+      select 1
+      from unnest(current_order.work_stages) as selected_stage(stage_name)
+      where selected_stage.stage_name = any(extra_stage_names)
+        and not exists (
+          select 1
+          from public.production_stages
+          where order_id = requested_order_id
+            and stage_name = selected_stage.stage_name
+            and status = 'مكتمل'
+        )
+    ) then
+      raise exception 'Complete all selected additional production stages before delivery.';
+    end if;
+    update public.orders
+    set status = 'جاهز للتسليم'
+    where id = requested_order_id;
+    update public.production_stages
+    set status = 'جاهز للتسليم',
+        updated_at = now()
+    where order_id = requested_order_id
+      and stage_name = 'delivery';
+    return;
+  end if;
+
+  raise exception 'The requested status is not an admin-manageable additional stage.';
 end;
 $$;
 
@@ -2461,6 +2625,14 @@ alter table public.factory_cutting_stories
     check (status in ('pending', 'added_to_models', 'sent_to_sewing', 'rejected'));
 create index if not exists factory_cutting_stories_status_created_idx
   on public.factory_cutting_stories (status, created_at desc);
+
+update public.production_stages as stage
+set fabric_details = story.fabric_details
+from public.factory_cutting_stories as story
+where stage.order_id = story.approved_order_id
+  and stage.stage_name = 'cutting'
+  and stage.fabric_details = ''
+  and coalesce(story.fabric_details, '') <> '';
 
 alter table public.factory_fabrics
   drop constraint if exists factory_fabrics_stock_scope_check,
@@ -4137,6 +4309,7 @@ begin
   set target_quantity = story.total_pieces,
       completed_quantity = story.total_pieces,
       fabric = resolved_fabric_name,
+      fabric_details = story.fabric_details,
       fabric_id = story.fabric_id,
       external_fabric_source = case when story.fabric_id is null then story.fabric else '' end,
       external_fabric_unit = case when story.fabric_id is null then story.fabric_unit else '' end,
@@ -4304,7 +4477,7 @@ begin
       bolt_count = requested_bolt_count,
       layer_count = total_plys,
       color_ply_data = requested_color_ply_data,
-      technical_notes = coalesce(trim(requested_technical_notes), ''),
+      technical_notes = coalesce(nullif(trim(requested_technical_notes), ''), technical_notes),
       status = 'قيد الفرش',
       updated_at = now()
   where order_id = requested_order_id
@@ -4566,14 +4739,173 @@ begin
       bolt_count = current_cutting_stage.bolt_count,
       layer_count = total_plys,
       color_ply_data = requested_color_ply_data,
-      technical_notes = coalesce(trim(requested_technical_notes), ''),
-      cutter_name = left(trim(coalesce(requested_cutter_name, '')), 120),
+      technical_notes = coalesce(nullif(trim(requested_technical_notes), ''), current_cutting_stage.technical_notes),
+      cutter_name = coalesce(nullif(left(trim(coalesce(requested_cutter_name, '')), 120), ''), current_cutting_stage.cutter_name),
       status = 'مكتمل',
       updated_at = now()
   where order_id = requested_order_id
     and stage_name = 'cutting';
 
   return cut_total;
+end;
+$$;
+
+drop function if exists public.admin_update_factory_cutting_details(
+  uuid, jsonb, jsonb, text, integer, text, uuid, numeric, text, text
+);
+
+create or replace function public.admin_update_factory_cutting_details(
+  requested_order_id uuid,
+  requested_size_data jsonb,
+  requested_color_ply_data jsonb,
+  requested_fabric text,
+  requested_fabric_details text,
+  requested_bolt_count integer,
+  requested_technical_notes text,
+  requested_fabric_id uuid,
+  requested_fabric_quantity numeric,
+  requested_external_fabric_unit text,
+  requested_cutter_name text
+)
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  current_order public.orders%rowtype;
+  current_cutting_stage public.production_stages%rowtype;
+  normalized_sizes jsonb;
+  normalized_colors text;
+  calculated_total integer;
+  total_plys integer;
+  resolved_fabric_name text;
+  resolved_fabric_unit text;
+begin
+  if not public.is_active_factory_admin() then
+    raise exception 'Only active admins can edit cutting details.';
+  end if;
+  if requested_order_id is null
+     or requested_size_data is null
+     or coalesce(jsonb_typeof(requested_size_data), '') <> 'object'
+     or coalesce(jsonb_typeof(requested_color_ply_data), '') <> 'object'
+     or coalesce(jsonb_typeof(requested_color_ply_data -> 'sizes'), '') <> 'array'
+     or coalesce(jsonb_typeof(requested_color_ply_data -> 'colors'), '') <> 'array'
+     or requested_bolt_count is null or requested_bolt_count < 0
+     or requested_fabric_quantity is null or requested_fabric_quantity <= 0
+     or requested_fabric_quantity > 99999999999.999
+     or length(trim(coalesce(requested_fabric_details, ''))) > 240
+     or length(trim(coalesce(requested_cutter_name, ''))) > 120
+     or length(trim(coalesce(requested_technical_notes, ''))) > 2000 then
+    raise exception 'Enter valid cutting sizes, colors, fabric, quantity, and cutter details.';
+  end if;
+  if jsonb_array_length(requested_color_ply_data -> 'sizes') = 0
+     or jsonb_array_length(requested_color_ply_data -> 'colors') = 0 then
+    raise exception 'Select at least one size and one color before saving cutting details.';
+  end if;
+
+  if requested_fabric_id is null then
+    if length(trim(coalesce(requested_fabric, ''))) not between 1 and 120
+       or coalesce(nullif(trim(requested_external_fabric_unit), ''), '') not in ('متر', 'توب')
+       or (requested_external_fabric_unit = 'توب'
+           and (requested_fabric_quantity <> trunc(requested_fabric_quantity)
+             or requested_bolt_count::numeric <> requested_fabric_quantity))
+       or (requested_external_fabric_unit = 'متر' and requested_bolt_count <> 0) then
+      raise exception 'External fabric quantity and its measurement unit do not match.';
+    end if;
+  else
+    select unit into resolved_fabric_unit
+    from public.factory_fabrics
+    where id = requested_fabric_id
+    for update;
+    if not found
+       or resolved_fabric_unit not in ('متر', 'توب')
+       or (resolved_fabric_unit = 'توب'
+           and (requested_fabric_quantity <> trunc(requested_fabric_quantity)
+             or requested_bolt_count::numeric <> requested_fabric_quantity))
+       or (resolved_fabric_unit = 'متر' and requested_bolt_count <> 0) then
+      raise exception 'The selected fabric quantity does not match its stock unit.';
+    end if;
+  end if;
+
+  select *
+    into current_order
+  from public.orders
+  where id = requested_order_id
+  for update;
+  if not found
+     or current_order.archived_at is not null
+     or current_order.status = 'تم التسليم' then
+    raise exception 'Delivered or archived orders cannot have cutting quantities changed.';
+  end if;
+
+  select *
+    into current_cutting_stage
+  from public.production_stages
+  where order_id = requested_order_id
+    and stage_name = 'cutting'
+  for update;
+  if not found then
+    raise exception 'The cutting stage for this order does not exist.';
+  end if;
+
+  select breakdown.normalized_sizes, breakdown.normalized_colors,
+         breakdown.total_pieces, breakdown.total_plys
+    into normalized_sizes, normalized_colors, calculated_total, total_plys
+  from public.calculate_factory_cutting_breakdown(requested_size_data, requested_color_ply_data) as breakdown;
+  if calculated_total < greatest(
+    current_order.delivered_pieces,
+    coalesce((
+      select max(stage.completed_quantity)
+      from public.production_stages as stage
+      where stage.order_id = requested_order_id
+        and stage.stage_name <> 'delivery'
+    ), 0)
+  ) then
+    raise exception 'The edited cutting quantity cannot be lower than quantities already completed or delivered.';
+  end if;
+
+  resolved_fabric_name := public.reconcile_factory_fabric_usage(
+    requested_order_id, requested_fabric_id, requested_fabric_quantity, requested_fabric
+  );
+
+  update public.orders
+  set colors = coalesce(normalized_colors, ''),
+      color_names = coalesce((
+        select jsonb_object_agg(upper(trim(color_entry ->> 'color')), trim(color_entry ->> 'name'))
+        from jsonb_array_elements(requested_color_ply_data -> 'colors') as color_entry
+        where length(trim(coalesce(color_entry ->> 'name', ''))) > 0
+      ), '{}'::jsonb),
+      sizes = normalized_sizes::text,
+      original_total_pieces = case when original_total_pieces = 0 then calculated_total else original_total_pieces end,
+      total_pieces = calculated_total
+  where id = requested_order_id;
+
+  update public.production_stages
+  set target_quantity = calculated_total
+  where order_id = requested_order_id;
+
+  update public.production_stages
+  set completed_quantity = case
+        when current_cutting_stage.status in ('مكتمل', 'تم القص') then calculated_total
+        else least(completed_quantity, calculated_total)
+      end,
+      fabric = resolved_fabric_name,
+      fabric_details = trim(coalesce(requested_fabric_details, '')),
+      fabric_id = requested_fabric_id,
+      external_fabric_source = case when requested_fabric_id is null then trim(requested_fabric) else '' end,
+      external_fabric_unit = case when requested_fabric_id is null then trim(requested_external_fabric_unit) else '' end,
+      fabric_quantity = requested_fabric_quantity,
+      bolt_count = requested_bolt_count,
+      layer_count = total_plys,
+      color_ply_data = requested_color_ply_data,
+      technical_notes = coalesce(nullif(trim(requested_technical_notes), ''), current_cutting_stage.technical_notes),
+      cutter_name = coalesce(nullif(left(trim(coalesce(requested_cutter_name, '')), 120), ''), current_cutting_stage.cutter_name),
+      updated_at = now()
+  where order_id = requested_order_id
+    and stage_name = 'cutting';
+
+  return calculated_total;
 end;
 $$;
 
@@ -5485,7 +5817,7 @@ begin
   select selected_stage.stage_name
     into next_stage_name
   from unnest(current_order.work_stages) with ordinality as selected_stage(stage_name, stage_position)
-  where selected_stage.stage_name in ('finishing', 'ironing', 'packaging')
+  where selected_stage.stage_name in ('finishing', 'ironing', 'printing', 'packaging')
   order by selected_stage.stage_position
   limit 1;
 
@@ -5504,14 +5836,10 @@ begin
     if not found then
       raise exception 'The next production stage for this order was not found.';
     end if;
-    update public.orders
-    set status = 'مكتمل'
-    where id = requested_order_id;
-  else
-    update public.orders
-    set status = 'جاهز للتسليم'
-    where id = requested_order_id;
   end if;
+  update public.orders
+  set status = 'تمت الخياطة'
+  where id = requested_order_id;
 end;
 $$;
 
@@ -5634,6 +5962,8 @@ revoke all on function public.read_factory_cutting_clients() from public, anon, 
 grant execute on function public.read_factory_cutting_clients() to authenticated;
 revoke all on function public.save_factory_order(uuid, uuid, text, text, integer, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb, text, jsonb, text[], text, jsonb, numeric, text) from public, anon, authenticated;
 grant execute on function public.save_factory_order(uuid, uuid, text, text, integer, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb, text, jsonb, text[], text, jsonb, numeric, text) to authenticated;
+revoke all on function public.admin_update_factory_order_stage_status(uuid, text) from public, anon, authenticated;
+grant execute on function public.admin_update_factory_order_stage_status(uuid, text) to authenticated;
 revoke all on function public.record_factory_delivery(uuid, integer, text) from public, anon, authenticated;
 grant execute on function public.record_factory_delivery(uuid, integer, text) to authenticated;
 revoke all on function public.complete_factory_handover(uuid, integer, text) from public, anon, authenticated;
@@ -5649,6 +5979,8 @@ revoke all on function public.admin_reject_factory_cutting_story(uuid) from publ
 grant execute on function public.admin_reject_factory_cutting_story(uuid) to authenticated;
 revoke all on function public.update_factory_cutting_progress(uuid, jsonb, jsonb, text, integer, text, uuid, numeric, text) from public, anon, authenticated;
 grant execute on function public.update_factory_cutting_progress(uuid, jsonb, jsonb, text, integer, text, uuid, numeric, text) to authenticated;
+revoke all on function public.admin_update_factory_cutting_details(uuid, jsonb, jsonb, text, text, integer, text, uuid, numeric, text, text) from public, anon, authenticated;
+grant execute on function public.admin_update_factory_cutting_details(uuid, jsonb, jsonb, text, text, integer, text, uuid, numeric, text, text) to authenticated;
 revoke all on function public.save_factory_fabric(uuid, text, text, text, text, text) from public, anon, authenticated;
 grant execute on function public.save_factory_fabric(uuid, text, text, text, text, text) to authenticated;
 revoke all on function public.record_factory_fabric_receipt(uuid, numeric, timestamptz, text) from public, anon, authenticated;
