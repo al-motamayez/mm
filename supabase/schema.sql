@@ -712,6 +712,11 @@ alter table public.orders
   add column if not exists color_size_distribution jsonb not null default '{"colors":[]}'::jsonb,
   add column if not exists archived_at timestamptz;
 
+update public.orders
+set client_model_code = trim(model_number)
+where length(trim(coalesce(client_model_code, ''))) = 0
+  and length(trim(coalesce(model_number, ''))) > 0;
+
 create sequence if not exists public.factory_model_serial_seq;
 with numbered_orders as (
   select id,
@@ -4379,12 +4384,13 @@ begin
     else 'تم القص'
   end;
   insert into public.orders (
-    id, client_id, customer_id, model_name, model_number, sender_name,
+    id, client_id, customer_id, model_name, model_number, client_model_code, sender_name,
     colors, color_names, sizes, original_total_pieces, total_pieces,
     status, model_image_url, work_stages
   )
   values (
-    new_order_id, customer.user_id, customer.id, story.model_name, story.model_number,
+    new_order_id, customer.user_id, customer.id, story.model_name, '',
+    coalesce(trim(story.model_number), ''),
     story.submitted_by_name, colors, color_names, story.size_data::text,
     story.total_pieces, story.total_pieces, order_status,
     nullif(trim(story.model_image_url), ''),
@@ -5837,8 +5843,9 @@ begin
      and not public.has_active_factory_role(array['sewing']) then
     raise exception 'Only active admins or sewing supervisors can start sewing.';
   elsif requested_action = 'finish'
+     and not public.is_active_factory_admin()
      and not public.has_active_factory_role(array['sewing']) then
-    raise exception 'Only active sewing supervisors can finish sewing.';
+    raise exception 'Only active admins or sewing supervisors can finish sewing.';
   end if;
 
   select *
