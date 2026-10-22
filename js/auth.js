@@ -387,10 +387,21 @@ async function initializeAuth() {
     await routeAuthenticatedUser(session.user);
     return;
   }
-  const response = await fetch(`${supabaseClient.supabaseUrl}/auth/v1/settings`, {
-    headers: { apikey: supabaseClient.supabaseKey }
+  const { url, publishableKey } = window.factorySupabaseConfig || {};
+  if (!url || !publishableKey) {
+    throw new Error("إعدادات اتصال Supabase أو مفتاح النشر غير متاحة.");
+  }
+  const response = await fetch(`${url}/auth/v1/settings`, {
+    headers: { apikey: publishableKey }
   });
-  if (!response.ok) throw new Error(`تعذر قراءة إعدادات المصادقة (${response.status}).`);
+  if (!response.ok) {
+    const responseBody = await response.text();
+    console.error("تعذر قراءة إعدادات المصادقة من Supabase.", {
+      status: response.status,
+      response: responseBody
+    });
+    throw new Error(`تعذر قراءة إعدادات المصادقة (${response.status}).`);
+  }
   const settings = await response.json();
   if (!settings.mailer_autoconfirm) {
     signupDisabledReason = "إنشاء الحساب غير متاح مؤقتًا. تواصل مع الإدارة للمساعدة.";
