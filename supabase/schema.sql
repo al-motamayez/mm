@@ -5799,9 +5799,15 @@ begin
       where id = requested_order_id;
       current_order.work_stages := array_append(current_order.work_stages, 'sewing');
     end if;
-    insert into public.production_stages (order_id, stage_name, target_quantity, status)
-    values (requested_order_id, 'sewing', current_order.total_pieces, 'معلق')
-    on conflict (order_id, stage_name) do nothing;
+    if not exists (
+      select 1
+      from public.production_stages
+      where order_id = requested_order_id
+        and stage_name = 'sewing'
+    ) then
+      insert into public.production_stages (order_id, stage_name, target_quantity, status)
+      values (requested_order_id, 'sewing', current_order.total_pieces, 'معلق');
+    end if;
   end if;
   if not coalesce('sewing' = any(current_order.work_stages), false) then
     raise exception 'This order does not include a sewing stage.';
