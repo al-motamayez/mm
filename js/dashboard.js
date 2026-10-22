@@ -416,10 +416,21 @@ async function readDashboardData(session) {
   }
   if (ordersError) throw ordersError;
 
+  data.orderExpenses = [];
+  if (session.role === "admin") {
+    const { data: orderExpenses, error: orderExpensesError } = await supabaseClient
+      .rpc("read_factory_order_expenses_admin");
+    if (orderExpensesError?.code === "PGRST202") {
+      throw new Error("دالة قراءة مصروفات الموديلات غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+    }
+    if (orderExpensesError) throw orderExpensesError;
+    data.orderExpenses = orderExpenses || [];
+  }
+
   if (session.role === "admin") {
     const { data: clients, error: clientsError } = await supabaseClient
       .from("factory_clients")
-      .select("id, user_id, name, brand_name, client_number, phone, cash_phone, instagram, whatsapp, notes, account_period_started_at, created_at")
+      .select("id, user_id, name, brand_name, code_letter, client_number, phone, cash_phone, instagram, whatsapp, notes, account_period_started_at, created_at")
       .order("created_at", { ascending: false });
     if (clientsError) throw clientsError;
     data.clients = clients.map((client) => ({
@@ -477,6 +488,9 @@ async function readDashboardData(session) {
       id: order.id,
       clientId: order.client_id,
       customerId: order.customer_id,
+      modelSerial: Number(order.model_serial || 0),
+      factoryModelCode: order.factory_model_code || "",
+      clientModelCode: order.client_model_code || "",
       name: order.model_name || order.model_number || "موديل بدون اسم",
       modelNumber: order.model_number || "",
       senderName: order.sender_name || "",
@@ -491,6 +505,7 @@ async function readDashboardData(session) {
       originalQuantity,
       completedPieces,
       colors: order.colors || "",
+      colorPlyData: cuttingStage?.color_ply_data || null,
       colorSizeDistribution: order.color_size_distribution || { colors: [] },
       productionType: order.production_type || "full_cutting",
       workStages: order.work_stages || ["cutting", "sewing", "finishing"],
@@ -512,6 +527,7 @@ async function readDashboardData(session) {
         ? 0
         : Number(order.expected_total_amount ?? (Math.max(Number(order.total_pieces || 0) - Number(order.delivered_pieces || 0), 0) * Number(order.price_per_piece || 0))),
       operationalExpenses: Number(order.operational_expenses || 0),
+      expenseEntries: data.orderExpenses.filter((expense) => expense.order_id === order.id),
       paidAmount: Number(order.paid_amount || 0),
       remainingAmount: Number(order.remaining_amount || 0),
       expectedDeliveryDate: order.expected_delivery_date || "",
@@ -1701,11 +1717,12 @@ function orderCards(models, withActions = false) {
     const index = dashboardData.models.findIndex((order) => order.id === item.id);
     return `<article class="order-card order-compact-row">
       ${modelImageMarkup(item.modelImageUrl)}
-      <div class="order-compact-name"><strong>${escapeHtml(item.name || item.modelNumber || "موديل بدون اسم")}</strong><small>رقم الموديل: ${escapeHtml(item.modelNumber || "—")} · الأقسام: ${escapeHtml(workStageLabels(item.workStages).join("، ") || "—")}</small></div>
+      <div class="order-compact-name"><strong>${escapeHtml(item.name || item.modelNumber || "موديل بدون اسم")}</strong><small>كود المصنع: ${escapeHtml(item.factoryModelCode || "—")} · رقم الموديل: ${escapeHtml(item.modelNumber || "—")}</small><small>كود العميل: ${escapeHtml(item.clientModelCode || "—")} · الأقسام: ${escapeHtml(workStageLabels(item.workStages).join("، ") || "—")}</small></div>
       <span class="order-compact-client">${escapeHtml(item.client || "غير مربوط بعميل")}</span>
-      <span class="order-compact-quantity">${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.quantity)} قطعة${["تم التسليم", "تم التسليم بالكامل", "تم التسليم والإغلاق"].includes(item.status) ? `<small>الأصلي: ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.originalQuantity)} · المسلّم: ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.deliveredPieces)} · ${item.quantityDifference > 0 ? `زيادة ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.quantityDifference)}` : item.quantityDifference < 0 ? `نقص ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(Math.abs(item.quantityDifference))}` : "مطابق"}</small>` : ""}</span>
-      <span class="order-compact-price">${money(item.pricePerPiece)} / قطعة</span>
+      <span class="order-compact-quantity"><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.quantity)} قطعة</strong>${["تم التسليم", "تم التسليم بالكامل", "تم التسليم والإغلاق"].includes(item.status) ? `<small>الأصلي: ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.originalQuantity)} · المسلّم: ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.deliveredPieces)} · ${item.quantityDifference > 0 ? `زيادة ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.quantityDifference)}` : item.quantityDifference < 0 ? `نقص ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(Math.abs(item.quantityDifference))}` : "مطابق"}</small>` : ""}</span>
+      <span class="order-compact-price"><strong>${money(item.pricePerPiece)} / قطعة</strong><small>الإجمالي: ${money(item.totalAmount + item.expectedAmount || item.quantity * item.pricePerPiece + item.operationalExpenses)}</small></span>
       ${statusTag(item.displayStatus || item.status)}
+      ${withActions ? `<button class="row-action order-expense-trigger" type="button" data-add-model-expense="${escapeHtml(item.id)}">＋ إضافة مصروف خارجي</button>` : ""}
       <button class="row-action" type="button" data-open-model-id="${escapeHtml(item.id)}">تفاصيل الطلبية</button>
       ${withActions ? `<div class="order-card-actions">${item.archivedAt ? "" : `<button class="row-action" type="button" data-edit-kind="models" data-index="${index}">تعديل الطلبية</button>`}${item.customerId ? `${item.archivedAt || LOCKED_FACTORY_ORDER_STATUSES.includes(item.status) ? "" : `<button class="row-action" type="button" data-action="record-delivery" data-index="${index}"${item.remainingPieces > 0 ? "" : " disabled"}>تسجيل تسليم</button><button class="row-action order-close-action" type="button" data-action="complete-handover" data-index="${index}"${item.quantity ? "" : " disabled"}>تسوية التسليم وإغلاق الطلب</button>`}` : '<span class="order-delete-protected">عيّن العميل قبل تسجيل أي تسليم</span>'}${item.archivedAt || LOCKED_FACTORY_ORDER_STATUSES.includes(item.status) ? '<span class="status">مغلق / تم التسليم</span>' : ""}${orderCanBeDeleted(item) ? `<button class="row-action order-delete-action" type="button" data-action="delete-order" data-order-id="${escapeHtml(item.id)}">حذف الموديل</button>` : '<span class="order-delete-protected">محمي بسجل مالي / تسليم</span>'}</div>` : ""}
     </article>`;
@@ -1727,9 +1744,10 @@ function clientOrderRows(orders) {
 function clientOrderCards(orders) {
   if (!orders.length) return '<div class="empty-state">لا توجد طلبيات لعرضها حاليًا.</div>';
   return `<div class="order-cards">${orders.map((item) => `<article class="order-card client-order-card">
-    <header class="order-card-heading">${modelImageMarkup(item.modelImageUrl)}<div><p class="order-card-label">الموديل ${item.modelNumber ? `· رقم ${escapeHtml(item.modelNumber)}` : ""}</p><h3>${escapeHtml(item.name || item.modelNumber || "موديل بدون اسم")}</h3></div>${statusTag(item.displayStatus || item.status)}</header>
+    <header class="order-card-heading">${modelImageMarkup(item.modelImageUrl)}<div><p class="order-card-label">كود المصنع: ${escapeHtml(item.factoryModelCode || "—")} · كود العميل: ${escapeHtml(item.clientModelCode || "—")}${item.modelNumber ? ` · رقم الموديل ${escapeHtml(item.modelNumber)}` : ""}</p><h3>${escapeHtml(item.name || item.modelNumber || "موديل بدون اسم")}</h3></div>${statusTag(item.displayStatus || item.status)}</header>
     <dl class="order-card-details">
-      <div><dt>الألوان</dt><dd>${colorSummaryMarkup(item.colors, item.colorNames, item.colorPlyData)}</dd></div><div><dt>المقاسات / العدد لكل مقاس</dt><dd>${escapeHtml(sizeSummary(item.sizes))}</dd></div>${item.cutterName ? `<div><dt>مين اللي قص القصة؟</dt><dd>${escapeHtml(item.cutterName)}</dd></div>` : ""}
+      <div><dt>كود الموديل لدى العميل</dt><dd>${escapeHtml(item.clientModelCode || "—")}</dd></div>
+      ${item.cutterName ? `<div><dt>مين اللي قص القصة؟</dt><dd>${escapeHtml(item.cutterName)}</dd></div>` : ""}
       <div><dt>العدد المطلوب الأصلي</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.originalQuantity)}</dd></div><div><dt>العدد الفعلي بعد القص</dt><dd>${item.quantity ? new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.quantity) : "بانتظار الحصر"}</dd></div><div><dt>الكمية المنجزة</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.completedPieces)}</dd></div>
       <div><dt>الكمية المسلّمة</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.deliveredPieces)}</dd></div><div><dt>المتبقي</dt><dd>${item.quantity ? new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.remainingPieces) : "بانتظار الحصر بعد القص"}</dd></div>
       ${["تم التسليم", "تم التسليم بالكامل", "تم التسليم والإغلاق"].includes(item.status) ? `<div><dt>فرق التسليم عن العدد المطلوب الأصلي</dt><dd>${item.quantityDifference > 0 ? `زيادة ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.quantityDifference)} قطعة` : item.quantityDifference < 0 ? `نقص ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(Math.abs(item.quantityDifference))} قطعة` : "مطابق للعدد المطلوب"}</dd></div>` : ""}
@@ -1738,6 +1756,7 @@ function clientOrderCards(orders) {
       <div><dt>التسليم المتوقع</dt><dd>${formatDateOnly(item.expectedDeliveryDate)}</dd></div>
       <div><dt>المدفوع على الطلب</dt><dd>${money(item.paidAmount)}</dd></div><div><dt>المتبقي</dt><dd>${money(item.remainingAmount)}</dd></div>
     </dl>
+    <h4 class="modal-subheading">توزيع المقاسات والألوان</h4>${modelSizeColorCardsMarkup(item)}
     ${orderProgress(item.status)}
   </article>`).join("")}</div>`;
 }
@@ -2129,13 +2148,12 @@ function clientDetailsView(client, data) {
     const locked = Boolean(order.archivedAt) || LOCKED_FACTORY_ORDER_STATUSES.includes(order.status);
     return `<article class="order-card client-history-card">
     <label class="print-model-select"><input type="checkbox" data-print-model-select="${escapeHtml(order.id)}"><span>اختيار للطباعة</span></label>
-    <header class="order-card-heading">${modelImageMarkup(order.modelImageUrl)}<div><p class="order-card-label">${archived ? "طلب مؤرشف" : "طلب حالي"}${order.modelNumber ? ` · رقم ${escapeHtml(order.modelNumber)}` : ""}</p><h3>${escapeHtml(order.name || "موديل بدون اسم")}</h3></div>${statusTag(order.displayStatus || order.status)}</header>
+    <header class="order-card-heading">${modelImageMarkup(order.modelImageUrl)}<div><p class="order-card-label">${archived ? "طلب مؤرشف" : "طلب حالي"} · كود المصنع ${escapeHtml(order.factoryModelCode || "—")}${order.clientModelCode ? ` · كود العميل ${escapeHtml(order.clientModelCode)}` : ""}${order.modelNumber ? ` · رقم الموديل ${escapeHtml(order.modelNumber)}` : ""}</p><h3>${escapeHtml(order.name || "موديل بدون اسم")}</h3></div>${statusTag(order.displayStatus || order.status)}</header>
     <dl class="order-card-details">
       <div><dt>العدد الإجمالي بعد القص</dt><dd>${order.quantity ? `${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity)} قطعة` : "بانتظار الحصر"}</dd></div>
       <div><dt>المستلم</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.deliveredPieces)} قطعة</dd></div>
       <div><dt>المتبقي</dt><dd>${order.quantity ? `${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.remainingPieces)} قطعة` : "بانتظار الحصر"}</dd></div>
-      <div><dt>الألوان</dt><dd>${colorSummaryMarkup(order.colors, order.colorNames, order.colorPlyData)}</dd></div>
-      <div><dt>المقاسات / العدد لكل مقاس</dt><dd>${escapeHtml(sizeSummary(order.sizes))}</dd></div>
+      <div><dt>كود الموديل لدى العميل</dt><dd>${escapeHtml(order.clientModelCode || "—")}</dd></div>
       ${order.pricePerPiece > 0 ? `<div><dt>سعر القطعة</dt><dd>${money(order.pricePerPiece)}</dd></div>` : '<div><dt>التسعير</dt><dd>لم يُسعّر بعد</dd></div>'}
       <div><dt>مصاريف التشغيل الإضافية</dt><dd>${money(order.operationalExpenses)}</dd></div>
       ${order.expectedAmount > 0 ? `<div><dt>المتوقع للكمية غير المسلّمة</dt><dd>${money(order.expectedAmount)}</dd></div>` : ""}
@@ -2145,6 +2163,7 @@ function clientDetailsView(client, data) {
       ${order.senderName ? `<div><dt>تم الإرسال بواسطة</dt><dd>${escapeHtml(order.senderName)}</dd></div>` : ""}
       ${archived ? `<div><dt>تاريخ الأرشفة</dt><dd>${formatDateTime(order.archivedAt)}</dd></div>` : ""}
     </dl>
+    <h4 class="modal-subheading">توزيع المقاسات والألوان</h4>${modelSizeColorCardsMarkup(order)}
     ${!archived ? `<footer class="order-card-actions"><button class="row-action" type="button" data-edit-client-order="${escapeHtml(order.id)}">تعديل السعر أو بيانات الموديل</button>${locked ? '<span class="status">تم التسليم / مغلق</span>' : order.customerId ? `<button class="row-action" type="button" data-action="record-delivery" data-index="${index}"${order.quantity ? "" : " disabled"}>تسجيل تسليم</button><button class="row-action order-close-action" type="button" data-action="complete-handover" data-index="${index}"${order.quantity ? "" : " disabled"}>تسوية التسليم وإغلاق الطلب</button>` : ""}${orderCanBeDeleted(order) ? `<button class="row-action order-delete-action" type="button" data-action="delete-order" data-order-id="${escapeHtml(order.id)}">حذف الموديل</button>` : '<span class="order-delete-protected" title="لا يمكن حذف طلب له تسليمات أو مصروفات تشغيل أو مبالغ مسجلة">محمي بسجل مالي / مصروفات / تسليم</span>'}</footer>` : ""}
   </article>`;
   };
@@ -2157,7 +2176,7 @@ function clientDetailsView(client, data) {
     : "لا يوجد حساب دخول مرتبط بملف العميل."}</p>${linkOptions
       ? `<div class="client-account-link-controls"><label class="field"><span>اختر حساباً معلقاً أو حساب عميل موجوداً</span><select data-client-link-account="${escapeHtml(client.id)}"><option value="">اختر الحساب</option>${linkOptions}</select></label><button class="button button-secondary" type="button" data-action="link-client-account" data-customer-id="${escapeHtml(client.id)}">ربط بحساب تسجيل الدخول</button></div>`
       : '<div class="empty-state">لا توجد حسابات معلقة أو حسابات عملاء متاحة للربط.</div>'}`, "يؤدي ربط حساب معلق إلى اعتماده كعميل وربطه بهذا الملف.")}</section>`;
-  return `<div class="clients-toolbar client-detail-toolbar"><div><h2>${escapeHtml(client.name)} · تفاصيل الحساب والعمولة</h2><p>${escapeHtml(client.brand_name || "لا يوجد اسم محل/براند")} · رقم العميل: ${escapeHtml(client.client_number || "—")} · واتساب: ${escapeHtml(client.whatsapp || "—")}</p></div><div class="client-detail-actions"><button class="button button-primary" type="button" data-quick-client-payment="${escapeHtml(client.id)}">＋ إضافة دفعة</button><button class="button button-secondary" type="button" data-print-account>طباعة كشف الحساب</button><button class="button button-secondary" type="button" data-print-selected-models>طباعة الموديلات المحددة</button><button class="row-action" type="button" data-return-clients>العودة للعملاء</button></div></div>
+  return `<div class="clients-toolbar client-detail-toolbar"><div><h2>${escapeHtml(client.name)} · تفاصيل الحساب والعمولة</h2><p>كود العميل: ${escapeHtml(client.code_letter || "—")} · ${escapeHtml(client.brand_name || "لا يوجد اسم محل/براند")} · رقم العميل: ${escapeHtml(client.client_number || "—")} · واتساب: ${escapeHtml(client.whatsapp || "—")}</p></div><div class="client-detail-actions"><button class="button button-primary" type="button" data-quick-client-payment="${escapeHtml(client.id)}">＋ إضافة دفعة</button><button class="button button-secondary" type="button" data-print-account>طباعة كشف الحساب</button><button class="button button-secondary" type="button" data-print-selected-models>طباعة الموديلات المحددة</button><button class="row-action" type="button" data-return-clients>العودة للعملاء</button></div></div>
     <div class="client-profile-compact"><span>الهاتف: ${escapeHtml(client.phone || "—")}</span><span>كاش: ${escapeHtml(client.cash_phone || "—")}</span><span>إنستا: ${escapeHtml(client.instagram || "—")}</span><span>تاريخ الملف: ${formatDateTime(client.created_at)}</span></div>
     ${accountLinkSection}
     ${clientFabricBalanceSection}
@@ -2197,6 +2216,60 @@ function pendingAccountRows(accounts, clients) {
   </article>`).join("")}</div>`;
 }
 
+function modelSizeColorCardsMarkup(order) {
+  const sizeData = parseSizeData(order.sizes);
+  const sizeOrder = orderedSizeEntries(sizeData);
+  const multiplicities = sizeOrder.reduce((counts, size) => {
+    counts[size] = Number(counts[size] || 0) + 1;
+    return counts;
+  }, {});
+  const distributionColors = Array.isArray(order.colorSizeDistribution?.colors)
+    ? order.colorSizeDistribution.colors
+    : [];
+  const cuttingColors = parseColorPlyData(order.colorPlyData, order.colors);
+  const colors = distributionColors.length
+    ? distributionColors.map((entry) => ({
+      color: String(entry.color || "").toUpperCase(),
+      name: String(entry.name || order.colorNames?.[String(entry.color || "").toUpperCase()] || ""),
+      sizes: entry.sizes || {}
+    }))
+    : cuttingColors.map((entry) => ({
+      color: entry.color,
+      name: entry.name || order.colorNames?.[entry.color] || "",
+      plys: entry.plys,
+      sizes: {}
+    }));
+  const sizes = sizeOrder.length
+    ? sizeOrder
+    : [...new Set(colors.flatMap((entry) => Object.keys(entry.sizes)))];
+  if (!sizes.length) return '<div class="empty-state">لا توجد مقاسات مسجلة لهذا الموديل.</div>';
+  return `<div class="model-size-color-grid">${sizes.map((size, index) => {
+    const occurrence = sizeOrder.length
+      ? sizeOrder.slice(0, index + 1).filter((entry) => entry === size).length
+      : index + 1;
+    const colorCards = colors.map((entry) => {
+      const aggregateCount = Number(entry.sizes?.[size] || 0);
+      const count = Number.isFinite(entry.plys)
+        ? entry.plys
+        : aggregateCount > 0
+          ? Math.floor(aggregateCount / Math.max(multiplicities[size] || 1, 1))
+            + (occurrence <= aggregateCount % Math.max(multiplicities[size] || 1, 1) ? 1 : 0)
+          : 0;
+      const color = /^#[0-9A-F]{6}$/.test(entry.color) ? entry.color : "";
+      return `<div class="model-size-color-item"><span class="model-size-color-name">${color ? `<i class="color-breakdown-swatch" style="--swatch-color:${color}"></i>` : ""}${escapeHtml(entry.name || (color || "لون غير مسمى"))}</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(count)} قطعة</strong></div>`;
+    }).join("");
+    const fallbackCount = Number(sizeData.counts[size] || 0);
+    return `<article class="model-size-card"><header><span>${escapeHtml(SIZE_TYPE_LABELS[sizeData.type] || "المقاس")} · ${escapeHtml(size)}</span>${multiplicities[size] > 1 ? `<small>التكرار ${occurrence} من ${multiplicities[size]}</small>` : ""}</header><div class="model-size-color-list">${colorCards || `<div class="model-size-color-item"><span>إجمالي المقاس</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(Math.floor(fallbackCount / Math.max(multiplicities[size] || 1, 1)))} قطعة</strong></div>`}</div></article>`;
+  }).join("")}</div>`;
+}
+
+function modelExpenseEntriesMarkup(order) {
+  const entries = Array.isArray(order.expenseEntries) ? order.expenseEntries : [];
+  return entries.length
+    ? table(["بيان المصروف","القيمة","التاريخ"], entries.map((entry) => `<tr><td>${escapeHtml(entry.description)}</td><td>${money(entry.amount)}</td><td>${formatDateTime(entry.created_at)}</td></tr>`))
+    : '<div class="empty-state">لا توجد بنود مصروفات منفصلة لهذا الموديل.</div>';
+}
+
 function modelDetailsModalView(order, showPricingBreakdown = false) {
   const canEditDeliveryQuantities = showPricingBreakdown && !order.archivedAt;
   const pricingDetails = showPricingBreakdown && order.pricingMode === "stages"
@@ -2208,7 +2281,7 @@ function modelDetailsModalView(order, showPricingBreakdown = false) {
   const deliveryHistory = order.deliveryHistory?.length
     ? table(["#", "الكمية", "المستلم", "تاريخ التسليم", ...(canEditDeliveryQuantities ? ["تعديل التسليم"] : [])], order.deliveryHistory.map((delivery, index) => `<tr><td>${index + 1}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(delivery.quantity)} قطعة</td><td>${escapeHtml(delivery.recipient_name || "—")}</td><td>${formatDateTime(delivery.delivered_at)}</td>${canEditDeliveryQuantities ? `<td><label class="field"><span>كمية الدفعة ${index + 1} (صفر لحذفها)</span><input type="number" min="0" step="1" value="${delivery.quantity}" data-edit-delivery-quantity="${escapeHtml(delivery.id)}"></label><button class="row-action" type="button" data-save-delivery-quantity="${escapeHtml(delivery.id)}">حفظ التسليم</button></td>` : ""}</tr>`))
     : '<div class="empty-state">لا توجد دفعات تسليم مسجلة.</div>';
-  return `<header class="modal-view-heading">${modelImageMarkup(order.modelImageUrl)}<div><small>تفاصيل الطلبية / الفرشة</small><h2 id="model-details-title">${escapeHtml(order.name || "موديل بدون اسم")}</h2><p>رقم الموديل: ${escapeHtml(order.modelNumber || "—")} · العميل: ${escapeHtml(order.client || "—")}</p></div>${statusTag(order.displayStatus || order.status)}</header>
+  return `<header class="modal-view-heading">${modelImageMarkup(order.modelImageUrl)}<div><small>تفاصيل الطلبية / الفرشة</small><h2 id="model-details-title">${escapeHtml(order.name || "موديل بدون اسم")}</h2><p>كود المصنع: ${escapeHtml(order.factoryModelCode || "—")} · كود العميل: ${escapeHtml(order.clientModelCode || "—")} · رقم الموديل: ${escapeHtml(order.modelNumber || "—")}</p><p>العميل: ${escapeHtml(order.client || "—")}</p></div>${statusTag(order.displayStatus || order.status)}</header>
     <div class="compact-detail-grid">
       <div><span>العدد المطلوب الأصلي</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.originalQuantity)} قطعة</strong></div>
       <div><span>العدد</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity)} قطعة</strong></div>
@@ -2220,8 +2293,6 @@ function modelDetailsModalView(order, showPricingBreakdown = false) {
       <div><span>المبلغ المستحق فعلياً</span><strong>${money(order.totalAmount)}</strong></div>
       <div><span>المدفوع</span><strong>${money(order.paidAmount)}</strong></div>
       <div><span>المتبقي الحالي</span><strong>${money(order.remainingAmount)}</strong></div>
-      <div><span>الألوان</span><strong>${colorSummaryMarkup(order.colors, order.colorNames, order.colorPlyData)}</strong></div>
-      <div><span>المقاسات</span><strong>${escapeHtml(sizeSummary(order.sizes))}</strong></div>
       <div><span>القماش / الفرشة</span><strong>${escapeHtml(order.fabric || "—")} · ${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(order.fabricQuantity)} ${escapeHtml(order.fabricUnit || "متر")} · ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.layerCount)} راقات</strong></div>
       <div><span>أقسام الشغل</span><strong>${escapeHtml(workStageLabels(order.workStages).join(" · ") || "—")}</strong></div>
       <div><span>طريقة التسعير</span><strong>${order.pricingMode === "stages" ? "سعر مستقل لكل قسم" : "سعر إجمالي للقطعة"}</strong></div>
@@ -2230,6 +2301,9 @@ function modelDetailsModalView(order, showPricingBreakdown = false) {
       <div><span>تم الإرسال بواسطة</span><strong>${escapeHtml(order.senderName || "—")}</strong></div>
       <div><span>التسليم المتوقع</span><strong>${formatDateOnly(order.expectedDeliveryDate)}</strong></div>
     </div>
+    <h3 class="modal-subheading">توزيع المقاسات والألوان</h3>
+    ${modelSizeColorCardsMarkup(order)}
+    ${showPricingBreakdown ? `<h3 class="modal-subheading">سجل المصروفات الخارجية والإضافية</h3>${modelExpenseEntriesMarkup(order)}` : ""}
     <h3 class="modal-subheading">سجل دفعات التسليم</h3>${deliveryHistory}
     ${showPricingBreakdown && order.quantity > 0 && !order.archivedAt && !LOCKED_FACTORY_ORDER_STATUSES.includes(order.status)
       ? '<div class="form-actions"><button class="button button-primary" type="button" data-open-final-handover>تسليم / تسوية وإغلاق الطلب</button></div>'
@@ -2529,6 +2603,7 @@ function adminView(data, accounts) {
         ${panel("إدارة الموديلات والطلبيات", orderCards(activeOrders, true))}
       </div>
       <div data-orders-tab-panel="status"${activeOrdersTab === "status" ? "" : " hidden"}>${modelStatusReviewView(data)}</div>
+      <div class="modal-backdrop" id="model-expense-modal" hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="model-expense-title"><button class="modal-close" type="button" data-close-model-expense aria-label="إغلاق">×</button><h2 id="model-expense-title">إضافة مصروف خارجي للموديل</h2><p data-model-expense-name></p><form class="modal-form" data-model-expense-form><input type="hidden" name="orderId"><label for="model-expense-description">بيان المصروف</label><input id="model-expense-description" name="description" maxlength="240" required><label for="model-expense-amount">قيمة المصروف (ج.م)</label><input id="model-expense-amount" name="amount" type="number" min="0.01" max="999999999999.99" step="0.01" required><div class="form-actions"><button class="button button-primary" type="submit">حفظ المصروف</button><button class="row-action" type="button" data-close-model-expense>إلغاء</button></div></form></section></div>
       <div class="modal-backdrop" id="order-modal" hidden><section class="modal-card order-modal-card" role="dialog" aria-modal="true" aria-labelledby="order-modal-title"><button class="modal-close" type="button" data-close-order aria-label="إغلاق">×</button><h2 id="order-modal-title">إضافة موديل / طلبية</h2><p>يمكن ترك العدد فارغًا حتى انتهاء الفرش والقص، ثم إدخال العدد الفعلي عند تعديل الطلب.</p>      <form id="model-form" class="order-form modal-form" novalidate><input type="hidden" name="editIndex" value=""><input type="hidden" name="savedOrderId" value=""><input type="hidden" name="productionType" value="full_cutting">
         <section class="form-section"><h3>المعلومات الأساسية <span>إجباري</span></h3><div class="form-section-grid">
           <input type="hidden" name="customerId">
@@ -2536,6 +2611,7 @@ function adminView(data, accounts) {
           <div class="field model-brand-field"><label for="model-brand">اختيار اسم البراند</label><select id="model-brand" name="brandSelection"><option value="">اختر اسم البراند</option>${brandOptions}</select></div>
           <div class="field model-name-field"><label for="model-name">اسم الموديل</label><input id="model-name" name="name"></div>
           <div class="field model-number-field"><label for="model-number">رقم الموديل</label><input id="model-number" name="modelNumber"></div>
+          <div class="field"><label for="model-client-code">كود الموديل لدى العميل</label><input id="model-client-code" name="clientModelCode" maxlength="120" autocomplete="off"><small>كود العميل منفصل عن كود المصنع التلقائي.</small></div>
           <div class="field model-quantity-field"><label for="model-quantity">العدد الكلي</label><input id="model-quantity" name="quantity" type="number" min="0" step="1" placeholder="أدخل العدد أو اتركه حتى انتهاء القص"><small>يمكن إدخال العدد الآن أو تأجيله؛ عند اختيار الألوان والمقاسات يوزع النظام العدد تلقائياً.</small></div>
           <div class="field" data-original-quantity-field hidden><label for="model-original-quantity">العدد المطلوب الأصلي</label><input id="model-original-quantity" name="originalQuantity" type="number" min="0" step="1"></div>
         </div></section>
@@ -2590,11 +2666,11 @@ function adminView(data, accounts) {
       <div data-client-panel="summary"${clientManagementTab === "summary" ? "" : " hidden"}>${clientAccountsOverview(data)}</div>
       <div data-client-panel="profiles"${clientManagementTab === "profiles" ? "" : " hidden"}>
       <div class="clients-toolbar"><div><h2>ملفات العملاء</h2><p>بيانات العميل والمحل ووسائل التواصل والحساب.</p></div><button class="button button-primary" type="button" data-open-client-modal>＋ إضافة عميل جديد</button></div>
-      ${panel("سجل ملفات العملاء", table(["العميل / المحل","رقم العميل","الهاتف / واتساب","حساب الدخول","إجراء"], data.clients.map((client) => {
+      ${panel("سجل ملفات العملاء", table(["العميل / المحل","كود العميل","رقم العميل","الهاتف / واتساب","حساب الدخول","إجراء"], data.clients.map((client) => {
         const linkedUser = data.users.find((user) => user.id === client.user_id);
-        return `<tr><td>${escapeHtml(client.name)}${client.brand_name ? `<br><small>${escapeHtml(client.brand_name)}</small>` : ""}</td><td>${escapeHtml(client.client_number || "—")}</td><td>${escapeHtml(client.whatsapp || client.phone || "—")}</td><td>${linkedUser ? `${escapeHtml(linkedUser.username)} · ${escapeHtml(linkedUser.status === "suspended" ? "متوقف" : "نشط")}` : "لا يوجد حساب دخول"}</td><td><button class="row-action" type="button" data-open-client-details="${escapeHtml(client.id)}">تفاصيل الحساب والعمولة</button> <button class="row-action" type="button" data-edit-customer="${escapeHtml(client.id)}">تعديل البيانات</button> <button class="row-action order-delete-action" type="button" data-delete-customer="${escapeHtml(client.id)}">حذف العميل</button></td></tr>`;
+        return `<tr><td>${escapeHtml(client.name)}${client.brand_name ? `<br><small>${escapeHtml(client.brand_name)}</small>` : ""}</td><td><strong>${escapeHtml(client.code_letter || "—")}</strong></td><td>${escapeHtml(client.client_number || "—")}</td><td>${escapeHtml(client.whatsapp || client.phone || "—")}</td><td>${linkedUser ? `${escapeHtml(linkedUser.username)} · ${escapeHtml(linkedUser.status === "suspended" ? "متوقف" : "نشط")}` : "لا يوجد حساب دخول"}</td><td><button class="row-action" type="button" data-open-client-details="${escapeHtml(client.id)}">تفاصيل الحساب والعمولة</button> <button class="row-action" type="button" data-edit-customer="${escapeHtml(client.id)}">تعديل البيانات</button> <button class="row-action order-delete-action" type="button" data-delete-customer="${escapeHtml(client.id)}">حذف العميل</button></td></tr>`;
       })))}
-      <div class="modal-backdrop" id="client-modal" hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="client-modal-title"><button class="modal-close" type="button" data-close-client aria-label="إغلاق">×</button><h2 id="client-modal-title">إضافة عميل جديد</h2><p>بيانات ملف العميل ووسائل التواصل.</p><form id="client-form" class="modal-form client-profile-form"><input type="hidden" name="clientId"><label for="client-name">اسم العميل الشخصي</label><input id="client-name" name="name" required><label for="client-brand">اسم المحل أو البراند</label><input id="client-brand" name="brandName"><label for="client-number">رقم العميل</label><input id="client-number" name="clientNumber"><label for="client-phone">رقم الهاتف</label><input id="client-phone" name="phone" type="tel"><label for="client-cash-phone">رقم كاش</label><input id="client-cash-phone" name="cashPhone" type="tel"><label for="client-instagram">حساب إنستا</label><input id="client-instagram" name="instagram"><label for="client-whatsapp">رقم واتساب</label><input id="client-whatsapp" name="whatsapp" type="tel"><label for="client-notes">ملاحظات</label><textarea id="client-notes" name="notes" rows="3"></textarea><div class="form-actions"><button class="button button-primary" type="submit">حفظ العميل</button><button class="row-action" type="button" data-close-client>إلغاء</button></div></form></section></div>
+      <div class="modal-backdrop" id="client-modal" hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="client-modal-title"><button class="modal-close" type="button" data-close-client aria-label="إغلاق">×</button><h2 id="client-modal-title">إضافة عميل جديد</h2><p>بيانات ملف العميل ووسائل التواصل.</p><form id="client-form" class="modal-form client-profile-form"><input type="hidden" name="clientId"><label for="client-name">اسم العميل الشخصي</label><input id="client-name" name="name" required><label for="client-brand">اسم المحل أو البراند</label><input id="client-brand" name="brandName"><label for="client-code-letter">حرف كود العميل</label><input id="client-code-letter" name="codeLetter" maxlength="6" pattern="[A-Za-z]+" placeholder="يُنشأ تلقائياً إذا تُرك فارغاً"><small>يُستخدم الحرف في كود المصنع، مثل A-1.</small><label for="client-number">رقم العميل</label><input id="client-number" name="clientNumber"><label for="client-phone">رقم الهاتف</label><input id="client-phone" name="phone" type="tel"><label for="client-cash-phone">رقم كاش</label><input id="client-cash-phone" name="cashPhone" type="tel"><label for="client-instagram">حساب إنستا</label><input id="client-instagram" name="instagram"><label for="client-whatsapp">رقم واتساب</label><input id="client-whatsapp" name="whatsapp" type="tel"><label for="client-notes">ملاحظات</label><textarea id="client-notes" name="notes" rows="3"></textarea><div class="form-actions"><button class="button button-primary" type="submit">حفظ العميل</button><button class="row-action" type="button" data-close-client>إلغاء</button></div></form></section></div>
       </div>
     </section>
     <section id="client-details" class="dashboard-section">${data.clients.some((client) => client.id === selectedClientId) ? clientDetailsView(data.clients.find((client) => client.id === selectedClientId), data) : '<div class="empty-state">اختر عميلاً لعرض تفاصيل حسابه.</div>'}</section>
@@ -5374,7 +5450,8 @@ async function persistFactoryOrder(order, changes = {}) {
     requested_work_stages: updated.workStages || ["cutting", "sewing", "finishing"],
     requested_pricing_mode: updated.pricingMode || "total",
     requested_stage_prices: updated.stagePrices || {},
-    requested_operational_expenses: Number(updated.operationalExpenses || 0)
+    requested_operational_expenses: Number(updated.operationalExpenses || 0),
+    requested_client_model_code: updated.clientModelCode || ""
   });
   if (error?.code === "PGRST202") {
     throw new Error("دالة حفظ الطلبات المحدّثة غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
@@ -6526,6 +6603,7 @@ function bindActions(session) {
     return;
   }
   if (session.role !== "admin") return;
+  bindModelExpenseActions(session);
   bindWorkforceActions(session);
   bindWorkerPermissionActions(session);
   bindWorkerProductionReview(session);
@@ -6843,6 +6921,7 @@ function bindActions(session) {
     orderForm.reset();
     orderForm.elements.editIndex.value = "";
     orderForm.elements.status.disabled = false;
+    orderForm.elements.operationalExpenses.readOnly = false;
     orderForm.querySelector("[data-original-quantity-field]").hidden = true;
     updateOrderConditionalFields();
     updateStagePricing(orderForm);
@@ -6877,7 +6956,8 @@ function bindActions(session) {
     orderForm.querySelector("[data-original-quantity-field]").hidden = !closedOrder;
     orderForm.elements.originalQuantity.value = String(currentOrder.originalQuantity);
     orderForm.elements.status.disabled = closedOrder;
-    for (const field of ["customerId", "name", "modelNumber", "pricePerPiece", "paidAmount", "operationalExpenses", "status", "priority", "productionType", "pricingMode", "expectedDeliveryDate"]) {
+    orderForm.elements.operationalExpenses.readOnly = true;
+    for (const field of ["customerId", "name", "modelNumber", "clientModelCode", "pricePerPiece", "paidAmount", "operationalExpenses", "status", "priority", "productionType", "pricingMode", "expectedDeliveryDate"]) {
       orderForm.elements[field].value = currentOrder[field] ?? "";
     }
     syncOrderCustomerSelection(orderForm, currentOrder.customerId);
@@ -7056,6 +7136,7 @@ function bindActions(session) {
     const clientData = {
       name: String(formData.get("name")).trim(),
       brand_name: String(formData.get("brandName")).trim(),
+      code_letter: String(formData.get("codeLetter")).trim().toUpperCase(),
       client_number: String(formData.get("clientNumber")).trim(),
       phone: String(formData.get("phone")).trim(),
       cash_phone: String(formData.get("cashPhone")).trim(),
@@ -7104,6 +7185,7 @@ function bindActions(session) {
     form.elements.clientId.value = client.id;
     form.elements.name.value = client.name;
     form.elements.brandName.value = client.brand_name || "";
+    form.elements.codeLetter.value = client.code_letter || "";
     form.elements.clientNumber.value = client.client_number || "";
     form.elements.phone.value = client.phone;
     form.elements.cashPhone.value = client.cash_phone || "";
@@ -7364,6 +7446,7 @@ function bindActions(session) {
       removeWorkflowStatusOptions();
       orderForm.reset();
       orderForm.elements.editIndex.value = "";
+      orderForm.elements.operationalExpenses.readOnly = false;
       updateOrderConditionalFields();
       syncOrderCustomerSelection(orderForm, newOrderButton.dataset.openOrderForClient);
       updateStagePricing(orderForm);
@@ -7511,6 +7594,7 @@ function bindActions(session) {
         customerId,
         name: modelName,
         modelNumber,
+        clientModelCode: String(formData.get("clientModelCode") || "").trim(),
         quantity,
         originalQuantity: requestedOriginalQuantity,
         deliveredPieces,
@@ -7973,6 +8057,65 @@ function bindActions(session) {
       }
     }
   }));
+}
+
+function bindModelExpenseActions(session) {
+  const modal = document.querySelector("#model-expense-modal");
+  const form = modal?.querySelector("[data-model-expense-form]");
+  if (!modal || !form) return;
+  const close = () => {
+    modal.hidden = true;
+    form.reset();
+    form.elements.orderId.value = "";
+  };
+  document.querySelector("#app").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-add-model-expense]");
+    if (!button) return;
+    const order = dashboardData.models.find((item) => item.id === button.dataset.addModelExpense);
+    if (!order) {
+      window.factoryUI.toast("تعذر العثور على الموديل لإضافة المصروف.", "error");
+      return;
+    }
+    form.reset();
+    form.elements.orderId.value = order.id;
+    modal.querySelector("[data-model-expense-name]").textContent = `${order.name} · ${order.factoryModelCode || "دون كود مصنع"}`;
+    modal.hidden = false;
+    form.elements.description.focus();
+  });
+  modal.querySelectorAll("[data-close-model-expense]").forEach((button) => button.addEventListener("click", close));
+  modal.addEventListener("click", (event) => {
+    if (event.target === modal) close();
+  });
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const orderId = form.elements.orderId.value;
+    const description = String(form.elements.description.value).trim();
+    const amount = Number(form.elements.amount.value);
+    if (!orderId || !description || !Number.isFinite(amount) || amount <= 0) {
+      window.factoryUI.toast("أدخل بيان المصروف وقيمة صحيحة أكبر من صفر.", "error");
+      return;
+    }
+    const submit = form.querySelector('[type="submit"]');
+    submit.disabled = true;
+    try {
+      const { error } = await supabaseClient.rpc("admin_add_factory_order_expense", {
+        requested_order_id: orderId,
+        requested_description: description,
+        requested_amount: amount
+      });
+      if (error?.code === "PGRST202") {
+        throw new Error("دالة إضافة مصروف الموديل غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+      }
+      if (error) throw error;
+      close();
+      await refreshDashboard(session);
+      window.factoryUI.toast("تمت إضافة المصروف كبند جديد دون استبدال المصروفات السابقة.");
+    } catch (error) {
+      reportDashboardFailure(session, "تعذر إضافة مصروف الموديل", error);
+    } finally {
+      submit.disabled = false;
+    }
+  });
 }
 
 async function initializeDashboard() {

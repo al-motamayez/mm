@@ -151,6 +151,7 @@ create table if not exists public.factory_clients (
   user_id uuid unique references auth.users (id) on delete set null,
   name text not null check (length(trim(name)) > 0),
   brand_name text not null default '',
+  code_letter text not null default '',
   client_number text not null default '',
   phone text not null default '',
   cash_phone text not null default '',
@@ -183,11 +184,131 @@ create index if not exists factory_client_model_requests_created_at_idx
 
 alter table public.factory_clients
   add column if not exists brand_name text not null default '',
+  add column if not exists code_letter text not null default '',
   add column if not exists client_number text not null default '',
   add column if not exists cash_phone text not null default '',
   add column if not exists instagram text not null default '',
   add column if not exists whatsapp text not null default '',
   add column if not exists account_period_started_at timestamptz;
+update public.factory_clients
+set code_letter = upper(trim(code_letter))
+where length(trim(code_letter)) > 0
+  and code_letter is distinct from upper(trim(code_letter));
+
+create sequence if not exists public.factory_client_code_letter_seq;
+create or replace function public.factory_code_letter(sequence_value bigint)
+returns text
+language plpgsql
+immutable
+strict
+set search_path = public
+as $$
+declare
+  value bigint := sequence_value;
+  result text := '';
+begin
+  if value < 1 then
+    raise exception 'A positive sequence value is required.';
+  end if;
+  while value > 0 loop
+    value := value - 1;
+    result := chr(65 + (value % 26)::integer) || result;
+    value := value / 26;
+  end loop;
+  return result;
+end;
+$$;
+
+do $$
+declare
+  client_record record;
+  candidate_letter text;
+begin
+  for client_record in
+    select id
+    from public.factory_clients
+    where length(trim(code_letter)) = 0
+    order by created_at, id
+  loop
+    loop
+      candidate_letter := public.factory_code_letter(
+        nextval('public.factory_client_code_letter_seq')
+      );
+      exit when not exists (
+        select 1
+        from public.factory_clients
+        where code_letter = candidate_letter
+          and id is distinct from client_record.id
+      );
+    end loop;
+    update public.factory_clients
+    set code_letter = candidate_letter
+    where id = client_record.id;
+  end loop;
+end;
+$$;
+
+select setval(
+  'public.factory_client_code_letter_seq',
+  greatest((select count(*) from public.factory_clients), 1),
+  (select count(*) > 0 from public.factory_clients)
+);
+
+create or replace function public.assign_factory_client_code_letter()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if length(trim(coalesce(new.code_letter, ''))) = 0 then
+    loop
+      new.code_letter := public.factory_code_letter(nextval('public.factory_client_code_letter_seq'));
+      exit when not exists (
+        select 1 from public.factory_clients
+        where code_letter = new.code_letter
+          and id is distinct from new.id
+      );
+    end loop;
+  else
+    new.code_letter := upper(trim(new.code_letter));
+  end if;
+  if new.code_letter !~ '^[A-Z]+$' then
+    raise exception 'Client code letter must contain only English letters.';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists assign_factory_client_code_letter on public.factory_clients;
+create trigger assign_factory_client_code_letter
+  before insert or update of code_letter on public.factory_clients
+  for each row execute procedure public.assign_factory_client_code_letter();
+
+create unique index if not exists factory_clients_code_letter_idx
+  on public.factory_clients (code_letter);
+
+create or replace function public.refresh_factory_model_codes_for_client()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if new.code_letter is distinct from old.code_letter then
+    update public.orders
+    set factory_model_code = concat(new.code_letter, '-', model_serial)
+    where customer_id = new.id
+      and model_serial is not null;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists refresh_factory_model_codes_for_client on public.factory_clients;
+create trigger refresh_factory_model_codes_for_client
+  after update of code_letter on public.factory_clients
+  for each row execute procedure public.refresh_factory_model_codes_for_client();
 
 create or replace function public.sync_factory_client_profile()
 returns trigger
@@ -524,6 +645,9 @@ create table if not exists public.orders (
   customer_id uuid references public.factory_clients (id) on delete set null,
   model_name text,
   model_number text not null default '',
+  model_serial bigint,
+  factory_model_code text,
+  client_model_code text not null default '',
   sender_name text,
   original_total_pieces integer not null default 0 check (original_total_pieces >= 0),
   total_pieces integer not null default 0 check (total_pieces >= 0),
@@ -565,6 +689,9 @@ alter table public.orders
 alter table public.orders
   add column if not exists model_name text,
   add column if not exists model_number text not null default '',
+  add column if not exists model_serial bigint,
+  add column if not exists factory_model_code text,
+  add column if not exists client_model_code text not null default '',
   add column if not exists sender_name text,
   add column if not exists original_total_pieces integer,
   add column if not exists colors text not null default '',
@@ -584,6 +711,67 @@ alter table public.orders
   add column if not exists stage_prices jsonb not null default '{}'::jsonb,
   add column if not exists color_size_distribution jsonb not null default '{"colors":[]}'::jsonb,
   add column if not exists archived_at timestamptz;
+
+create sequence if not exists public.factory_model_serial_seq;
+with numbered_orders as (
+  select id,
+         row_number() over (order by created_at, id)
+           + coalesce((select max(model_serial) from public.orders), 0) as sequence_value
+  from public.orders
+  where model_serial is null
+)
+update public.orders as factory_order
+set model_serial = numbered_orders.sequence_value
+from numbered_orders
+where factory_order.id = numbered_orders.id;
+
+select setval(
+  'public.factory_model_serial_seq',
+  greatest(coalesce((select max(model_serial) from public.orders), 1), 1),
+  (select max(model_serial) is not null from public.orders)
+);
+
+update public.orders as factory_order
+set factory_model_code = concat(client.code_letter, '-', factory_order.model_serial)
+from public.factory_clients as client
+where client.id = factory_order.customer_id
+  and (factory_order.factory_model_code is null or length(trim(factory_order.factory_model_code)) = 0);
+
+create unique index if not exists orders_model_serial_idx
+  on public.orders (model_serial) where model_serial is not null;
+create unique index if not exists orders_factory_model_code_idx
+  on public.orders (factory_model_code) where factory_model_code is not null;
+
+create or replace function public.assign_factory_model_serial()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  customer_letter text;
+begin
+  if new.model_serial is null then
+    new.model_serial := nextval('public.factory_model_serial_seq');
+  end if;
+  if new.customer_id is not null then
+    select code_letter into customer_letter
+    from public.factory_clients
+    where id = new.customer_id;
+    if not found then
+      raise exception 'The selected factory customer does not exist.';
+    end if;
+    new.factory_model_code := concat(customer_letter, '-', new.model_serial);
+  end if;
+  new.client_model_code := coalesce(trim(new.client_model_code), '');
+  return new;
+end;
+$$;
+
+drop trigger if exists assign_factory_model_serial on public.orders;
+create trigger assign_factory_model_serial
+  before insert or update of customer_id, model_serial, client_model_code on public.orders
+  for each row execute procedure public.assign_factory_model_serial();
 
 alter table public.orders
   drop column if exists remaining_amount,
@@ -910,6 +1098,9 @@ returns table (
   customer_id uuid,
   model_name text,
   model_number text,
+  model_serial bigint,
+  factory_model_code text,
+  client_model_code text,
   production_type text,
   work_stages text[],
   sender_name text,
@@ -948,6 +1139,9 @@ begin
            factory_order.customer_id,
            factory_order.model_name,
            factory_order.model_number,
+           factory_order.model_serial,
+           factory_order.factory_model_code,
+           factory_order.client_model_code,
            factory_order.production_type,
            factory_order.work_stages,
            factory_order.sender_name,
@@ -985,6 +1179,7 @@ drop function if exists public.save_factory_order(uuid, uuid, text, text, intege
 drop function if exists public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb, text, jsonb, text[], text, jsonb);
 drop function if exists public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb, text, jsonb, text[], text, jsonb, numeric);
 drop function if exists public.save_factory_order(uuid, uuid, text, text, integer, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb, text, jsonb, text[], text, jsonb, numeric);
+drop function if exists public.save_factory_order(uuid, uuid, text, text, integer, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb, text, jsonb, text[], text, jsonb, numeric, text);
 create function public.save_factory_order(
   requested_order_id uuid,
   requested_customer_id uuid,
@@ -1009,7 +1204,8 @@ create function public.save_factory_order(
   requested_work_stages text[],
   requested_pricing_mode text,
   requested_stage_prices jsonb,
-  requested_operational_expenses numeric
+  requested_operational_expenses numeric,
+  requested_client_model_code text
 )
 returns uuid
 language plpgsql
@@ -1055,6 +1251,7 @@ begin
     or requested_operational_expenses is null
     or requested_operational_expenses < 0
     or requested_operational_expenses > 999999999999.99
+    or length(coalesce(requested_client_model_code, '')) > 120
     or requested_production_type is null
     or requested_production_type not in ('full_cutting', 'ready_sewing')
     or coalesce(cardinality(requested_work_stages), 0) = 0
@@ -1234,7 +1431,7 @@ begin
     insert into public.orders (
       client_id, customer_id, model_name, model_number, colors, color_names, sizes,
       original_total_pieces, total_pieces, delivered_pieces, price_per_piece, paid_amount, expected_delivery_date, model_image_url, priority,
-      production_type, work_stages, pricing_mode, stage_prices, color_size_distribution, operational_expenses, status
+      production_type, work_stages, pricing_mode, stage_prices, color_size_distribution, operational_expenses, client_model_code, status
     )
     values (
       matched_client_id, matched_customer_id, resolved_model_name,
@@ -1243,9 +1440,19 @@ begin
       requested_original_quantity, requested_quantity, requested_delivered_pieces,
       requested_price_per_piece, requested_paid_amount, requested_expected_delivery_date, requested_model_image_url,
       trim(requested_priority), requested_production_type, requested_work_stages, requested_pricing_mode,
-      requested_stage_prices, requested_color_size_distribution, requested_operational_expenses, trim(requested_status)
+      requested_stage_prices, requested_color_size_distribution, requested_operational_expenses,
+      trim(coalesce(requested_client_model_code, '')), trim(requested_status)
     )
     returning id into saved_order_id;
+    if requested_operational_expenses > 0 then
+      insert into public.factory_order_expenses (
+        order_id, description, amount, created_by
+      )
+      values (
+        saved_order_id, 'مصاريف تشغيل عند إنشاء الموديل',
+        requested_operational_expenses, auth.uid()
+      );
+    end if;
     if requested_delivered_pieces > 0 then
       insert into public.factory_deliveries (
         order_id, customer_id, quantity, price_per_piece,
@@ -1358,6 +1565,7 @@ begin
         stage_prices = requested_stage_prices,
         color_size_distribution = requested_color_size_distribution,
         operational_expenses = requested_operational_expenses,
+        client_model_code = trim(coalesce(requested_client_model_code, '')),
         status = trim(requested_status)
     where id = requested_order_id;
     insert into public.production_stages (order_id, stage_name, target_quantity)
@@ -1409,6 +1617,8 @@ begin
   return saved_order_id;
 end;
 $$;
+
+
 
 do $$
 declare
@@ -1497,6 +1707,122 @@ create index if not exists factory_cash_transactions_customer_date_idx
 create unique index if not exists factory_cash_transactions_order_idx
   on public.factory_cash_transactions (order_id)
   where order_id is not null;
+
+create table if not exists public.factory_order_expenses (
+  id uuid primary key default gen_random_uuid(),
+  order_id uuid not null references public.orders (id) on delete cascade,
+  description text not null check (length(trim(description)) between 1 and 240),
+  amount numeric(14, 2) not null check (amount > 0),
+  is_legacy boolean not null default false,
+  created_by uuid references auth.users (id) on delete set null,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists factory_order_expenses_order_date_idx
+  on public.factory_order_expenses (order_id, created_at desc);
+create unique index if not exists factory_order_expenses_legacy_order_idx
+  on public.factory_order_expenses (order_id) where is_legacy;
+
+insert into public.factory_order_expenses (order_id, description, amount, is_legacy, created_at)
+select factory_order.id,
+       'مصاريف تشغيل سابقة (رصيد مجمع)',
+       factory_order.operational_expenses,
+       true,
+       factory_order.created_at
+from public.orders as factory_order
+where factory_order.operational_expenses > 0
+on conflict (order_id) where is_legacy do nothing;
+
+create or replace function public.read_factory_order_expenses_admin()
+returns setof public.factory_order_expenses
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+begin
+  if not public.is_active_factory_admin() then
+    raise exception 'Only active admins can read model expense entries.';
+  end if;
+  return query
+    select expense.*
+    from public.factory_order_expenses as expense
+    order by expense.created_at desc;
+end;
+$$;
+
+create or replace function public.admin_add_factory_order_expense(
+  requested_order_id uuid,
+  requested_description text,
+  requested_amount numeric
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  current_order public.orders%rowtype;
+  expense_id uuid;
+  new_total numeric(14, 2);
+begin
+  if not public.is_active_factory_admin() then
+    raise exception 'Only active admins can add model expenses.';
+  end if;
+  if requested_order_id is null
+     or length(trim(coalesce(requested_description, ''))) not between 1 and 240
+     or requested_amount is null
+     or requested_amount <= 0
+     or requested_amount > 999999999999.99 then
+    raise exception 'Enter a valid model, expense description, and positive amount.';
+  end if;
+
+  select *
+    into current_order
+  from public.orders
+  where id = requested_order_id
+    and archived_at is null
+  for update;
+  if not found then
+    raise exception 'The active factory order was not found.';
+  end if;
+
+  new_total := current_order.operational_expenses + requested_amount;
+  if new_total > 999999999999.99 then
+    raise exception 'The total model expenses exceed the allowed amount.';
+  end if;
+
+  insert into public.factory_order_expenses (
+    order_id, description, amount, created_by
+  )
+  values (
+    requested_order_id, trim(requested_description), requested_amount, auth.uid()
+  )
+  returning id into expense_id;
+
+  update public.orders
+  set operational_expenses = new_total
+  where id = requested_order_id;
+
+  update public.factory_cash_transactions
+  set description = concat_ws(' · ', current_order.model_name, nullif(trim(current_order.model_number), '')),
+      amount = new_total
+  where order_id = requested_order_id;
+  if not found then
+    insert into public.factory_cash_transactions (
+      customer_id, order_id, direction, category, description, amount,
+      payment_method, occurred_at, created_by
+    )
+    values (
+      current_order.customer_id, requested_order_id, 'expense', 'مصاريف تشغيل الموديل',
+      concat_ws(' · ', current_order.model_name, nullif(trim(current_order.model_number), '')),
+      new_total, 'نقدي', now(), auth.uid()
+    );
+  end if;
+
+  return expense_id;
+end;
+$$;
 
 drop function if exists public.save_factory_cash_transaction(text, text, text, numeric, text, timestamptz);
 drop function if exists public.save_factory_cash_transaction(text, text, text, numeric, text, timestamptz, uuid);
@@ -4739,8 +5065,8 @@ create policy "Admins manage factory clients"
   with check (public.is_active_factory_admin());
 revoke all on public.factory_clients from public, anon, authenticated;
 grant select on public.factory_clients to authenticated;
-grant insert (name, brand_name, client_number, phone, cash_phone, instagram, whatsapp, notes) on public.factory_clients to authenticated;
-grant update (name, brand_name, client_number, phone, cash_phone, instagram, whatsapp, notes, updated_at) on public.factory_clients to authenticated;
+grant insert (name, brand_name, code_letter, client_number, phone, cash_phone, instagram, whatsapp, notes) on public.factory_clients to authenticated;
+grant update (name, brand_name, code_letter, client_number, phone, cash_phone, instagram, whatsapp, notes, updated_at) on public.factory_clients to authenticated;
 revoke all on public.factory_client_model_requests from public, anon, authenticated;
 grant select on public.factory_client_model_requests to authenticated;
 drop policy if exists "Admins and clients read client model requests" on public.factory_client_model_requests;
@@ -4858,6 +5184,13 @@ create policy "Admins read factory cash transactions"
   on public.factory_cash_transactions for select to authenticated
   using (public.is_active_factory_admin());
 grant select on public.factory_cash_transactions to authenticated;
+alter table public.factory_order_expenses enable row level security;
+revoke all on public.factory_order_expenses from public, anon, authenticated;
+drop policy if exists "Admins read factory order expenses" on public.factory_order_expenses;
+create policy "Admins read factory order expenses"
+  on public.factory_order_expenses for select to authenticated
+  using (public.is_active_factory_admin());
+grant select on public.factory_order_expenses to authenticated;
 grant select (id, client_id, customer_id, model_name, model_number, production_type, work_stages, colors, color_size_distribution, sizes, total_pieces, delivered_pieces, archived_at, status, priority, created_at)
   on public.orders to authenticated;
 grant select (sender_name) on public.orders to authenticated;
@@ -5234,6 +5567,10 @@ revoke all on function public.create_factory_order_stages() from public, anon, a
 revoke all on function public.sync_factory_client_profile() from public, anon, authenticated;
 revoke all on function public.read_factory_orders_admin() from public, anon, authenticated;
 grant execute on function public.read_factory_orders_admin() to authenticated;
+revoke all on function public.read_factory_order_expenses_admin() from public, anon, authenticated;
+grant execute on function public.read_factory_order_expenses_admin() to authenticated;
+revoke all on function public.admin_add_factory_order_expense(uuid, text, numeric) from public, anon, authenticated;
+grant execute on function public.admin_add_factory_order_expense(uuid, text, numeric) to authenticated;
 revoke all on function public.read_factory_orders_client() from public, anon, authenticated;
 grant execute on function public.read_factory_orders_client() to authenticated;
 revoke all on function public.read_factory_client_cash_transactions() from public, anon, authenticated;
@@ -5244,8 +5581,8 @@ revoke all on function public.submit_factory_client_model_request(text, text, in
 grant execute on function public.submit_factory_client_model_request(text, text, integer, text, text) to authenticated;
 revoke all on function public.read_factory_cutting_clients() from public, anon, authenticated;
 grant execute on function public.read_factory_cutting_clients() to authenticated;
-revoke all on function public.save_factory_order(uuid, uuid, text, text, integer, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb, text, jsonb, text[], text, jsonb, numeric) from public, anon, authenticated;
-grant execute on function public.save_factory_order(uuid, uuid, text, text, integer, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb, text, jsonb, text[], text, jsonb, numeric) to authenticated;
+revoke all on function public.save_factory_order(uuid, uuid, text, text, integer, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb, text, jsonb, text[], text, jsonb, numeric, text) from public, anon, authenticated;
+grant execute on function public.save_factory_order(uuid, uuid, text, text, integer, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb, text, jsonb, text[], text, jsonb, numeric, text) to authenticated;
 revoke all on function public.record_factory_delivery(uuid, integer, text) from public, anon, authenticated;
 grant execute on function public.record_factory_delivery(uuid, integer, text) to authenticated;
 revoke all on function public.complete_factory_handover(uuid, integer, text) from public, anon, authenticated;
