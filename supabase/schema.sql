@@ -4452,8 +4452,23 @@ begin
   where order_id = requested_order_id
     and stage_name = 'cutting'
   for update;
-  if not found or current_cutting_stage.status <> 'جاهز للقص' then
+  if not found then
     raise exception 'Mark the bed ready for cutting before recording its final piece count.';
+  end if;
+  if current_cutting_stage.status <> 'جاهز للقص'
+     and current_order.status <> 'جاهز للقص' then
+    raise exception 'Mark the bed ready for cutting before recording its final piece count.';
+  end if;
+  if current_cutting_stage.status <> 'جاهز للقص' then
+    if current_cutting_stage.layer_count < 1
+       or coalesce(jsonb_typeof(current_cutting_stage.color_ply_data -> 'sizes'), '') <> 'array'
+       or coalesce(jsonb_typeof(current_cutting_stage.color_ply_data -> 'colors'), '') <> 'array' then
+      raise exception 'The cutting bed data is incomplete. Save its sizes and color plys before finishing.';
+    end if;
+    if jsonb_array_length(current_cutting_stage.color_ply_data -> 'sizes') = 0
+       or jsonb_array_length(current_cutting_stage.color_ply_data -> 'colors') = 0 then
+      raise exception 'The cutting bed data is incomplete. Save its sizes and color plys before finishing.';
+    end if;
   end if;
 
   has_saved_fabric := current_cutting_stage.fabric_quantity > 0
