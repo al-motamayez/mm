@@ -4408,46 +4408,22 @@ set search_path = public
 as $$
 declare
   current_order public.orders%rowtype;
+  current_cutting_stage public.production_stages%rowtype;
   normalized_sizes jsonb;
   normalized_colors text;
   cut_total integer;
   total_plys integer;
   resolved_fabric_name text;
   resolved_fabric_unit text;
+  has_saved_fabric boolean;
 begin
   if not public.has_active_factory_role(array['cutting']) then
     raise exception 'Only active cutting supervisors can finish cutting.';
   end if;
   if requested_order_id is null or requested_size_data is null
      or coalesce(jsonb_typeof(requested_size_data), '') <> 'object'
-     or length(trim(coalesce(requested_fabric, ''))) = 0
-     or length(trim(coalesce(requested_cutter_name, ''))) > 120
-     or requested_bolt_count is null or requested_bolt_count < 0
-     or requested_fabric_quantity is null or requested_fabric_quantity <= 0 then
-    raise exception 'A valid order, fabric, and positive fabric quantity are required.';
-  end if;
-  if requested_fabric_id is null
-     and coalesce(nullif(trim(requested_external_fabric_unit), ''), '') not in ('متر', 'توب') then
-    raise exception 'Choose متر or توب for the external fabric quantity.';
-  end if;
-  if requested_fabric_id is null
-     and ((requested_external_fabric_unit = 'توب'
-           and (requested_fabric_quantity <> trunc(requested_fabric_quantity)
-             or requested_bolt_count::numeric <> requested_fabric_quantity))
-       or (requested_external_fabric_unit = 'متر' and requested_bolt_count <> 0)) then
-    raise exception 'External cutting quantity and its selected unit do not match.';
-  end if;
-  if requested_fabric_id is not null then
-    select unit into resolved_fabric_unit
-    from public.factory_fabrics where id = requested_fabric_id
-    for update;
-    if not found or resolved_fabric_unit not in ('متر', 'توب')
-       or (resolved_fabric_unit = 'توب'
-           and (requested_fabric_quantity <> trunc(requested_fabric_quantity)
-             or requested_bolt_count::numeric <> requested_fabric_quantity))
-       or (resolved_fabric_unit = 'متر' and requested_bolt_count <> 0) then
-      raise exception 'The cutting quantity must match the stock item measurement unit.';
-    end if;
+     or length(trim(coalesce(requested_cutter_name, ''))) > 120 then
+    raise exception 'A valid order, cutting breakdown, and cutter name are required.';
   end if;
   if coalesce(jsonb_typeof(requested_color_ply_data), '') <> 'object'
      or coalesce(jsonb_typeof(requested_color_ply_data -> 'colors'), '') <> 'array'
@@ -4460,11 +4436,6 @@ begin
     raise exception 'Select sizes and add at least one color with a positive ply count before finishing.';
   end if;
 
-  select breakdown.normalized_sizes, breakdown.normalized_colors,
-         breakdown.total_pieces, breakdown.total_plys
-    into normalized_sizes, normalized_colors, cut_total, total_plys
-  from public.calculate_factory_cutting_breakdown(requested_size_data, requested_color_ply_data) as breakdown;
-
   select *
     into current_order
   from public.orders
@@ -4474,18 +4445,83 @@ begin
      or current_order.status in ('مكتمل', 'تم التسليم') then
     raise exception 'The active factory order was not found.';
   end if;
-  if not exists (
-    select 1 from public.production_stages
-    where order_id = requested_order_id
-      and stage_name = 'cutting'
-      and status = 'جاهز للقص'
-  ) then
+
+  select *
+    into current_cutting_stage
+  from public.production_stages
+  where order_id = requested_order_id
+    and stage_name = 'cutting'
+  for update;
+  if not found or current_cutting_stage.status <> 'جاهز للقص' then
     raise exception 'Mark the bed ready for cutting before recording its final piece count.';
   end if;
 
-  resolved_fabric_name := public.reconcile_factory_fabric_usage(
-    requested_order_id, requested_fabric_id, requested_fabric_quantity, requested_fabric
-  );
+  has_saved_fabric := current_cutting_stage.fabric_quantity > 0
+    and (
+      current_cutting_stage.fabric_id is not null
+      or length(trim(coalesce(current_cutting_stage.external_fabric_source, ''))) > 0
+    );
+  if has_saved_fabric then
+    resolved_fabric_name := coalesce(
+      nullif(trim(current_cutting_stage.fabric), ''),
+      nullif(trim(current_cutting_stage.external_fabric_source), ''),
+      (select fabric.name
+       from public.factory_fabrics as fabric
+       where fabric.id = current_cutting_stage.fabric_id),
+      'قماش مسجل'
+    );
+  else
+    if length(trim(coalesce(requested_fabric, ''))) = 0
+       or requested_bolt_count is null or requested_bolt_count < 0
+       or requested_fabric_quantity is null or requested_fabric_quantity <= 0 then
+      raise exception 'A valid fabric selection and positive fabric quantity are required because this cutting story has no saved fabric.';
+    end if;
+    if requested_fabric_id is null
+       and coalesce(nullif(trim(requested_external_fabric_unit), ''), '') not in ('متر', 'توب') then
+      raise exception 'Choose متر or توب for the external fabric quantity.';
+    end if;
+    if requested_fabric_id is null
+       and ((requested_external_fabric_unit = 'توب'
+             and (requested_fabric_quantity <> trunc(requested_fabric_quantity)
+               or requested_bolt_count::numeric <> requested_fabric_quantity))
+         or (requested_external_fabric_unit = 'متر' and requested_bolt_count <> 0)) then
+      raise exception 'External cutting quantity and its selected unit do not match.';
+    end if;
+    if requested_fabric_id is not null then
+      select unit into resolved_fabric_unit
+      from public.factory_fabrics where id = requested_fabric_id
+      for update;
+      if not found or resolved_fabric_unit not in ('متر', 'توب')
+         or (resolved_fabric_unit = 'توب'
+             and (requested_fabric_quantity <> trunc(requested_fabric_quantity)
+               or requested_bolt_count::numeric <> requested_fabric_quantity))
+         or (resolved_fabric_unit = 'متر' and requested_bolt_count <> 0) then
+        raise exception 'The cutting quantity must match the stock item measurement unit.';
+      end if;
+    end if;
+  end if;
+
+  select breakdown.normalized_sizes, breakdown.normalized_colors,
+         breakdown.total_pieces, breakdown.total_plys
+    into normalized_sizes, normalized_colors, cut_total, total_plys
+  from public.calculate_factory_cutting_breakdown(requested_size_data, requested_color_ply_data) as breakdown;
+
+  if not has_saved_fabric then
+    resolved_fabric_name := public.reconcile_factory_fabric_usage(
+      requested_order_id, requested_fabric_id, requested_fabric_quantity, requested_fabric
+    );
+    current_cutting_stage.fabric_id := requested_fabric_id;
+    current_cutting_stage.fabric_quantity := requested_fabric_quantity;
+    current_cutting_stage.bolt_count := requested_bolt_count;
+    current_cutting_stage.external_fabric_source := case
+      when requested_fabric_id is null then resolved_fabric_name
+      else ''
+    end;
+    current_cutting_stage.external_fabric_unit := case
+      when requested_fabric_id is null then coalesce(nullif(trim(requested_external_fabric_unit), ''), 'متر')
+      else ''
+    end;
+  end if;
 
   update public.orders
   set sizes = normalized_sizes::text,
@@ -4508,11 +4544,11 @@ begin
   set target_quantity = cut_total,
       completed_quantity = cut_total,
       fabric = resolved_fabric_name,
-      fabric_id = requested_fabric_id,
-      external_fabric_source = case when requested_fabric_id is null then resolved_fabric_name else '' end,
-      external_fabric_unit = case when requested_fabric_id is null then coalesce(nullif(trim(requested_external_fabric_unit), ''), 'متر') else '' end,
-      fabric_quantity = requested_fabric_quantity,
-      bolt_count = requested_bolt_count,
+      fabric_id = current_cutting_stage.fabric_id,
+      external_fabric_source = current_cutting_stage.external_fabric_source,
+      external_fabric_unit = current_cutting_stage.external_fabric_unit,
+      fabric_quantity = current_cutting_stage.fabric_quantity,
+      bolt_count = current_cutting_stage.bolt_count,
       layer_count = total_plys,
       color_ply_data = requested_color_ply_data,
       technical_notes = coalesce(trim(requested_technical_notes), ''),

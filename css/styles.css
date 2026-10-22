@@ -510,6 +510,10 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .cutting-order-card .cutting-finish-form { display: grid; gap: 10px; margin-top: 10px; }
 .cutting-order-card .form-section { gap: 10px; padding: 12px; }
 .cutting-bed-inputs { grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); }
+.cutting-saved-fabric { display: grid; gap: 5px; padding: 11px 13px; border: 1px solid #c9ddcf; border-radius: 9px; background: #f4faf5; }
+.cutting-saved-fabric strong { color: var(--green-dark); font-size: 13px; }
+.cutting-saved-fabric span { color: #34483f; font-size: 13px; font-weight: 600; }
+.cutting-saved-fabric small { color: var(--muted); font-size: 11px; }
 .cutting-submit-form { max-width: 1100px; padding: 12px; }
 .cutting-submit-form .form-section-grid > .field:first-child { grid-column: 1 / -1; }
 .cutting-submit-form .form-section { gap: 10px; padding: 12px; }
