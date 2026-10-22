@@ -1620,7 +1620,8 @@ begin
     update public.factory_cash_transactions
     set description = concat_ws(' · ', resolved_model_name, nullif(trim(coalesce(requested_model_number, '')), '')),
         amount = requested_operational_expenses
-    where order_id = saved_order_id;
+    where order_id = saved_order_id
+      and order_expense_id is null;
     if not found then
       insert into public.factory_cash_transactions (
         order_id, direction, category, description, amount, payment_method, occurred_at, created_by
@@ -1638,7 +1639,8 @@ begin
     end if;
   else
     delete from public.factory_cash_transactions
-    where order_id = saved_order_id;
+    where order_id = saved_order_id
+      and order_expense_id is null;
   end if;
 
   return saved_order_id;
@@ -1849,6 +1851,7 @@ create table if not exists public.factory_cash_transactions (
   id uuid primary key default gen_random_uuid(),
   customer_id uuid references public.factory_clients (id) on delete set null,
   order_id uuid references public.orders (id) on delete set null,
+  order_expense_id uuid,
   direction text not null check (direction in ('income', 'expense')),
   category text not null check (length(trim(category)) between 1 and 120),
   description text not null default '',
@@ -1861,26 +1864,46 @@ create table if not exists public.factory_cash_transactions (
 
 alter table public.factory_cash_transactions
   add column if not exists customer_id uuid references public.factory_clients (id) on delete set null,
-  add column if not exists order_id uuid references public.orders (id) on delete set null;
+  add column if not exists order_id uuid references public.orders (id) on delete set null,
+  add column if not exists order_expense_id uuid;
 
 create index if not exists factory_cash_transactions_date_idx
   on public.factory_cash_transactions (occurred_at desc);
 create index if not exists factory_cash_transactions_customer_date_idx
   on public.factory_cash_transactions (customer_id, occurred_at desc)
   where customer_id is not null;
-create unique index if not exists factory_cash_transactions_order_idx
-  on public.factory_cash_transactions (order_id)
-  where order_id is not null;
-
 create table if not exists public.factory_order_expenses (
   id uuid primary key default gen_random_uuid(),
   order_id uuid not null references public.orders (id) on delete cascade,
   description text not null check (length(trim(description)) between 1 and 240),
   amount numeric(14, 2) not null check (amount > 0),
+  expense_type text not null default 'customer_cash',
   is_legacy boolean not null default false,
   created_by uuid references auth.users (id) on delete set null,
   created_at timestamptz not null default now()
 );
+
+alter table public.factory_order_expenses
+  add column if not exists expense_type text not null default 'customer_cash';
+alter table public.factory_order_expenses
+  drop constraint if exists factory_order_expenses_expense_type_check,
+  add constraint factory_order_expenses_expense_type_check
+    check (expense_type in ('customer_cash', 'treasury_only', 'included_in_price'));
+alter table public.factory_cash_transactions
+  drop constraint if exists factory_cash_transactions_order_expense_id_fkey,
+  add constraint factory_cash_transactions_order_expense_id_fkey
+    foreign key (order_expense_id) references public.factory_order_expenses (id) on delete cascade;
+drop index if exists public.factory_cash_transactions_order_idx;
+create unique index if not exists factory_cash_transactions_order_idx
+  on public.factory_cash_transactions (order_id)
+  where order_id is not null and order_expense_id is null;
+create unique index if not exists factory_cash_transactions_order_expense_idx
+  on public.factory_cash_transactions (order_expense_id)
+  where order_expense_id is not null;
+
+update public.factory_cash_transactions
+set customer_id = null
+where order_id is not null and order_expense_id is null;
 
 create index if not exists factory_order_expenses_order_date_idx
   on public.factory_order_expenses (order_id, created_at desc);
@@ -1895,6 +1918,11 @@ select factory_order.id,
        factory_order.created_at
 from public.orders as factory_order
 where factory_order.operational_expenses > 0
+  and not exists (
+    select 1
+    from public.factory_order_expenses as existing_expense
+    where existing_expense.order_id = factory_order.id
+  )
 on conflict (order_id) where is_legacy do nothing;
 
 create or replace function public.read_factory_order_expenses_admin()
@@ -1915,10 +1943,12 @@ begin
 end;
 $$;
 
+drop function if exists public.admin_add_factory_order_expense(uuid, text, numeric);
 create or replace function public.admin_add_factory_order_expense(
   requested_order_id uuid,
   requested_description text,
-  requested_amount numeric
+  requested_amount numeric,
+  requested_expense_type text
 )
 returns uuid
 language plpgsql
@@ -1928,7 +1958,6 @@ as $$
 declare
   current_order public.orders%rowtype;
   expense_id uuid;
-  new_total numeric(14, 2);
 begin
   if not public.is_active_factory_admin() then
     raise exception 'Only active admins can add model expenses.';
@@ -1937,8 +1966,10 @@ begin
      or length(trim(coalesce(requested_description, ''))) not between 1 and 240
      or requested_amount is null
      or requested_amount <= 0
-     or requested_amount > 999999999999.99 then
-    raise exception 'Enter a valid model, expense description, and positive amount.';
+     or requested_amount > 999999999999.99
+     or requested_expense_type is null
+     or requested_expense_type not in ('customer_cash', 'treasury_only', 'included_in_price') then
+    raise exception 'Enter a valid model, expense type, description, and positive amount.';
   end if;
 
   select *
@@ -1951,38 +1982,30 @@ begin
     raise exception 'The active factory order was not found.';
   end if;
 
-  new_total := current_order.operational_expenses + requested_amount;
-  if new_total > 999999999999.99 then
-    raise exception 'The total model expenses exceed the allowed amount.';
-  end if;
-
   insert into public.factory_order_expenses (
-    order_id, description, amount, created_by
+    order_id, description, amount, expense_type, created_by
   )
   values (
-    requested_order_id, trim(requested_description), requested_amount, auth.uid()
+    requested_order_id, trim(requested_description), requested_amount,
+    requested_expense_type, auth.uid()
   )
   returning id into expense_id;
 
-  update public.orders
-  set operational_expenses = new_total
-  where id = requested_order_id;
-
-  update public.factory_cash_transactions
-  set description = concat_ws(' · ', current_order.model_name, nullif(trim(current_order.model_number), '')),
-      amount = new_total
-  where order_id = requested_order_id;
-  if not found then
-    insert into public.factory_cash_transactions (
-      customer_id, order_id, direction, category, description, amount,
-      payment_method, occurred_at, created_by
-    )
-    values (
-      current_order.customer_id, requested_order_id, 'expense', 'مصاريف تشغيل الموديل',
-      concat_ws(' · ', current_order.model_name, nullif(trim(current_order.model_number), '')),
-      new_total, 'نقدي', now(), auth.uid()
-    );
-  end if;
+  insert into public.factory_cash_transactions (
+    customer_id, order_id, order_expense_id, direction, category, description, amount,
+    payment_method, occurred_at, created_by
+  )
+  values (
+    case when requested_expense_type = 'customer_cash' then current_order.customer_id else null end,
+    requested_order_id, expense_id, 'expense',
+    case requested_expense_type
+      when 'customer_cash' then 'مصروف خارجي على العميل'
+      when 'treasury_only' then 'مصروف تشغيلي من الخزنة'
+      else 'مصروف مدمج ضمن سعر القطعة'
+    end,
+    concat_ws(' · ', current_order.model_name, nullif(trim(current_order.model_number), ''), trim(requested_description)),
+    requested_amount, 'نقدي', now(), auth.uid()
+  );
 
   return expense_id;
 end;
@@ -5574,7 +5597,7 @@ create policy "Admins read factory order expenses"
   on public.factory_order_expenses for select to authenticated
   using (public.is_active_factory_admin());
 grant select on public.factory_order_expenses to authenticated;
-grant select (id, client_id, customer_id, model_name, model_number, production_type, work_stages, colors, color_size_distribution, sizes, total_pieces, delivered_pieces, archived_at, status, priority, created_at)
+grant select (id, client_id, customer_id, model_name, model_number, production_type, work_stages, colors, color_names, color_size_distribution, sizes, original_total_pieces, total_pieces, delivered_pieces, archived_at, status, priority, created_at)
   on public.orders to authenticated;
 grant select (sender_name) on public.orders to authenticated;
 grant select (model_image_url) on public.orders to authenticated;
@@ -5720,6 +5743,7 @@ set search_path = public
 as $$
 declare
   current_order public.orders%rowtype;
+  current_cutting_stage public.production_stages%rowtype;
   current_sewing_stage public.production_stages%rowtype;
   next_stage_name text;
 begin
@@ -5772,18 +5796,19 @@ begin
   end if;
 
   if requested_action = 'make_available' then
-    if current_order.status <> 'تم القص'
-       or current_sewing_stage.status in ('متاح للخياطة', 'قيد الخياطة', 'مكتمل') then
-      raise exception 'Only a cut order that has not entered sewing can be made available.';
-    end if;
-    if not exists (
-      select 1
-      from public.production_stages
-      where order_id = requested_order_id
-        and stage_name = 'cutting'
-        and status in ('مكتمل', 'تم القص')
-    ) then
+    select *
+      into current_cutting_stage
+    from public.production_stages
+    where order_id = requested_order_id
+      and stage_name in ('cutting', 'قص', 'تقطيع')
+      and status in ('مكتمل', 'تم القص')
+    for update;
+    if not found then
       raise exception 'Finish cutting before making this order available for sewing.';
+    end if;
+    if current_sewing_stage.status in ('متاح للخياطة', 'قيد الخياطة', 'مكتمل')
+       or current_order.status in ('تمت الخياطة', 'جاهز للتسليم', 'تم التسليم') then
+      raise exception 'This order has already entered or completed sewing.';
     end if;
 
     update public.production_stages
@@ -5948,8 +5973,8 @@ revoke all on function public.read_factory_orders_admin() from public, anon, aut
 grant execute on function public.read_factory_orders_admin() to authenticated;
 revoke all on function public.read_factory_order_expenses_admin() from public, anon, authenticated;
 grant execute on function public.read_factory_order_expenses_admin() to authenticated;
-revoke all on function public.admin_add_factory_order_expense(uuid, text, numeric) from public, anon, authenticated;
-grant execute on function public.admin_add_factory_order_expense(uuid, text, numeric) to authenticated;
+revoke all on function public.admin_add_factory_order_expense(uuid, text, numeric, text) from public, anon, authenticated;
+grant execute on function public.admin_add_factory_order_expense(uuid, text, numeric, text) to authenticated;
 revoke all on function public.read_factory_orders_client() from public, anon, authenticated;
 grant execute on function public.read_factory_orders_client() to authenticated;
 revoke all on function public.read_factory_client_cash_transactions() from public, anon, authenticated;

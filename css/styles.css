@@ -166,10 +166,30 @@ input:focus, select:focus { border-color: #5e9b83; box-shadow: 0 0 0 3px #5e9b83
 .stat-detail-list b { flex: 0 0 auto; white-space: nowrap; }
 .stat-detail-list b::before { content: "|"; margin-inline-end: 6px !important; }
 .stat-detail-empty { padding: 0 !important; }
-.sewing-order-preview { margin-top: 5px; white-space: normal; }
-.sewing-order-preview summary { color: #456b56; cursor: pointer; font-size: 11px; }
-.sewing-order-preview > div { display: grid; gap: 5px; min-width: 180px; padding: 7px; white-space: normal; }
-.sewing-order-preview > div > span { color: #53635b; font-size: 11px; }
+.sewing-order-grid { display: grid; gap: 14px; padding: 14px; }
+.sewing-order-card { display: grid; min-width: 0; gap: 12px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
+.sewing-order-heading { display: flex; min-width: 0; align-items: center; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid #edf1ed; }
+.sewing-order-heading > div { flex: 1; min-width: 0; }
+.sewing-order-heading p, .sewing-order-heading h3 { margin: 0 0 4px; overflow-wrap: anywhere; }
+.sewing-order-heading p, .sewing-order-heading span { color: var(--muted); font-size: 12px; }
+.sewing-order-heading h3 { color: var(--green-dark); font-size: 17px; }
+.sewing-order-heading .model-image-trigger { width: 76px; height: 76px; flex-basis: 76px; }
+.sewing-order-heading .model-thumbnail { width: 76px; height: 76px; }
+.sewing-order-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)); gap: 9px; margin: 0; }
+.sewing-order-facts > div { display: grid; min-width: 0; gap: 4px; padding: 10px 12px; border: 1px solid #e7ece8; border-radius: 8px; background: #f8faf8; }
+.sewing-order-facts dt { color: var(--muted); font-size: 11px; }
+.sewing-order-facts dd { margin: 0; color: var(--green-dark); font-weight: 700; overflow-wrap: anywhere; }
+.sewing-order-card > .modal-subheading { margin: 4px 0 0; }
+.sewing-order-card .cutting-details-section { margin-top: 0; }
+.sewing-order-card .cutting-details-section .table-wrap { overflow-x: auto; }
+.sewing-order-card .cutting-details-section table { white-space: normal; }
+.sewing-order-card .cutting-details-section th,
+.sewing-order-card .cutting-details-section td { min-width: 95px; }
+@media (max-width: 600px) {
+  .sewing-order-heading { align-items: flex-start; flex-wrap: wrap; }
+  .sewing-order-heading > .status { margin-inline-start: auto; }
+  .sewing-order-card { padding: 12px; }
+}
 .panel { width: 100%; min-width: 0; margin-bottom: 12px; overflow: hidden; }
 .panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 15px; border-bottom: 1px solid var(--line); }
 .panel-heading h2 { margin: 0; font-size: 15px; }
@@ -303,11 +323,16 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .dashboard-section#clients .client-account-grid { padding-top: 20px; }
 .dashboard-section#client-accounts { overflow: visible; }
 .dashboard-section#client-accounts > .panel { overflow: visible; }
-.order-card-heading .model-thumbnail { flex: 0 0 68px; }
+.order-card-heading .model-image-trigger { flex: 0 0 68px; }
+.model-image-trigger { display: grid; width: 68px; height: 68px; flex: 0 0 68px; place-items: center; overflow: hidden; padding: 0; border: 0; border-radius: 9px; background: transparent; cursor: zoom-in; }
+.model-image-trigger:focus-visible { outline: 3px solid #5e9b83; outline-offset: 2px; }
+.model-image-trigger:hover .model-thumbnail { border-color: #5e9b83; }
 .model-thumbnail { display: block; width: 68px; height: 68px; border: 1px solid var(--line); border-radius: 9px; background: #f5f7f4; object-fit: contain; }
 .model-image-field { grid-column: 1 / -1; }
 .model-image-field [data-model-image-preview] { margin-top: 8px; }
 .model-image-preview { display: block; width: min(100%, 280px); max-height: 280px; margin: 10px 0; border: 1px solid var(--line); border-radius: 9px; background: #f5f7f4; object-fit: contain; }
+.model-image-field [data-model-image-preview] .model-image-trigger { width: min(100%, 280px); height: auto; aspect-ratio: 1; }
+.model-image-field [data-model-image-preview] .model-thumbnail { width: 100%; height: 100%; }
 .client-model-request-form { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 16px; }
 .client-model-request-form > .field:nth-last-of-type(1), .client-model-request-form > .form-actions { grid-column: 1 / -1; }
 .size-picker, .color-picker { min-width: 0; }
@@ -360,6 +385,8 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .worker-submission-card > header { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
 .worker-submission-card > header img { width: 88px; height: 88px; border: 1px solid var(--line); border-radius: 8px; background: #f5f7f4; object-fit: contain; }
 .submission-image-preview { display: block; width: 78px; height: 78px; border: 1px solid var(--line); border-radius: 7px; background: #f5f7f4; object-fit: contain; }
+.submission-image-preview-trigger { width: 78px; height: 78px; flex-basis: 78px; border-radius: 7px; }
+.worker-submission-card > header .submission-image-preview { width: 78px; height: 78px; }
 .worker-submission-card h3, .worker-submission-card p { margin: 0 0 5px; }
 .worker-submission-card details { border-top: 1px solid var(--line); padding-top: 10px; }
 .worker-submission-card summary { color: var(--green); font-weight: 700; cursor: pointer; }
@@ -396,6 +423,7 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .cutting-story-list { display: grid; gap: 12px; padding: 12px; }
 .cutting-story-card { display: grid; min-width: 0; gap: 14px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
 .cutting-story-heading { display: grid; grid-template-columns: 76px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid #edf1ed; }
+.cutting-story-heading .model-image-trigger { width: 76px; height: 76px; flex-basis: 76px; }
 .cutting-story-heading .model-thumbnail { width: 76px; height: 76px; }
 .cutting-story-heading h3, .cutting-story-heading p { margin: 0 0 5px; overflow-wrap: anywhere; }
 .cutting-story-heading h3 { color: var(--green-dark); font-size: 16px; }
@@ -586,7 +614,8 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .modal-view-heading small, .modal-view-heading p { color: var(--muted); font-size: 12px; }
 .modal-view-heading h2 { overflow-wrap: anywhere; margin: 3px 0; padding: 0; font-size: 18px; }
 .modal-view-heading p { margin: 3px 0 0; }
-.modal-view-heading .model-thumbnail { flex: 0 0 58px; width: 58px; height: 58px; }
+.modal-view-heading .model-image-trigger { flex: 0 0 58px; width: 58px; height: 58px; }
+.modal-view-heading .model-thumbnail { width: 58px; height: 58px; }
 .compact-detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
 .compact-detail-grid > div { display: grid; min-width: 0; gap: 4px; padding: 9px 10px; border: 1px solid #edf1ed; border-radius: 8px; background: #fcfdfb; }
 .compact-detail-grid span { color: var(--muted); font-size: 11px; }
@@ -656,7 +685,12 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .modal-card h2 { margin: 0; padding-left: 30px; color: var(--green-dark); font-size: 20px; }
 .modal-card > p { margin: 9px 0 22px; color: var(--muted); font-size: 13px; line-height: 1.7; }
 .modal-close { position: absolute; top: 16px; left: 16px; display: grid; width: 34px; height: 34px; place-items: center; border: 1px solid var(--line); border-radius: 50%; color: #53635b; background: #fff; font-size: 22px; }
+.model-image-lightbox { z-index: 1600; }
+.model-image-lightbox-card { position: relative; display: grid; width: min(96vw, 1400px); height: min(92vh, 960px); place-items: center; padding: 52px 16px 16px; border: 1px solid #ffffff55; border-radius: 14px; background: #101713; box-shadow: 0 24px 70px #0008; }
+.model-image-lightbox-card .modal-close { z-index: 1; top: 10px; left: 10px; }
+.model-image-lightbox-card img { display: block; max-width: 100%; max-height: 100%; object-fit: contain; }
 .modal-form { display: grid; gap: 10px; }
+.model-expense-impact-hint { color: var(--muted); font-size: 12px; line-height: 1.7; }
 .modal-form label { margin-top: 5px; color: #465651; font-size: 13px; font-weight: 600; }
 .order-modal-card .work-stage-options label { margin: 0; font-size: 12px; }
 .modal-form textarea { min-height: 88px; padding: 11px 13px; border: 1px solid #dfe6e1; border-radius: 9px; font: inherit; resize: vertical; }
@@ -677,6 +711,7 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .order-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; padding: 18px; }
 .order-card { min-width: 0; padding: 19px; border: 1px solid var(--line); border-radius: 13px; background: #fff; box-shadow: 0 5px 18px #1c302d08; }
 .order-compact-row { display: grid; grid-column: 1 / -1; grid-template-columns: 48px minmax(220px, 2fr) minmax(110px, .8fr) minmax(100px, .7fr) minmax(130px, .9fr) auto auto auto; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 9px; box-shadow: none; }
+.order-compact-row .model-image-trigger { width: 44px; height: 44px; flex-basis: 44px; border-radius: 6px; }
 .order-compact-row .model-thumbnail { width: 44px; height: 44px; border-radius: 6px; }
 .order-compact-name { display: grid; min-width: 0; gap: 4px; }
 .order-compact-name strong { overflow-wrap: anywhere; color: var(--green-dark); font-size: 15px; line-height: 1.5; }
