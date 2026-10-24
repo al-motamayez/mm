@@ -5277,6 +5277,138 @@ begin
 end;
 $$;
 
+create or replace function public.save_factory_client_account_adjustment(
+  requested_customer_id uuid,
+  requested_amount numeric,
+  requested_reason text,
+  requested_notes text default ''
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  matched_client public.factory_clients%rowtype;
+  saved_record_id uuid := gen_random_uuid();
+  normalized_amount numeric(14, 2);
+  normalized_reason text := trim(coalesce(requested_reason, ''));
+  normalized_notes text := trim(coalesce(requested_notes, ''));
+  adjustment_time timestamptz := clock_timestamp();
+  opening_balance numeric(14, 2) := 0;
+  delivered_total numeric(14, 2) := 0;
+  client_expenses_total numeric(14, 2) := 0;
+  order_paid_total numeric(14, 2) := 0;
+  payments_total numeric(14, 2) := 0;
+  existing_adjustments_total numeric(14, 2) := 0;
+  current_balance numeric(14, 2);
+begin
+  if not public.is_active_factory_admin() then
+    raise exception 'Only active admins can adjust factory client accounts.';
+  end if;
+  if requested_customer_id is null
+     or requested_amount is null
+     or requested_amount <= 0
+     or length(normalized_reason) = 0
+     or length(normalized_reason) > 160
+     or length(normalized_notes) > 500 then
+    raise exception 'A customer, positive amount, reason, and valid notes are required.';
+  end if;
+  normalized_amount := round(requested_amount, 2);
+  if normalized_amount <= 0 then
+    raise exception 'The adjustment amount must be at least one piastre.';
+  end if;
+
+  select *
+    into matched_client
+  from public.factory_clients
+  where id = requested_customer_id
+  for update;
+  if not found then
+    raise exception 'The selected factory customer does not exist.';
+  end if;
+  if matched_client.account_period_started_at is not null
+     and adjustment_time < matched_client.account_period_started_at then
+    raise exception 'The selected account period is already settled.';
+  end if;
+
+  select round(coalesce((payload ->> 'balance')::numeric, 0), 2)
+    into opening_balance
+  from public.factory_records
+  where collection = 'settlements'
+    and payload ->> 'customerId' = matched_client.id::text
+  order by created_at desc
+  limit 1;
+  opening_balance := coalesce(opening_balance, 0);
+
+  select round(coalesce(sum(total_amount), 0), 2),
+         round(coalesce(sum(paid_amount), 0), 2)
+    into delivered_total, order_paid_total
+  from public.orders
+  where customer_id = matched_client.id
+    and archived_at is null;
+
+  select round(coalesce(sum(amount), 0), 2)
+    into client_expenses_total
+  from public.factory_cash_transactions
+  where customer_id = matched_client.id
+    and direction = 'expense'
+    and (
+      matched_client.account_period_started_at is null
+      or occurred_at >= matched_client.account_period_started_at
+    );
+
+  select coalesce(sum(round((payload ->> 'amount')::numeric, 2)), 0)
+    into payments_total
+  from public.factory_records
+  where collection = 'payments'
+    and payload ->> 'customerId' = matched_client.id::text
+    and (
+      matched_client.account_period_started_at is null
+      or created_at >= matched_client.account_period_started_at
+    );
+
+  select coalesce(sum(round((payload ->> 'amount')::numeric, 2)), 0)
+    into existing_adjustments_total
+  from public.factory_records
+  where collection = 'account_adjustments'
+    and payload ->> 'customerId' = matched_client.id::text
+    and (
+      matched_client.account_period_started_at is null
+      or created_at >= matched_client.account_period_started_at
+    );
+
+  current_balance := round(
+    opening_balance + delivered_total + client_expenses_total
+      - order_paid_total - payments_total - existing_adjustments_total,
+    2
+  );
+  if current_balance <= 0 or normalized_amount > current_balance then
+    raise exception 'The adjustment cannot exceed the outstanding customer balance.';
+  end if;
+
+  insert into public.factory_records (id, collection, owner_id, payload, created_at, updated_at)
+  values (
+    saved_record_id,
+    'account_adjustments',
+    matched_client.user_id,
+    jsonb_build_object(
+      'customerId', matched_client.id,
+      'clientName', matched_client.name,
+      'amount', normalized_amount,
+      'reason', normalized_reason,
+      'notes', normalized_notes,
+      'date', adjustment_time,
+      'category', 'خصم مسموح به'
+    ),
+    adjustment_time,
+    adjustment_time
+  );
+
+  return saved_record_id;
+end;
+$$;
+
 create or replace function public.settle_factory_client_account(
   requested_customer_id uuid
 )
@@ -5292,6 +5424,7 @@ declare
   client_expenses_total numeric(14, 2) := 0;
   order_paid_total numeric(14, 2) := 0;
   payments_total numeric(14, 2) := 0;
+  account_adjustments_total numeric(14, 2) := 0;
   closing_balance numeric(14, 2);
   settlement_time timestamptz;
 begin
@@ -5348,8 +5481,18 @@ begin
       or created_at >= matched_client.account_period_started_at
     );
 
+  select coalesce(sum(round((payload ->> 'amount')::numeric, 2)), 0)
+    into account_adjustments_total
+  from public.factory_records
+  where collection = 'account_adjustments'
+    and payload ->> 'customerId' = matched_client.id::text
+    and (
+      matched_client.account_period_started_at is null
+      or created_at >= matched_client.account_period_started_at
+    );
+
   closing_balance := round(
-    opening_balance + delivered_total + client_expenses_total - order_paid_total - payments_total,
+    opening_balance + delivered_total + client_expenses_total - order_paid_total - payments_total - account_adjustments_total,
     2
   );
 
@@ -5370,6 +5513,7 @@ begin
       'clientExpensesTotal', client_expenses_total,
       'orderPaidTotal', order_paid_total,
       'paymentsTotal', payments_total,
+      'accountAdjustmentsTotal', account_adjustments_total,
       'balance', closing_balance,
       'date', settlement_time
     ),
@@ -5529,8 +5673,17 @@ create policy "Users read their own factory records"
       or (collection = 'leaves' and public.has_active_factory_role(array['worker', 'cutting', 'sewing']))
       or (collection = 'tasks' and public.has_active_factory_role(array['worker']))
       or (collection in ('attendance', 'advances', 'payroll', 'worker_expenses') and public.has_active_factory_role(array['cutting', 'sewing', 'worker']))
-      or (collection in ('workforce_profiles', 'workforce_attendance', 'workforce_violations', 'workforce_settlements') and public.has_active_factory_role(array['worker']))
+      or (collection = 'account_adjustments' and public.has_active_factory_role(array['client']))
+      or (collection in ('workforce_profiles', 'workforce_attendance', 'workforce_violations', 'workforce_settlements') and public.has_active_factory_role(array['worker', 'cutting', 'sewing']))
     )
+  );
+
+drop policy if exists "Factory staff read workforce settings" on public.factory_records;
+create policy "Factory staff read workforce settings"
+  on public.factory_records for select to authenticated
+  using (
+    collection = 'workforce_settings'
+    and public.has_active_factory_role(array['worker', 'cutting', 'sewing'])
   );
 
 drop policy if exists "Users read their own factory deliveries" on public.factory_deliveries;
@@ -6276,6 +6429,8 @@ revoke all on function public.delete_factory_client(uuid) from public, anon, aut
 grant execute on function public.delete_factory_client(uuid) to authenticated;
 revoke all on function public.save_factory_payment(uuid, uuid, numeric, date, text, text, text) from public, anon, authenticated;
 grant execute on function public.save_factory_payment(uuid, uuid, numeric, date, text, text, text) to authenticated;
+revoke all on function public.save_factory_client_account_adjustment(uuid, numeric, text, text) from public, anon, authenticated;
+grant execute on function public.save_factory_client_account_adjustment(uuid, numeric, text, text) to authenticated;
 revoke all on function public.settle_factory_client_account(uuid) from public, anon, authenticated;
 grant execute on function public.settle_factory_client_account(uuid) to authenticated;
 revoke all on function public.save_factory_cash_transaction(text, text, text, numeric, text, timestamptz, uuid) from public, anon, authenticated;

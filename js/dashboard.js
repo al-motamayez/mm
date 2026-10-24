@@ -137,6 +137,7 @@ function emptyDashboardData() {
     cashTransactions: [],
     clientFabricStock: [],
     payments: [],
+    accountAdjustments: [],
     settlements: [],
     deliveries: [],
     clientModelRequests: [],
@@ -317,16 +318,19 @@ async function readDashboardData(session) {
       readFlexibleRecords("workforce_settings"),
       readFlexibleRecords("workforce_settlements")
     ])
-    : session.role === "worker"
+    : ["worker", "cutting", "sewing"].includes(session.role)
       ? Promise.all([
         readFlexibleRecords("workforce_attendance"),
         readFlexibleRecords("workforce_violations"),
         readFlexibleRecords("workforce_profiles"),
-        Promise.resolve([]),
+        readFlexibleRecords("workforce_settings"),
         readFlexibleRecords("workforce_settlements")
       ])
       : Promise.resolve([[], [], [], [], []]);
-  const [payments, leaves, tasks, settlements, deliveriesResult, cashTransactionsResult, clientFabricStockResult, personalAttendance, personalAdvances, personalPayroll, workerAdvances, workerPayroll, workerExpenses, fabricsResult, fabricTransactionsResult, authEventsResult, productionSubmissionsResult, finishedGoodsResult, clientModelRequestsResult, cuttingStoriesResult, workforceRecordsResult] = await Promise.all([
+  const accountAdjustmentsPromise = ["admin", "client"].includes(session.role)
+    ? readFlexibleRecords("account_adjustments")
+    : Promise.resolve([]);
+  const [payments, leaves, tasks, settlements, deliveriesResult, cashTransactionsResult, clientFabricStockResult, personalAttendance, personalAdvances, personalPayroll, workerAdvances, workerPayroll, workerExpenses, fabricsResult, fabricTransactionsResult, authEventsResult, productionSubmissionsResult, finishedGoodsResult, clientModelRequestsResult, cuttingStoriesResult, workforceRecordsResult, accountAdjustments] = await Promise.all([
     readFlexibleRecords("payments"),
     readFlexibleRecords("leaves"),
     readFlexibleRecords("tasks"),
@@ -346,7 +350,8 @@ async function readDashboardData(session) {
     finishedGoodsPromise,
     clientModelRequestsPromise,
     cuttingStoriesPromise,
-    workforceRecords
+    workforceRecords,
+    accountAdjustmentsPromise
   ]);
   if (["42P01", "PGRST205"].includes(deliveriesResult.error?.code)) {
     throw new Error("سجل التسليمات غير موجود في قاعدة البيانات. شغّل supabase/schema.sql كاملًا في SQL Editor.");
@@ -385,6 +390,7 @@ async function readDashboardData(session) {
   }
   if (cuttingStoriesResult.error) throw cuttingStoriesResult.error;
   data.payments = payments;
+  data.accountAdjustments = accountAdjustments;
   data.settlements = settlements;
   data.deliveries = deliveriesResult.data || [];
   data.cashTransactions = cashTransactionsResult.data || [];
@@ -2009,7 +2015,12 @@ function clientAccountSummary(client, data) {
     && (!periodStart || new Date(entry.occurred_at).getTime() >= new Date(periodStart).getTime())
   );
   const clientExpensesTotal = sumMoney(clientExpenses.map((entry) => entry.amount));
-  const grossDue = addMoney(addMoney(openingBalance, deliveredTotal), clientExpensesTotal);
+  const accountAdjustments = data.accountAdjustments.filter((adjustment) =>
+    adjustment.customerId === client.id
+    && (!periodStart || new Date(adjustment._createdAt || adjustment.created_at).getTime() >= new Date(periodStart).getTime())
+  );
+  const accountAdjustmentsTotal = sumMoney(accountAdjustments.map((adjustment) => adjustment.amount));
+  const grossDue = subtractMoney(addMoney(addMoney(openingBalance, deliveredTotal), clientExpensesTotal), accountAdjustmentsTotal);
   const paid = addMoney(orderPaid, paymentsTotal);
   const due = subtractMoney(grossDue, paid);
   const balance = due;
@@ -2031,6 +2042,8 @@ function clientAccountSummary(client, data) {
     paymentsTotal,
     clientExpenses,
     clientExpensesTotal,
+    accountAdjustments,
+    accountAdjustmentsTotal,
     due,
     paid,
     remainingOpeningBalance,
@@ -2201,12 +2214,7 @@ function adminDashboardView(data) {
   const clientDebts = clientSummaries.map((summary) => ({
     client: summary.client,
     account: summary,
-    amount: Math.max(0, sumMoney([
-      summary.openingBalance,
-      summary.deliveredTotal,
-      -summary.orderPaid,
-      -summary.paymentsTotal
-    ]))
+    amount: Math.max(0, summary.balance)
   })).filter((entry) => entry.amount > 0).sort((left, right) => right.amount - left.amount);
   const customerReceivables = sumMoney(clientDebts.map((entry) => entry.amount));
   const upcomingReceivables = sumMoney(clientSummaries.map((summary) => summary.expectedTotal));
@@ -2404,11 +2412,12 @@ function clientDetailsView(client, data) {
     : "لا يوجد حساب دخول مرتبط بملف العميل."}</p>${linkOptions
       ? `<div class="client-account-link-controls"><label class="field"><span>اختر حساباً معلقاً أو حساب عميل موجوداً</span><select data-client-link-account="${escapeHtml(client.id)}"><option value="">اختر الحساب</option>${linkOptions}</select></label><button class="button button-secondary" type="button" data-action="link-client-account" data-customer-id="${escapeHtml(client.id)}">ربط بحساب تسجيل الدخول</button></div>`
       : '<div class="empty-state">لا توجد حسابات معلقة أو حسابات عملاء متاحة للربط.</div>'}`, "يؤدي ربط حساب معلق إلى اعتماده كعميل وربطه بهذا الملف.")}</section>`;
-  return `<div class="clients-toolbar client-detail-toolbar"><div><h2>${escapeHtml(client.name)} · تفاصيل الحساب والعمولة</h2><p>كود العميل: ${escapeHtml(client.code_letter || "—")} · ${escapeHtml(client.brand_name || "لا يوجد اسم محل/براند")} · رقم العميل: ${escapeHtml(client.client_number || "—")} · واتساب: ${escapeHtml(client.whatsapp || "—")}</p></div><div class="client-detail-actions"><button class="button button-primary" type="button" data-quick-client-payment="${escapeHtml(client.id)}">＋ إضافة دفعة</button><button class="button button-secondary" type="button" data-print-account>طباعة كشف الحساب</button><button class="button button-secondary" type="button" data-print-selected-models>طباعة الموديلات المحددة</button><button class="row-action" type="button" data-return-clients>العودة للعملاء</button></div></div>
+  return `<div class="clients-toolbar client-detail-toolbar"><div><h2>${escapeHtml(client.name)} · تفاصيل الحساب والعمولة</h2><p>كود العميل: ${escapeHtml(client.code_letter || "—")} · ${escapeHtml(client.brand_name || "لا يوجد اسم محل/براند")} · رقم العميل: ${escapeHtml(client.client_number || "—")} · واتساب: ${escapeHtml(client.whatsapp || "—")}</p></div><div class="client-detail-actions"><button class="button button-primary" type="button" data-quick-client-payment="${escapeHtml(client.id)}">＋ إضافة دفعة</button><button class="button button-secondary" type="button" data-open-account-adjustment>إضافة خصم / تسوية حساب</button><button class="button button-secondary" type="button" data-print-account>طباعة كشف الحساب</button><button class="button button-secondary" type="button" data-print-selected-models>طباعة الموديلات المحددة</button><button class="row-action" type="button" data-return-clients>العودة للعملاء</button></div></div>
+    <div class="modal-backdrop" data-account-adjustment-modal hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="account-adjustment-title"><button class="modal-close" type="button" data-close-account-adjustment aria-label="إغلاق">×</button><h2 id="account-adjustment-title">إضافة خصم / تسوية حساب</h2><p>يُخصم القيد من رصيد العميل فقط، ولا يُسجّل كحركة نقدية بالخزنة.</p><form class="form-grid" data-account-adjustment-form="${escapeHtml(client.id)}"><label class="field"><span>مبلغ الخصم (ج.م)</span><input name="amount" type="number" min="0.01" step="0.01" required></label><label class="field"><span>سبب الخصم / البيان</span><select name="reason" required><option value="">اختر سبب التسوية</option><option>تنزيل كسور/فكة</option><option>خصم خطأ تشغيلي</option><option>إشعار خصم تسوية</option></select></label><label class="field wide"><span>تفاصيل إضافية (اختياري)</span><textarea name="notes" rows="2" maxlength="500"></textarea></label><div class="form-actions wide"><button class="button button-primary" type="submit">حفظ الخصم على الحساب</button><button class="row-action" type="button" data-close-account-adjustment>إلغاء</button></div></form></section></div>
     <div class="client-profile-compact"><span>الهاتف: ${escapeHtml(client.phone || "—")}</span><span>كاش: ${escapeHtml(client.cash_phone || "—")}</span><span>إنستا: ${escapeHtml(client.instagram || "—")}</span><span>تاريخ الملف: ${formatDateTime(client.created_at)}</span></div>
     ${accountLinkSection}
     ${clientFabricBalanceSection}
-    <div class="stats-grid client-finance-summary">${summary.latestSettlement ? stat("الرصيد السابق المرحّل", money(summary.remainingOpeningBalance)) : ""}${stat("المطلوب المتوقع غير المسلّم", money(summary.expectedTotal), "الكمية غير المسلّمة + مصاريف التشغيل")}${stat("المبلغ المستحق فعلياً", money(summary.requiredAfterDelivery), "قيمة المسلّم + مصاريف التشغيل")}${stat("مصروفات وعهد العميل", money(summary.clientExpensesTotal))}${stat("إجمالي المطلوب بعد المدفوع", money(summary.due), "الرصيد المرحّل + المستحق + المصروفات − المدفوع")}${stat("إجمالي المدفوع", money(summary.paid))}${stat("الرصيد الحالي", money(summary.balance), summary.balance === 0 ? "تم السداد بالكامل" : summary.balance < 0 ? "رصيد دائن للعميل" : "مستحق على العميل")}</div>
+    <div class="stats-grid client-finance-summary">${summary.latestSettlement ? stat("الرصيد السابق المرحّل", money(summary.remainingOpeningBalance)) : ""}${stat("المطلوب المتوقع غير المسلّم", money(summary.expectedTotal), "الكمية غير المسلّمة + مصاريف التشغيل")}${stat("المبلغ المستحق فعلياً", money(summary.requiredAfterDelivery), "قيمة المسلّم + مصاريف التشغيل")}${stat("مصروفات وعهد العميل", money(summary.clientExpensesTotal))}${stat("خصومات التسوية", money(summary.accountAdjustmentsTotal), "خصومات غير نقدية")}${stat("إجمالي المطلوب بعد المدفوع", money(summary.due), "الرصيد المرحّل + المستحق + المصروفات − الخصومات − المدفوع")}${stat("إجمالي المدفوع", money(summary.paid))}${stat("الرصيد الحالي", money(summary.balance), summary.balance === 0 ? "تم السداد بالكامل" : summary.balance < 0 ? "رصيد دائن للعميل" : "مستحق على العميل")}</div>
     <section class="client-detail-section"><header class="section-heading"><div><h2>الموديلات التي تم تسعيرها</h2><p>يُحتسب المطلوب المالي على الكمية التي تم تسليمها.</p></div><button class="button button-secondary" type="button" data-open-order-for-client="${escapeHtml(client.id)}">＋ إضافة موديل للعميل</button></header>${pricedOrders.length ? `<div class="order-cards">${pricedOrders.map((order) => orderCard(order)).join("")}</div>` : '<div class="empty-state">لا توجد موديلات مسعّرة في الفترة الحالية.</div>'}</section>
     <section class="client-detail-section"><header class="section-heading"><div><h2>موديلات لم تُسعّر بعد</h2><p>طلبات في القص أو الانتظار أو مراحل التشغيل الأخرى.</p></div></header>${unpricedOrders.length ? `<div class="order-cards">${unpricedOrders.map((order) => orderCard(order)).join("")}</div>` : '<div class="empty-state">لا توجد موديلات بانتظار التسعير.</div>'}</section>
     <section class="client-detail-section">${panel("الموديلات المسلّمة", deliveries.length ? table(["الموديل","الكمية","سعر القطعة","القيمة المستحقة","المستلم","التاريخ"], deliveries.map((delivery) => { const order = data.models.find((item) => item.id === delivery.order_id); return `<tr><td>${escapeHtml(order?.name || "طلب مؤرشف")}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(delivery.quantity)} قطعة</td><td>${money(delivery.price_per_piece)}</td><td>${money(delivery.amount)}</td><td>${escapeHtml(delivery.recipient_name || "—")}</td><td>${formatDateTime(delivery.delivered_at)}</td></tr>`; })) : '<div class="empty-state">لا توجد تسليمات مسجلة لهذا العميل.</div>')}</section>
@@ -2416,7 +2425,7 @@ function clientDetailsView(client, data) {
     <section class="client-detail-section">${panel("الداخل والخارج للعميل", `<form class="form-grid client-cash-form" data-client-cash-form="${escapeHtml(client.id)}"><div class="field"><label for="client-cash-category-${escapeHtml(client.id)}">بند المصروف / العهدة</label><input id="client-cash-category-${escapeHtml(client.id)}" name="category" maxlength="120" placeholder="مثل: سلفة، خيط، نقل" required></div><div class="field"><label for="client-cash-amount-${escapeHtml(client.id)}">المبلغ على حساب العميل (ج.م)</label><input id="client-cash-amount-${escapeHtml(client.id)}" name="amount" type="number" min="0.01" step="0.01" required></div><div class="field"><label for="client-cash-method-${escapeHtml(client.id)}">طريقة الصرف</label><input id="client-cash-method-${escapeHtml(client.id)}" name="method" value="نقدي" maxlength="80"></div><div class="field"><label for="client-cash-date-${escapeHtml(client.id)}">تاريخ الحركة</label><input id="client-cash-date-${escapeHtml(client.id)}" name="occurredAt" type="datetime-local" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}" required></div><div class="field wide"><label for="client-cash-description-${escapeHtml(client.id)}">البيان / التفاصيل</label><input id="client-cash-description-${escapeHtml(client.id)}" name="description" maxlength="500" required></div><div class="form-actions"><button class="button button-primary" type="submit">تسجيل المصروف على الحساب</button></div></form>${financialEntries.length ? table(["النوع","الموديل / المرجع","التفاصيل","الأثر المالي","التاريخ والوقت"], financialEntries.map((entry) => `<tr><td>${escapeHtml(entry.type)}</td><td>${escapeHtml(entry.reference)}</td><td>${escapeHtml(entry.detail)}</td><td class="${entry.amount < 0 ? "financial-credit" : "financial-debit"}">${money(entry.amount)}</td><td>${formatDateTime(entry.date)}</td></tr>`)) : '<div class="empty-state">لا توجد حركات مالية مسجلة لهذا العميل حتى الآن.</div>'}`)}</section>
     <section class="client-detail-section">${panel("ملاحظات وتنبيهات خاصة بالعميل", `${clientNotes.length ? `<div class="client-note-list">${clientNotes.map((note) => `<article><p>${escapeHtml(note.note || "")}</p><time>${formatDateTime(note._createdAt || note.created_at)}</time></article>`).join("")}</div>` : '<div class="empty-state">لا توجد ملاحظات مسجلة.</div>'}<form class="client-note-form" data-client-note="${escapeHtml(client.id)}"><label for="client-note-${escapeHtml(client.id)}">إضافة ملاحظة أو تنبيه</label><textarea id="client-note-${escapeHtml(client.id)}" name="note" rows="3" required></textarea><button class="button button-secondary" type="submit">حفظ الملاحظة</button></form>`)}</section>
     <section class="client-detail-section"><header class="section-heading"><div><h2>الفترات المالية السابقة</h2><p>الأوامر والتسليمات محفوظة في الأرشيف ولا تُحذف عند التصفية.</p></div><button class="button button-primary" type="button" data-settle-client="${escapeHtml(client.id)}">تصفية الحساب وترحيل الرصيد</button></header>
-      ${summary.settlements.length ? `<div class="settlement-history">${summary.settlements.map((entry) => `<article class="settlement-card"><div><strong>رصيد سابق مرحّل</strong><small>${formatDateTime(entry.date || entry._createdAt)}</small></div><div><span>رصيد افتتاحي</span><strong>${money(entry.openingBalance)}</strong></div><div><span>قيمة التسليمات</span><strong>${money(entry.deliveredTotal)}</strong></div><div><span>مصروفات وعهد</span><strong>${money(entry.clientExpensesTotal || 0)}</strong></div><div><span>المدفوع</span><strong>${money(Number(entry.orderPaidTotal || 0) + Number(entry.paymentsTotal || 0))}</strong></div><div><span>رصيد الفترة الختامي</span><strong>${money(entry.balance)}</strong></div></article>`).join("")}</div>` : '<div class="empty-state">لم تتم تصفية حساب العميل سابقًا.</div>'}
+      ${summary.settlements.length ? `<div class="settlement-history">${summary.settlements.map((entry) => `<article class="settlement-card"><div><strong>رصيد سابق مرحّل</strong><small>${formatDateTime(entry.date || entry._createdAt)}</small></div><div><span>رصيد افتتاحي</span><strong>${money(entry.openingBalance)}</strong></div><div><span>قيمة التسليمات</span><strong>${money(entry.deliveredTotal)}</strong></div><div><span>مصروفات وعهد</span><strong>${money(entry.clientExpensesTotal || 0)}</strong></div><div><span>خصومات التسوية</span><strong>${money(entry.accountAdjustmentsTotal || 0)}</strong></div><div><span>المدفوع</span><strong>${money(Number(entry.orderPaidTotal || 0) + Number(entry.paymentsTotal || 0))}</strong></div><div><span>رصيد الفترة الختامي</span><strong>${money(entry.balance)}</strong></div></article>`).join("")}</div>` : '<div class="empty-state">لم تتم تصفية حساب العميل سابقًا.</div>'}
       ${archivedOrders.length ? `<h3 class="history-subheading">الموديلات والطلبات المؤرشفة</h3><div class="order-cards">${archivedOrders.map((order) => orderCard(order, true)).join("")}</div>` : ""}
     </section>`;
 }
@@ -2581,6 +2590,7 @@ function clientQuickDetailsModalView(client, data) {
     <div class="compact-detail-grid">
       <div><span>المتوقع / لم يتم التسليم بعد</span><strong>${money(summary.expectedTotal)}</strong></div>
       <div><span>المستحق فعلياً بعد التسليم</span><strong>${money(summary.requiredAfterDelivery)}</strong></div>
+      <div><span>خصومات التسوية</span><strong>${money(summary.accountAdjustmentsTotal)}</strong></div>
       <div><span>المدفوع</span><strong>${money(summary.paid)}</strong></div>
     </div>
     <h3 class="modal-subheading">شغال حالياً</h3>
@@ -2627,6 +2637,12 @@ function printClientAccount(client, data) {
       amount: -Number(entry.amount),
       date: entry._createdAt || entry.created_at || entry.date
     })),
+    ...summary.accountAdjustments.map((entry) => ({
+      type: "خصم تسوية حساب",
+      description: `${entry.reason || "خصم مسموح به"}${entry.notes ? ` · ${entry.notes}` : ""}`,
+      amount: -Number(entry.amount || 0),
+      date: entry._createdAt || entry.created_at || entry.date
+    })),
     ...data.cashTransactions.filter((entry) => entry.customer_id === client.id).map((entry) => ({
       type: entry.direction === "expense" ? "مصروف / عهدة على حساب العميل" : "إيراد",
       description: `${entry.category} · ${entry.description || ""}`,
@@ -2647,7 +2663,7 @@ function printClientAccount(client, data) {
   const movementRows = movements.map((entry) =>
     `<tr><td>${escapeHtml(entry.type)}</td><td>${escapeHtml(entry.description || "—")}</td><td>${money(entry.amount)}</td><td>${formatDateTime(entry.date)}</td></tr>`
   ).join("");
-  const body = `<section class="print-section"><h2>كشف الحساب · ${escapeHtml(client.name)}</h2><p>البراند: ${escapeHtml(client.brand_name || "—")} · رقم العميل: ${escapeHtml(client.client_number || "—")}</p><div class="print-summary"><div><span>الرصيد السابق المرحّل</span><strong>${money(summary.openingBalance)}</strong></div><div><span>المستحق بعد التسليم</span><strong>${money(summary.deliveredTotal)}</strong></div><div><span>المتوقع غير المسلّم</span><strong>${money(summary.expectedTotal)}</strong></div><div><span>المصروفات والعهد الحالية</span><strong>${money(summary.clientExpensesTotal)}</strong></div><div><span>إجمالي المدفوع</span><strong>${money(summary.paid)}</strong></div><div><span>الرصيد الحالي</span><strong>${money(summary.balance)}</strong></div></div></section>
+  const body = `<section class="print-section"><h2>كشف الحساب · ${escapeHtml(client.name)}</h2><p>البراند: ${escapeHtml(client.brand_name || "—")} · رقم العميل: ${escapeHtml(client.client_number || "—")}</p><div class="print-summary"><div><span>الرصيد السابق المرحّل</span><strong>${money(summary.openingBalance)}</strong></div><div><span>المستحق بعد التسليم</span><strong>${money(summary.deliveredTotal)}</strong></div><div><span>المتوقع غير المسلّم</span><strong>${money(summary.expectedTotal)}</strong></div><div><span>المصروفات والعهد الحالية</span><strong>${money(summary.clientExpensesTotal)}</strong></div><div><span>خصومات التسوية الحالية</span><strong>${money(summary.accountAdjustmentsTotal)}</strong></div><div><span>إجمالي المدفوع</span><strong>${money(summary.paid)}</strong></div><div><span>الرصيد الحالي</span><strong>${money(summary.balance)}</strong></div></div></section>
     <section class="print-section"><h2>الموديلات والطلبيات</h2><table><thead><tr><th>الموديل</th><th>الرقم</th><th>العدد</th><th>سعر القطعة</th><th>مصاريف التشغيل</th><th>الإجمالي</th><th>الحالة</th></tr></thead><tbody>${modelRows || '<tr><td colspan="7">لا توجد موديلات مسجلة.</td></tr>'}</tbody></table></section>
     <section class="print-section"><h2>حركة الحساب</h2><table><thead><tr><th>نوع الحركة</th><th>البيان</th><th>الأثر المالي</th><th>التاريخ</th></tr></thead><tbody>${movementRows || '<tr><td colspan="4">لا توجد حركات مسجلة.</td></tr>'}</tbody></table></section>`;
   printDocument("كشف حساب العميل", body);
@@ -3112,7 +3128,7 @@ function cuttingRequestsView(data) {
   <section id="new-cutting" class="dashboard-section">${panel("قصة جديدة", cuttingSubmissionFormMarkup(data), "تُحفظ القصة في سجل القص المعلق، ولا تُضاف للموديلات أو الخياطة إلا بعد قرار الإدارة.")}</section>`;
 }
 
-function cuttingPersonalAccountView(data) {
+function cuttingPersonalAccountView(data, session) {
   const amountOf = (record) => Number(record.amount ?? record.salary ?? record.netAmount ?? record.value ?? 0);
   const datedRows = (records, columns) => records.map((record) =>
     `<tr>${columns(record).map((cell) => `<td>${escapeHtml(cell)}</td>`).join("")}<td>${formatDateTime(record._createdAt || record.created_at || record.date)}</td></tr>`
@@ -3122,16 +3138,41 @@ function cuttingPersonalAccountView(data) {
   const attendance = data.personalAttendance;
   const totalAdvances = advances.reduce((sum, record) => sum + amountOf(record), 0);
   const lastPayroll = payroll[0] || null;
-  return `<div class="stats-grid">${stat("سجلات الحضور", attendance.length, "سجل خاص بحسابك")}${stat("إجمالي السُلف المسجلة", money(totalAdvances), "حسب السجلات المتاحة")}${stat("آخر مرتب مسجل", lastPayroll ? money(amountOf(lastPayroll)) : "—", lastPayroll?.period || lastPayroll?.month || "")}</div>
+  const profile = data.workforceProfiles.find((entry) =>
+    entry.linkedUserId === session.accountId || entry._ownerId === session.accountId
+  ) || {};
+  const employeeId = profile.workerId || session.accountRowId || session.accountId;
+  const identity = { id: employeeId, accountId: session.accountId, name: profile.employeeName || session.fullName };
+  const financialData = { ...data, workerAdvances: advances, workerPayroll: payroll };
+  const settings = workforceSettings(financialData);
+  const today = workforceDateKey(new Date());
+  const month = today.slice(0, 7);
+  const accrual = profile.wageAmount
+    ? workforceMonthAccrual(identity, financialData, settings, month, today)
+    : null;
+  const wageRates = accrual?.rate || workforceWageRates(profile, settings, month, financialData, employeeId);
+  const deductions = data.workforceViolations.filter((record) =>
+    record.workerId === employeeId && record.date?.startsWith(month)
+  );
+  const settlements = data.workforceSettlements
+    .filter((record) => record.workerId === employeeId)
+    .sort((left, right) => String(right.throughDate).localeCompare(String(left.throughDate)));
+  return `<div class="stats-grid">${stat("الأجر المحدد", profile.wageAmount ? money(profile.wageAmount) : "غير مسجل", profile.wageBasis === "weekly" ? "أجر أسبوعي" : "أجر شهري")}${stat("أجر اليوم", money(wageRates.daily))}${stat("أجر الساعة", money(wageRates.hourly))}${stat("المستحق حتى اليوم", accrual ? money(accrual.earned) : "غير محسوب", "حسب الحضور المسجل")}${stat("السُلف الحالية", money(accrual?.advances ?? totalAdvances))}${stat("خصومات الشهر", money(accrual?.deductions ?? 0))}${stat("صافي المستحق", accrual ? money(accrual.netDue) : "يُحدد بعد تسجيل الأجر")}${stat("آخر مرتب مسجل", lastPayroll ? money(amountOf(lastPayroll)) : "—", lastPayroll?.period || lastPayroll?.month || "")}</div>
     ${panel("سجل الحضور والغياب", attendance.length
       ? table(["التاريخ","الحالة","ملاحظات","تاريخ التسجيل"], datedRows(attendance, (record) => [formatRecordDate(record.date || record.day || record._createdAt), record.status || record.type || "—", record.notes || record.note || "—"]))
       : '<div class="empty-state">لا توجد سجلات حضور أو غياب مرتبطة بحسابك حاليًا.</div>')}
+    ${panel("الخصومات والجزاءات لهذا الشهر", deductions.length
+      ? table(["التاريخ","السبب","الإجراء","المبلغ"], deductions.map((record) => `<tr><td>${formatRecordDate(record.date)}</td><td>${escapeHtml(record.ruleLabel || workforceRuleTitle(settings, record.ruleKey))}</td><td>${escapeHtml(record.decisionDescription || record.decision || "—")}</td><td>${money(record.deductionAmount || 0)}</td></tr>`))
+      : '<div class="empty-state">لا توجد خصومات أو جزاءات مسجلة لهذا الشهر.</div>')}
     ${panel("سجل السُلف", advances.length
       ? table(["المبلغ","البيان","ملاحظات","تاريخ التسجيل"], datedRows(advances, (record) => [money(amountOf(record)), record.description || record.reason || record.reference || "—", record.notes || record.note || "—"]))
       : '<div class="empty-state">لا توجد سُلف مسجلة لحسابك حاليًا.</div>')}
     ${panel("سجل المرتب", payroll.length
       ? table(["الفترة","المرتب","المدفوع","المتبقي","تاريخ التسجيل"], payroll.map((record) => `<tr><td>${escapeHtml(record.period || record.month || record.date || "—")}</td><td>${money(Number(record.salary ?? record.amount ?? 0))}</td><td>${money(Number(record.paidAmount ?? record.paid ?? 0))}</td><td>${money(Number(record.remainingAmount ?? record.remaining ?? 0))}</td><td>${formatDateTime(record._createdAt || record.created_at || record.date)}</td></tr>`))
-      : '<div class="empty-state">لا توجد سجلات مرتب مسجلة لحسابك حاليًا.</div>')}`;
+      : '<div class="empty-state">لا توجد سجلات مرتب مسجلة لحسابك حاليًا.</div>')}
+    ${panel("سجل التصفية والرصيد المرحّل", settlements.length
+      ? table(["الفترة","حتى تاريخ","المستحق","السلف","الخصومات","المدفوع","الرصيد المرحّل"], settlements.map((record) => `<tr><td>${escapeHtml(record.period || "—")}</td><td>${formatRecordDate(record.throughDate)}</td><td>${money(record.earnedAmount)}</td><td>${money(record.advanceAmount)}</td><td>${money(record.deductionAmount)}</td><td>${money(record.paidAmount)}</td><td>${money(record.balanceAfter)}</td></tr>`))
+      : '<div class="empty-state">لا توجد تصفيات محفوظة لحسابك.</div>')}`;
 }
 
 function sewingOrderRows(orders, actionLabel = "", action = "") {
@@ -3549,6 +3590,12 @@ function clientView(data, session) {
   );
   const totalAmount = sumMoney(currentOrders.map((item) => Number(item.totalAmount)));
   const expectedTotal = sumMoney(currentOrders.map((item) => item.expectedAmount));
+  const periodStart = latestSettlement?.date || latestSettlement?._createdAt || null;
+  const accountAdjustments = data.accountAdjustments.filter((entry) =>
+    entry._ownerId === session.accountId
+    && (!periodStart || new Date(entry._createdAt || entry.created_at).getTime() >= new Date(periodStart).getTime())
+  );
+  const accountAdjustmentsTotal = sumMoney(accountAdjustments.map((entry) => entry.amount));
   const clientExpensesTotal = sumMoney(data.cashTransactions
     .filter((entry) =>
       entry.direction === "expense"
@@ -3558,7 +3605,7 @@ function clientView(data, session) {
   const paymentsTotal = sumMoney(payments.map((item) => item.amount));
   const orderPaid = sumMoney(currentOrders.map((item) => item.paidAmount));
   const totalPaid = addMoney(paymentsTotal, orderPaid);
-  const grossDue = addMoney(addMoney(openingBalance, totalAmount), clientExpensesTotal);
+  const grossDue = subtractMoney(addMoney(addMoney(openingBalance, totalAmount), clientExpensesTotal), accountAdjustmentsTotal);
   const remaining = subtractMoney(grossDue, totalPaid);
   const due = remaining;
   const balanceState = due > 0 ? "is-debit" : due < 0 ? "is-credit" : "is-settled";
@@ -3582,6 +3629,20 @@ function clientView(data, session) {
       type: "دفعة مستلمة من العميل",
       reference: entry.reference || "دفعة مالية",
       detail: `${escapeHtml(entry.method || "طريقة الدفع غير محددة")}${entry.notes ? ` · ${escapeHtml(entry.notes)}` : ""}`,
+      amount: -Number(entry.amount || 0),
+      date: entry._createdAt || entry.created_at || entry.date
+    })),
+    ...summary.accountAdjustments.map((entry) => ({
+      type: "خصم تسوية حساب",
+      reference: entry.reason || "خصم مسموح به",
+      detail: entry.notes ? escapeHtml(entry.notes) : "خصم غير نقدي من رصيد الحساب",
+      amount: -Number(entry.amount || 0),
+      date: entry._createdAt || entry.created_at || entry.date
+    })),
+    ...accountAdjustments.map((entry) => ({
+      type: "خصم تسوية حساب",
+      reference: entry.reason || "خصم مسموح به",
+      detail: "خصم غير نقدي من رصيد الحساب",
       amount: -Number(entry.amount || 0),
       date: entry._createdAt || entry.created_at || entry.date
     })),
@@ -5519,9 +5580,9 @@ function render(session, data, accounts) {
     : session.role === "client"
       ? clientView(data, session)
       : session.role === "cutting"
-        ? `<section id="dashboard" class="dashboard-section">${cuttingDashboardView(data)}</section>${cuttingRequestsView(data)}${fabricStockView(data, false)}<section id="personal-account" class="dashboard-section">${cuttingPersonalAccountView(data)}</section>`
+        ? `<section id="dashboard" class="dashboard-section">${cuttingDashboardView(data)}</section>${cuttingRequestsView(data)}${fabricStockView(data, false)}<section id="personal-account" class="dashboard-section">${cuttingPersonalAccountView(data, session)}</section>`
       : session.role === "sewing"
-        ? `<section id="dashboard" class="dashboard-section">${sewingView(data)}</section>${modelRegistryView(data)}${cuttingHistoryView(data)}<section id="personal-account" class="dashboard-section">${cuttingPersonalAccountView(data)}</section>`
+        ? `<section id="dashboard" class="dashboard-section">${sewingView(data)}</section>${modelRegistryView(data)}${cuttingHistoryView(data)}<section id="personal-account" class="dashboard-section">${cuttingPersonalAccountView(data, session)}</section>`
         : workerView(data, session);
   document.querySelector("#app").innerHTML = `
     <div class="app-shell${collapsedClass}">
@@ -6457,6 +6518,61 @@ function bindCuttingActions(session) {
 function bindClientDetailActions(session) {
   document.querySelectorAll("#client-details [data-quick-client-payment]").forEach((button) => {
     button.addEventListener("click", () => openClientPayment(button.dataset.quickClientPayment));
+  });
+  document.querySelectorAll("#client-details [data-open-account-adjustment]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const modal = document.querySelector("#client-details [data-account-adjustment-modal]");
+      if (modal) modal.hidden = false;
+    });
+  });
+  document.querySelectorAll("#client-details [data-close-account-adjustment]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const modal = document.querySelector("#client-details [data-account-adjustment-modal]");
+      if (modal) modal.hidden = true;
+    });
+  });
+  document.querySelectorAll("#client-details [data-account-adjustment-modal]").forEach((modal) => {
+    modal.addEventListener("click", (event) => {
+      if (event.target === modal) modal.hidden = true;
+    });
+  });
+  document.querySelectorAll("#client-details [data-account-adjustment-form]").forEach((form) => {
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const values = new FormData(form);
+      const amount = Number(values.get("amount"));
+      const reason = String(values.get("reason") || "").trim();
+      const notes = String(values.get("notes") || "").trim();
+      if (!Number.isFinite(amount) || amount <= 0 || !reason) {
+        window.factoryUI.toast("أدخل مبلغًا موجبًا وحدد سبب الخصم.", "error");
+        return;
+      }
+      const button = form.querySelector('[type="submit"]');
+      button.disabled = true;
+      let adjustmentSaved = false;
+      try {
+        const { error } = await supabaseClient.rpc("save_factory_client_account_adjustment", {
+          requested_customer_id: form.dataset.accountAdjustmentForm,
+          requested_amount: amount,
+          requested_reason: reason,
+          requested_notes: notes
+        });
+        if (error?.code === "PGRST202") throw new Error("دالة خصم تسوية العميل غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+        if (error) throw error;
+        adjustmentSaved = true;
+        await refreshDashboard(session);
+        const client = dashboardData.clients.find((entry) => entry.id === selectedClientId);
+        if (!client) throw new Error("تم حفظ الخصم لكن تعذر العثور على ملف العميل لتحديث العرض.");
+        document.querySelector("#client-details").innerHTML = clientDetailsView(client, dashboardData);
+        bindClientDetailActions(session);
+        window.factoryUI.toast("تم خصم التسوية من رصيد العميل دون تسجيل حركة بالخزنة.");
+      } catch (error) {
+        button.disabled = false;
+        reportDashboardFailure(session, adjustmentSaved
+          ? "تم حفظ الخصم، لكن تعذر تحديث كشف العميل"
+          : "تعذر حفظ خصم التسوية", error);
+      }
+    });
   });
   document.querySelectorAll("[data-print-account]").forEach((button) => button.addEventListener("click", () => {
     const client = dashboardData.clients.find((entry) => entry.id === selectedClientId);
