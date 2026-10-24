@@ -5680,7 +5680,7 @@ create policy "Admins read factory order expenses"
   on public.factory_order_expenses for select to authenticated
   using (public.is_active_factory_admin());
 grant select on public.factory_order_expenses to authenticated;
-grant select (id, client_id, customer_id, model_name, model_number, production_type, work_stages, colors, color_names, color_size_distribution, sizes, original_total_pieces, total_pieces, delivered_pieces, archived_at, status, priority, created_at)
+grant select (id, client_id, customer_id, model_name, model_number, factory_model_code, client_model_code, production_type, work_stages, colors, color_names, color_size_distribution, sizes, original_total_pieces, total_pieces, delivered_pieces, archived_at, status, priority, created_at)
   on public.orders to authenticated;
 grant select (sender_name) on public.orders to authenticated;
 grant select (model_image_url) on public.orders to authenticated;

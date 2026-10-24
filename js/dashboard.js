@@ -436,7 +436,7 @@ async function readDashboardData(session) {
     if (ordersError?.code === "PGRST202") {
       throw new Error("دالة قراءة طلبيات العميل غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
     }
-  } else {
+  } else if (["cutting", "sewing"].includes(session.role)) {
     let ordersQuery = supabaseClient
       .from("orders")
       .select("id, customer_id, model_name, model_number, factory_model_code, client_model_code, sender_name, colors, color_names, color_size_distribution, production_type, work_stages, sizes, original_total_pieces, total_pieces, model_image_url, priority, archived_at, status, created_at")
@@ -450,6 +450,19 @@ async function readDashboardData(session) {
         .order("created_at", { ascending: false });
       ({ data: orders, error: ordersError } = await ordersQuery);
     }
+    if (ordersError) {
+      console.error("Failed to load orders for factory supervisor", {
+        role: session.role,
+        code: ordersError.code || "",
+        message: ordersError.message || String(ordersError)
+      });
+      data.orderReadWarning = "تعذر تحميل بيانات الطلبات؛ تحقق من تشغيل أحدث ملف supabase/schema.sql وصلاحيات قاعدة البيانات. بقية بيانات اللوحة متاحة.";
+      orders = [];
+      ordersError = null;
+    }
+  } else {
+    orders = [];
+    ordersError = null;
   }
   if (ordersError) throw ordersError;
 
@@ -5418,6 +5431,7 @@ function render(session, data, accounts) {
       <button class="sidebar-backdrop" type="button" data-sidebar-close aria-label="إغلاق القائمة الجانبية"></button>
       <aside class="sidebar" id="sidebar"><a class="brand" href="../index.html"><img class="brand-logo" src="../assets/al-motamayez-logo.png" alt="AL-MOTAMAYEZ logo"><span class="brand-copy"><strong>AL-MOTAMAYEZ</strong></span></a><nav aria-label="القائمة الرئيسية"><p class="side-label">القائمة الرئيسية</p>${navigation}</nav><div class="sidebar-bottom"><div class="profile-chip"><span class="avatar">${username.slice(0, 1)}</span><div class="profile-details"><strong>${username}</strong><span>${escapeHtml(session.roleName)}</span></div></div><button class="logout-button" id="logout" type="button">↪ تسجيل الخروج</button>${developerFooterMarkup()}</div></aside>
       <main class="main-content"><header class="topbar"><div class="topbar-leading"><button class="sidebar-toggle" type="button" data-sidebar-toggle aria-controls="sidebar" aria-expanded="true" aria-label="طي القائمة الجانبية"><span aria-hidden="true">☰</span></button><div class="topbar-title"><h1>${info.title}</h1><p>${info.description}</p></div></div><div class="header-brand">${session.role === "admin" ? `<button class="online-indicator${onlineUserCount ? " online" : ""}" data-online-indicator type="button" title="عرض الحسابات المتصلة"><span class="online-indicator-dot"></span><span>متصلون الآن: <strong data-online-count>${onlineUserCount}</strong></span></button>` : ""}<div class="notification-control"><button class="live-notification-button" type="button" data-live-notifications aria-label="إشعارات تحديثات البرنامج" aria-expanded="false"><span aria-hidden="true">🔔</span><span class="live-notification-badge" data-live-badge aria-live="polite" hidden></span></button><section class="notification-dropdown" data-notification-dropdown hidden aria-label="إشعارات تحديثات البرنامج"><header><strong>تحديثات البرنامج</strong><button type="button" class="notification-mark-read" data-mark-notifications-read>تعليم الكل كمقروء</button></header><div class="notification-list" data-notification-list>${notificationListMarkup()}</div></section></div><img class="header-logo" src="../assets/al-motamayez-logo.png" alt="AL-MOTAMAYEZ logo"><div class="brand-copy"><strong>AL-MOTAMAYEZ</strong></div><span class="date-label">${new Intl.DateTimeFormat("ar-EG-u-nu-latn", { dateStyle: "full" }).format(new Date())}</span></div></header>
+    ${data.orderReadWarning ? `<div class="notice" role="alert">${escapeHtml(data.orderReadWarning)}</div>` : ""}
     ${content}
       ${session.role === "admin" ? '<div class="modal-backdrop" data-online-users-modal hidden><section class="modal-card compact-view-modal" role="dialog" aria-modal="true" aria-labelledby="online-users-title"><button class="modal-close" type="button" data-close-online-users aria-label="إغلاق">×</button><h2 id="online-users-title">المتصلون الآن</h2><div class="online-users-list" data-online-users-list></div><div class="form-actions"><button class="row-action" type="button" data-close-online-users>إغلاق</button></div></section></div>' : ""}
       </main>
