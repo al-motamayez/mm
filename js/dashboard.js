@@ -19,6 +19,7 @@ let activeFinanceTab = "payments";
 let activeAdminCuttingTab = "active";
 let activeWorkforceTab = "employees";
 let selectedWorkforceEmployeeId = "";
+let selectedWorkforceProfileTab = "finance";
 let showNewWorkforceEmployeeModal = false;
 let pendingWorkforceLateDecision = null;
 let pendingWorkforceAbsenceDecision = null;
@@ -212,6 +213,17 @@ async function saveFlexibleRecord(collection, payload, recordId = null, ownerId 
       owner_id: ownerId,
       payload: cleanPayload
     }, { onConflict: "id" });
+  if (error) throw error;
+}
+
+async function deleteFlexibleRecord(collection, recordId) {
+  const { error } = await supabaseClient
+    .from("factory_records")
+    .delete()
+    .eq("id", recordId)
+    .eq("collection", collection)
+    .select("id")
+    .single();
   if (error) throw error;
 }
 
@@ -3888,7 +3900,7 @@ function workforceOfficialPenalty(ruleKey, settings, profile, monthKey, data, da
     return { amount: rates.hourly * hours, description: `جزاء تأخير يعادل ${hours} ساعة عمل` };
   }
   if (ruleKey === "absence") {
-    const deductionDays = 2;
+    const deductionDays = 1;
     return { amount: rates.daily * deductionDays, deductionDays, description: `جزاء الغياب يعادل ${deductionDays} يوم عمل` };
   }
   return { amount: workforceRuleAmount(ruleKey, settings), description: "" };
@@ -3930,6 +3942,7 @@ function workforceMonthAccrual(worker, data, settings, monthKey, throughDate) {
     } else if (status === "absent" && data.workforceViolations.some((violation) =>
       violation.workerId === worker.id && violation.ruleKey === "absence"
       && violation.date === dateKey && violation.decision === "official"
+      && violation.permission !== "unexcused"
     )) {
       creditedDays += 1;
       earned += rates.basis === "hourly" ? rates.hourly * rates.shiftHours : rates.daily;
@@ -4066,6 +4079,9 @@ function workforceView(data) {
     <td>${formatRecordDate(record.date)}</td><td>${escapeHtml(record.ruleLabel || workforceRuleTitle(settings, record.ruleKey))}</td>
     <td>${escapeHtml(record.decisionDescription || record.decision || "—")}</td>
     <td>${workforceMoney(record.deductionAmount || 0)}</td><td>${escapeHtml(record.notes || "—")}</td>
+    <td>${["official", "actual_time"].includes(record.decision) && Number(record.deductionAmount) > 0
+      ? `<button type="button" class="row-action order-delete-action" data-delete-workforce-deduction="${escapeHtml(record._recordId)}">إلغاء الخصم</button>`
+      : "—"}</td>
   </tr>`).join("");
   const employeeAccountMovements = selectedEmployee ? [
     ...data.workerAdvances.filter((record) => workforceRecordBelongsToWorker(record, selectedEmployee, data)).map((record) => ({
@@ -4114,65 +4130,81 @@ function workforceView(data) {
       <header class="workforce-profile-heading"><div><h2 id="workforce-profile-title">كشف العامل: ${escapeHtml(selectedEmployee.name)}</h2>
       <p>${escapeHtml(selectedEmployee.jobTitle || "مسمى وظيفي غير محدد")} · ${escapeHtml(selectedEmployee.roleLabel)}</p></div>
       <button type="button" class="button button-secondary" data-print-workforce-profile>طباعة كشف العامل</button></header>
-      <form class="workforce-personal-form form-grid" data-workforce-personal-form="${escapeHtml(selectedEmployee.id)}">
-        <div class="workforce-profile-section wide"><h3>بيانات العامل والعمل</h3><div class="workforce-profile-fields">
-          <label class="field"><span>الاسم</span><input id="workforce-profile-name" name="employeeName" value="${escapeHtml(selectedEmployee.name)}" disabled></label>
-          <label class="field"><span>اسم المستخدم</span><input id="workforce-profile-username" name="username" value="${escapeHtml(selectedEmployee.username)}" disabled></label>
-          <label class="field"><span>الدور الوظيفي المسجل</span><input id="workforce-profile-role" name="role" value="${escapeHtml(selectedEmployee.roleLabel)}" disabled></label>
-          <label class="field"><span>المسمى الوظيفي الفعلي</span><select id="workforce-profile-job-title" name="jobTitle" required>${employeeJobTitleOptions}</select></label>
-          <label class="field"><span>الهاتف</span><input id="workforce-profile-phone" name="phone" value="${escapeHtml(selectedEmployee.phone || "—")}" disabled></label>
-          <label class="field"><span>تاريخ التعيين</span><input name="hireDate" type="date" value="${escapeHtml(selectedEmployeeProfile.hireDate || "")}"></label>
-          <label class="field"><span>بيانات / طبيعة العمل</span><input name="workDescription" value="${escapeHtml(selectedEmployeeProfile.workDescription || "")}" maxlength="240" placeholder="القسم، التخصص، أو طبيعة المهام"></label>
-          <label class="field"><span>موقع / خط العمل</span><input name="workLocation" value="${escapeHtml(selectedEmployeeProfile.workLocation || "")}" maxlength="160"></label>
-          <label class="field"><span>نوع التعاقد</span><input name="employmentType" value="${escapeHtml(selectedEmployeeProfile.employmentType || "")}" maxlength="100" placeholder="دوام كامل، مؤقت..."></label>
-        </div></div>
-        <div class="workforce-profile-section"><h3>الأجر الأساسي والحسابات التلقائية</h3><div class="workforce-profile-fields">
-          <label class="field"><span>نوع المرتب</span><select name="wageBasis"><option value="monthly" ${!["weekly", "daily", "hourly"].includes(selectedEmployeeProfile.wageBasis) ? "selected" : ""}>شهري</option><option value="weekly" ${selectedEmployeeProfile.wageBasis === "weekly" ? "selected" : ""}>أسبوعي</option><option value="daily" ${selectedEmployeeProfile.wageBasis === "daily" ? "selected" : ""}>يومي (قديم)</option><option value="hourly" ${selectedEmployeeProfile.wageBasis === "hourly" ? "selected" : ""}>بالساعة (قديم)</option></select></label>
-          <label class="field"><span>المرتب الأساسي (جنيه)</span><input name="wageAmount" type="number" min="0" step="0.01" value="${escapeHtml(selectedEmployeeProfile.wageAmount ?? "")}" placeholder="أدخل المرتب الأساسي"></label>
-          <p class="workforce-rate-preview wide" data-workforce-rate-preview></p>
-        </div></div>
-        <div class="workforce-profile-section"><h3>البيانات الشخصية والتواصل</h3><div class="workforce-profile-fields">
-          <label class="field"><span>الرقم القومي</span><input name="nationalId" value="${escapeHtml(selectedEmployeeProfile.nationalId || "")}" maxlength="32"></label>
-          <label class="field"><span>العنوان</span><input name="address" value="${escapeHtml(selectedEmployeeProfile.address || "")}" maxlength="240"></label>
-          <label class="field"><span>جهة اتصال للطوارئ</span><input name="emergencyContact" value="${escapeHtml(selectedEmployeeProfile.emergencyContact || "")}" maxlength="120"></label>
-          <label class="field wide"><span>ملاحظات وظيفية</span><textarea name="employmentNotes" rows="2" maxlength="500">${escapeHtml(selectedEmployeeProfile.employmentNotes || "")}</textarea></label>
-        </div></div>
-        <div class="form-actions wide"><button class="button button-primary" type="submit">حفظ بيانات العامل والمرتب</button></div>
-      </form>
-      ${panel("ربط حساب تسجيل الدخول", `<p>${selectedEmployeeLinkedAccountId
-        ? `الحساب المرتبط: ${escapeHtml(data.users.find((account) => account.id === selectedEmployeeLinkedAccountId)?.username || selectedEmployee.username)}`
-        : "ملف العامل غير مرتبط حالياً بحساب تسجيل دخول."}</p>
-        <div class="workforce-account-link">
-          <label class="field"><span>اختر حساب عامل / مشرف غير مرتبط (بما فيها الحسابات المعلقة)</span><select name="linkedUserId" data-workforce-link-account="${escapeHtml(selectedEmployee.id)}"><option value="">اختر الحساب</option>${workforceAccountLinkOptions(selectedEmployee, data)}</select></label>
-          <div class="form-actions"><button type="button" class="button button-primary" data-link-workforce-account="${escapeHtml(selectedEmployee.id)}">ربط الحساب</button>${selectedEmployeeLinkedAccountId ? `<button type="button" class="row-action order-delete-action" data-unlink-workforce-account="${escapeHtml(selectedEmployee.id)}">فك الارتباط</button>` : ""}</div>
-        </div>`, "فك الارتباط يوقف صلاحية دخول الحساب السابق مع الاحتفاظ بملف العامل وسجلاته.") }
-      <div class="stats-grid workforce-profile-stats">
-        ${stat("الأجر المحدد", workforceMoney(selectedEmployeeProfile.wageAmount || 0), selectedEmployeeProfile.wageBasis === "weekly" ? "أسبوعي" : selectedEmployeeProfile.wageBasis === "hourly" ? "بالساعة" : selectedEmployeeProfile.wageBasis === "daily" ? "يومي" : "شهري")}
-        ${stat("أجر اليوم", workforceMoney(employeeCalculation.rate.daily), "محسوب تلقائياً")}
-        ${stat("أجر الساعة", workforceMoney(employeeCalculation.rate.hourly), "على أساس 9 ساعات")}
-        ${stat("أيام مستحقة هذا الشهر", employeeCalculation.creditedDays)}
-        ${stat("الأجر المستحق", workforceMoney(employeeCalculation.earned))}
-        ${stat("أجر السهر × 1.5", workforceMoney(employeeCalculation.overtimeAmount))}
-        ${stat("السلف", workforceMoney(employeeCalculation.advances))}
-        ${stat("الخصومات", workforceMoney(employeeCalculation.deductions))}
-        ${stat("الرصيد المرحّل", workforceMoney(employeeCalculation.carryover))}
-        ${stat("صافي الحساب", workforceMoney(employeeCalculation.netDue))}
+      <div class="workforce-profile-tabs" role="tablist" aria-label="أقسام ملف العامل">
+        <button type="button" role="tab" class="workforce-profile-tab${selectedWorkforceProfileTab === "finance" ? " active" : ""}" aria-selected="${selectedWorkforceProfileTab === "finance"}" data-workforce-profile-tab="finance">المستحقات والماليات</button>
+        <button type="button" role="tab" class="workforce-profile-tab${selectedWorkforceProfileTab === "personal" ? " active" : ""}" aria-selected="${selectedWorkforceProfileTab === "personal"}" data-workforce-profile-tab="personal">البيانات الشخصية</button>
       </div>
-      ${panel("سجل الحضور والغياب والتأخير والسهر", employeeAttendanceRows.length
-        ? table(["التاريخ","الحالة","الحضور","الانصراف","التأخير","السهر","ملاحظات"], employeeAttendanceRows)
-        : '<div class="empty-state">لا توجد سجلات حضور محفوظة.</div>')}
-      ${panel("كشف الحساب والخصومات والجزاءات", employeeViolationRows.length
-        ? table(["التاريخ","البند","القرار","الخصم","ملاحظات"], employeeViolationRows)
-        : '<div class="empty-state">لا توجد خصومات أو جزاءات مسجلة.</div>')}
-      ${panel("حركة الحساب التفصيلية", employeeAccountRows.length
-        ? table(["التاريخ","نوع الحركة","التفاصيل","المبلغ"], employeeAccountRows)
-        : '<div class="empty-state">لا توجد سلف أو مدفوعات أو حركات حساب مسجلة.</div>')}
-      ${panel("سجل التصفية", data.workforceSettlements.some((record) => record.workerId === selectedEmployee.id)
-        ? table(["الفترة","حتى تاريخ","المستحق","السلف","الخصومات","المدفوع","الرصيد المرحّل"], data.workforceSettlements
-          .filter((record) => record.workerId === selectedEmployee.id)
-          .sort((left, right) => String(right.throughDate).localeCompare(String(left.throughDate)))
-          .map((record) => `<tr><td>${escapeHtml(record.period || "—")}</td><td>${formatRecordDate(record.throughDate)}</td><td>${workforceMoney(record.earnedAmount)}</td><td>${workforceMoney(record.advanceAmount)}</td><td>${workforceMoney(record.deductionAmount)}</td><td>${workforceMoney(record.paidAmount)}</td><td>${workforceMoney(record.balanceAfter)}</td></tr>`))
-        : '<div class="empty-state">لا توجد تصفيات محفوظة.</div>')}
+      <div class="workforce-profile-tab-panel" data-workforce-profile-panel="finance"${selectedWorkforceProfileTab === "finance" ? "" : " hidden"}>
+        <form class="workforce-wage-form workforce-profile-section" data-workforce-wage-form="${escapeHtml(selectedEmployee.id)}">
+          <h3>كارت الأجر</h3>
+          <div class="workforce-profile-fields">
+            <label class="field"><span>الأجر المحدد (جنيه)</span><input name="wageAmount" type="number" min="0.01" step="0.01" value="${escapeHtml(selectedEmployeeProfile.wageAmount ?? "")}" placeholder="أدخل الأجر الأساسي"></label>
+            <label class="field"><span>أساس الأجر</span><select name="wageBasis"><option value="monthly" ${!["weekly", "daily", "hourly"].includes(selectedEmployeeProfile.wageBasis) ? "selected" : ""}>شهري</option><option value="weekly" ${selectedEmployeeProfile.wageBasis === "weekly" ? "selected" : ""}>أسبوعي</option><option value="daily" ${selectedEmployeeProfile.wageBasis === "daily" ? "selected" : ""}>يومي</option><option value="hourly" ${selectedEmployeeProfile.wageBasis === "hourly" ? "selected" : ""}>بالساعة</option></select></label>
+            <div class="workforce-rate-preview" data-workforce-rate-preview></div>
+            <div class="form-actions wide"><button class="button button-primary" type="submit">حفظ الأجر</button></div>
+          </div>
+        </form>
+        <div class="workforce-finance-cards">
+          <section class="workforce-finance-card"><h3>الأجر</h3><div class="workforce-finance-card-grid">
+            <div><span>أجر اليوم</span><strong>${workforceMoney(employeeCalculation.rate.daily)}</strong></div>
+            <div><span>أجر الساعة</span><strong>${workforceMoney(employeeCalculation.rate.hourly)}</strong></div>
+            <div><span>الأجر المحدد</span><strong>${workforceMoney(selectedEmployeeProfile.wageAmount || 0)}</strong><small>${selectedEmployeeProfile.wageBasis === "weekly" ? "أسبوعي" : selectedEmployeeProfile.wageBasis === "hourly" ? "بالساعة" : selectedEmployeeProfile.wageBasis === "daily" ? "يومي" : "شهري"}</small></div>
+          </div></section>
+          <section class="workforce-finance-card"><h3>حركة الشهر · ${escapeHtml(selectedWorkforceMonth)}</h3><div class="workforce-finance-card-grid">
+            <div><span>مستحقات الشهر</span><strong>${workforceMoney(employeeCalculation.earned)}</strong><small>${employeeCalculation.creditedDays} يوم مستحق</small></div>
+            <div><span>السلف الحالية</span><strong>${workforceMoney(employeeCalculation.advances)}</strong></div>
+            <div><span>إجمالي الخصومات</span><strong>${workforceMoney(employeeCalculation.deductions)}</strong></div>
+            <div class="is-net"><span>الصافي المستحق</span><strong>${workforceMoney(employeeCalculation.netDue)}</strong><small>يشمل الرصيد المرحّل ويخصم المدفوعات السابقة</small></div>
+          </div></section>
+        </div>
+        <div class="stats-grid workforce-profile-stats">
+          ${stat("أجر السهر × 1.5", workforceMoney(employeeCalculation.overtimeAmount))}
+          ${stat("الرصيد المرحّل", workforceMoney(employeeCalculation.carryover))}
+          ${stat("مدفوعات سابقة", workforceMoney(employeeCalculation.previousPaid))}
+        </div>
+        ${panel("سجل الحضور والغياب والتأخير والسهر", employeeAttendanceRows.length
+          ? table(["التاريخ","الحالة","الحضور","الانصراف","التأخير","السهر","ملاحظات"], employeeAttendanceRows)
+          : '<div class="empty-state">لا توجد سجلات حضور محفوظة.</div>')}
+        ${panel("كشف الحساب والخصومات والجزاءات", employeeViolationRows.length
+          ? table(["التاريخ","البند","القرار","الخصم","ملاحظات","الإجراء"], employeeViolationRows)
+          : '<div class="empty-state">لا توجد خصومات أو جزاءات مسجلة.</div>')}
+        ${panel("حركة الحساب التفصيلية", employeeAccountRows.length
+          ? table(["التاريخ","نوع الحركة","التفاصيل","المبلغ"], employeeAccountRows)
+          : '<div class="empty-state">لا توجد سلف أو مدفوعات أو حركات حساب مسجلة.</div>')}
+        ${panel("سجل التصفية", data.workforceSettlements.some((record) => record.workerId === selectedEmployee.id)
+          ? table(["الفترة","حتى تاريخ","المستحق","السلف","الخصومات","المدفوع","الرصيد المرحّل"], data.workforceSettlements
+            .filter((record) => record.workerId === selectedEmployee.id)
+            .sort((left, right) => String(right.throughDate).localeCompare(String(left.throughDate)))
+            .map((record) => `<tr><td>${escapeHtml(record.period || "—")}</td><td>${formatRecordDate(record.throughDate)}</td><td>${workforceMoney(record.earnedAmount)}</td><td>${workforceMoney(record.advanceAmount)}</td><td>${workforceMoney(record.deductionAmount)}</td><td>${workforceMoney(record.paidAmount)}</td><td>${workforceMoney(record.balanceAfter)}</td></tr>`))
+          : '<div class="empty-state">لا توجد تصفيات محفوظة.</div>')}
+      </div>
+      <div class="workforce-profile-tab-panel" data-workforce-profile-panel="personal"${selectedWorkforceProfileTab === "personal" ? "" : " hidden"}>
+        <form class="workforce-personal-form workforce-profile-section" data-workforce-personal-form="${escapeHtml(selectedEmployee.id)}">
+          <h3>بيانات العامل والعمل</h3><div class="workforce-profile-fields">
+            <label class="field"><span>الاسم</span><input name="employeeName" value="${escapeHtml(selectedEmployee.name)}" disabled></label>
+            <label class="field"><span>اسم المستخدم</span><input name="username" value="${escapeHtml(selectedEmployee.username)}" disabled></label>
+            <label class="field"><span>الدور الوظيفي المسجل</span><input name="role" value="${escapeHtml(selectedEmployee.roleLabel)}" disabled></label>
+            <label class="field"><span>المسمى الوظيفي الفعلي</span><select name="jobTitle" required>${employeeJobTitleOptions}</select></label>
+            <label class="field"><span>الهاتف</span><input name="phone" value="${escapeHtml(selectedEmployee.phone || "—")}" disabled></label>
+            <label class="field"><span>تاريخ التعيين</span><input name="hireDate" type="date" value="${escapeHtml(selectedEmployeeProfile.hireDate || "")}"></label>
+            <label class="field"><span>الرقم القومي</span><input name="nationalId" value="${escapeHtml(selectedEmployeeProfile.nationalId || "")}" maxlength="32"></label>
+            <label class="field"><span>العنوان</span><input name="address" value="${escapeHtml(selectedEmployeeProfile.address || "")}" maxlength="240"></label>
+            <label class="field"><span>جهة اتصال للطوارئ</span><input name="emergencyContact" value="${escapeHtml(selectedEmployeeProfile.emergencyContact || "")}" maxlength="120"></label>
+            <label class="field"><span>بيانات / طبيعة العمل</span><input name="workDescription" value="${escapeHtml(selectedEmployeeProfile.workDescription || "")}" maxlength="240" placeholder="القسم، التخصص، أو طبيعة المهام"></label>
+            <label class="field"><span>موقع / خط العمل</span><input name="workLocation" value="${escapeHtml(selectedEmployeeProfile.workLocation || "")}" maxlength="160"></label>
+            <label class="field"><span>نوع التعاقد</span><input name="employmentType" value="${escapeHtml(selectedEmployeeProfile.employmentType || "")}" maxlength="100" placeholder="دوام كامل، مؤقت..."></label>
+            <label class="field wide"><span>ملاحظات وظيفية</span><textarea name="employmentNotes" rows="2" maxlength="500">${escapeHtml(selectedEmployeeProfile.employmentNotes || "")}</textarea></label>
+            <div class="form-actions wide"><button class="button button-primary" type="submit">حفظ البيانات الشخصية</button></div>
+          </div>
+        </form>
+        ${panel("ربط حساب تسجيل الدخول", `<p>${selectedEmployeeLinkedAccountId
+          ? `الحساب المرتبط: ${escapeHtml(data.users.find((account) => account.id === selectedEmployeeLinkedAccountId)?.username || selectedEmployee.username)}`
+          : "ملف العامل غير مرتبط حالياً بحساب تسجيل دخول."}</p>
+          <div class="workforce-account-link">
+            <label class="field"><span>اختر حساب عامل / مشرف غير مرتبط (بما فيها الحسابات المعلقة)</span><select name="linkedUserId" data-workforce-link-account="${escapeHtml(selectedEmployee.id)}"><option value="">اختر الحساب</option>${workforceAccountLinkOptions(selectedEmployee, data)}</select></label>
+            <div class="form-actions"><button type="button" class="button button-primary" data-link-workforce-account="${escapeHtml(selectedEmployee.id)}">ربط الحساب</button>${selectedEmployeeLinkedAccountId ? `<button type="button" class="row-action order-delete-action" data-unlink-workforce-account="${escapeHtml(selectedEmployee.id)}">فك الارتباط</button>` : ""}</div>
+          </div>`, "فك الارتباط يوقف صلاحية دخول الحساب السابق مع الاحتفاظ بملف العامل وسجلاته.")}
+      </div>
     </section>    </div>` : "";
     const newEmployeeModal = showNewWorkforceEmployeeModal ? `<div class="modal-backdrop workforce-profile-backdrop" data-new-workforce-employee-modal>
       <section class="modal-card workforce-profile-modal workforce-new-employee-modal" role="dialog" aria-modal="true" aria-labelledby="new-workforce-employee-title">
@@ -4230,7 +4262,10 @@ function workforceView(data) {
     .map((record) => {
       const worker = employees.find((entry) => entry.id === record.workerId);
       const decisionLabel = { official: "اللائحة الرسمية", actual_time: "الوقت الفعلي", waived: "إعفاء" }[record.decision] || "—";
-      return `<tr><td>${formatRecordDate(record.date)}</td><td>${escapeHtml(worker?.name || record.workerName || "عامل")}</td><td>${escapeHtml(record.ruleLabel || workforceRuleTitle(settings, record.ruleKey))}</td><td>${escapeHtml(record.decisionDescription || decisionLabel)}</td><td>${workforceMoney(record.deductionAmount || 0)}</td><td>${escapeHtml(record.notes || "—")}</td></tr>`;
+      const deleteAction = ["official", "actual_time"].includes(record.decision) && Number(record.deductionAmount) > 0
+        ? `<button type="button" class="row-action order-delete-action" data-delete-workforce-deduction="${escapeHtml(record._recordId)}">إلغاء الخصم</button>`
+        : "—";
+      return `<tr><td>${formatRecordDate(record.date)}</td><td>${escapeHtml(worker?.name || record.workerName || "عامل")}</td><td>${escapeHtml(record.ruleLabel || workforceRuleTitle(settings, record.ruleKey))}</td><td>${escapeHtml(record.decisionDescription || decisionLabel)}</td><td>${workforceMoney(record.deductionAmount || 0)}</td><td>${escapeHtml(record.notes || "—")}</td><td>${deleteAction}</td></tr>`;
     });
   const disciplinarySettingsForm = `<form class="workforce-settings-form form-grid">
     <label class="field"><span>بداية الدوام الافتراضية</span><input name="shiftStart" type="time" value="${escapeHtml(settings.shiftStart)}" required></label>
@@ -4279,7 +4314,7 @@ function workforceView(data) {
     </div>
     <div class="workforce-panel" data-workforce-panel="discipline"${activeWorkforceTab === "discipline" ? "" : " hidden"}>
       ${panel("تسجيل مخالفة وقرار الخصم", violationForm, "أضف بنود الخصم يدويًا من الإعدادات، ثم اختر العامل والبند وقرار الخصم.")}
-      ${panel("سجل المخالفات والقرارات", violationRows.length ? table(["التاريخ","العامل","المخالفة","قرار الخصم","المبلغ","ملاحظات"], violationRows) : '<div class="empty-state">لا توجد مخالفات مسجلة.</div>')}
+      ${panel("سجل المخالفات والقرارات", violationRows.length ? table(["التاريخ","العامل","المخالفة","قرار الخصم","المبلغ","ملاحظات","الإجراء"], violationRows) : '<div class="empty-state">لا توجد مخالفات مسجلة.</div>')}
       ${panel("إعدادات الدوام والخصومات", disciplinarySettingsForm, "تُحفظ البنود التي تضيفها يدويًا وتظهر للاختيار عند تسجيل الخصم؛ السجلات السابقة تحتفظ بقرارها.")}
     </div>
     <div class="workforce-panel" data-workforce-panel="settlements"${activeWorkforceTab === "settlements" ? "" : " hidden"}>
@@ -4291,7 +4326,7 @@ function workforceView(data) {
     ${employeeProfileModal}
     ${newEmployeeModal}
     <div class="modal-backdrop" data-workforce-attendance-modal hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="workforce-attendance-title"><button class="modal-close" type="button" data-close-workforce-attendance aria-label="إغلاق">×</button><h2 id="workforce-attendance-title">تعديل حالة اليوم</h2><form class="workforce-attendance-form modal-form"><input type="hidden" name="workerId"><input type="hidden" name="date"><label>حالة اليوم<select name="status"></select></label><label class="workforce-inline-check"><input name="paidLeave" type="checkbox" checked> الإجازة مدفوعة الأجر</label><label>ملاحظات<textarea name="notes" rows="2" maxlength="400"></textarea></label><div class="form-actions"><button class="button button-primary" type="submit">حفظ الحالة</button><button class="row-action" type="button" data-close-workforce-attendance>إلغاء</button></div></form></section></div>
-    <div class="modal-backdrop workforce-absence-backdrop" data-workforce-absence-modal ${pendingWorkforceAbsenceDecision ? "" : "hidden"}><section class="modal-card compact-view-modal" role="dialog" aria-modal="true" aria-labelledby="workforce-absence-title"><button class="modal-close" type="button" data-close-workforce-absence aria-label="إغلاق">×</button><h2 id="workforce-absence-title">تسجيل الغياب وتحديد الخصم</h2><p data-workforce-absence-summary>${pendingWorkforceAbsenceDecision ? `${escapeHtml(workforceEmployees(data).find((worker) => worker.id === pendingWorkforceAbsenceDecision.workerId)?.name || "")} · ${escapeHtml(pendingWorkforceAbsenceDecision.date)}` : ""}</p><div class="workforce-late-actions"><button type="button" class="button button-primary" data-absence-permission="permitted" aria-pressed="false">غياب بإذن · خصم يوم واحد</button><button type="button" class="button button-secondary" data-absence-permission="unexcused" aria-pressed="false">غياب بدون إذن · خصم يومين</button></div><div class="form-actions"><button type="button" class="button button-primary" data-save-workforce-absence disabled>حفظ الغياب والخصم</button></div></section></div>
+    <div class="modal-backdrop workforce-absence-backdrop" data-workforce-absence-modal ${pendingWorkforceAbsenceDecision ? "" : "hidden"}><section class="modal-card compact-view-modal" role="dialog" aria-modal="true" aria-labelledby="workforce-absence-title"><button class="modal-close" type="button" data-close-workforce-absence aria-label="إغلاق">×</button><h2 id="workforce-absence-title">تسجيل الغياب وتحديد الخصم</h2><p data-workforce-absence-summary>${pendingWorkforceAbsenceDecision ? `${escapeHtml(workforceEmployees(data).find((worker) => worker.id === pendingWorkforceAbsenceDecision.workerId)?.name || "")} · ${escapeHtml(pendingWorkforceAbsenceDecision.date)}` : ""}</p><div class="workforce-late-actions"><button type="button" class="button button-primary" data-absence-permission="permitted" aria-pressed="false">غياب بإذن · خصم يوم واحد</button><button type="button" class="button button-secondary" data-absence-permission="unexcused" aria-pressed="false">غياب بدون إذن · لا أجر لليوم + جزاء يوم</button></div><div class="form-actions"><button type="button" class="button button-primary" data-save-workforce-absence disabled>حفظ الغياب والخصم</button></div></section></div>
     <div class="modal-backdrop" data-workforce-clock-modal hidden><section class="modal-card compact-view-modal" role="dialog" aria-modal="true" aria-labelledby="workforce-clock-title"><button class="modal-close" type="button" data-close-workforce-clock aria-label="إغلاق">×</button><h2 id="workforce-clock-title">تعديل الوقت</h2><form class="workforce-clock-form modal-form"><input type="hidden" name="workerId"><input type="hidden" name="date"><input type="hidden" name="clockType"><label>الوقت الجديد<input name="time" type="time" required></label><div class="form-actions"><button class="button button-primary" type="submit">حفظ الوقت</button><button class="row-action" type="button" data-close-workforce-clock>إلغاء</button></div></form></section></div>
     <div class="modal-backdrop workforce-late-backdrop" data-workforce-late-modal ${pendingWorkforceLateDecision ? "" : "hidden"}><section class="modal-card compact-view-modal" role="dialog" aria-modal="true" aria-labelledby="workforce-late-title"><button class="modal-close" type="button" data-close-workforce-late aria-label="إغلاق">×</button><h2 id="workforce-late-title">تم تسجيل حضور متأخر</h2><p data-workforce-late-summary>${pendingWorkforceLateDecision ? `${escapeHtml(workforceEmployees(data).find((worker) => worker.id === pendingWorkforceLateDecision.workerId)?.name || "")} · تأخير ${pendingWorkforceLateDecision.delay} دقيقة · اختر قرار الخصم الآن.` : ""}</p><div class="workforce-late-actions"><button type="button" class="button button-primary${pendingWorkforceLateDecision?.decision === "official" ? " active" : ""}" data-late-decision="official" aria-pressed="${pendingWorkforceLateDecision?.decision === "official"}">تطبيق اللائحة</button><button type="button" class="button button-secondary${pendingWorkforceLateDecision?.decision === "actual_time" ? " active" : ""}" data-late-decision="actual_time" aria-pressed="${pendingWorkforceLateDecision?.decision === "actual_time"}">خصم الوقت الفعلي</button><button type="button" class="row-action${pendingWorkforceLateDecision?.decision === "waived" ? " active" : ""}" data-late-decision="waived" aria-pressed="${pendingWorkforceLateDecision?.decision === "waived"}">إعفاء من الخصم</button></div><div class="form-actions"><button type="button" class="button button-primary" data-save-late-decision ${pendingWorkforceLateDecision?.decision ? "" : "disabled"}>حفظ قرار الخصم</button></div></section></div>
   </section>`;
@@ -4376,6 +4411,7 @@ function bindWorkforceActions(session) {
         }, null, account?.id || null);
         showNewWorkforceEmployeeModal = false;
         selectedWorkforceEmployeeId = workerId;
+        selectedWorkforceProfileTab = "finance";
         try {
           await refresh();
           window.factoryUI.toast(account
@@ -4397,21 +4433,50 @@ function bindWorkforceActions(session) {
   }));
   root.querySelectorAll("[data-workforce-employee]").forEach((button) => button.addEventListener("click", () => {
     selectedWorkforceEmployeeId = button.dataset.workforceEmployee;
+    selectedWorkforceProfileTab = "finance";
     render(session, dashboardData, dashboardData.pendingAccounts || []);
   }));
   root.querySelector("[data-close-workforce-profile]")?.addEventListener("click", () => {
     selectedWorkforceEmployeeId = "";
     render(session, dashboardData, dashboardData.pendingAccounts || []);
   });
+  root.querySelectorAll("[data-workforce-profile-tab]").forEach((button) => button.addEventListener("click", () => {
+    selectedWorkforceProfileTab = button.dataset.workforceProfileTab;
+    root.querySelectorAll("[data-workforce-profile-tab]").forEach((tab) => {
+      const isActive = tab.dataset.workforceProfileTab === selectedWorkforceProfileTab;
+      tab.classList.toggle("active", isActive);
+      tab.setAttribute("aria-selected", String(isActive));
+    });
+    root.querySelectorAll("[data-workforce-profile-panel]").forEach((panel) => {
+      panel.hidden = panel.dataset.workforceProfilePanel !== selectedWorkforceProfileTab;
+    });
+  }));
+  root.querySelectorAll("[data-delete-workforce-deduction]").forEach((button) => button.addEventListener("click", async () => {
+    const record = dashboardData.workforceViolations.find((entry) =>
+      entry._recordId === button.dataset.deleteWorkforceDeduction
+    );
+    if (!record) {
+      window.factoryUI.toast("تعذر العثور على بند الخصم لإلغائه.", "error");
+      return;
+    }
+    if (!await window.factoryUI.confirmAction({
+      title: "إلغاء الخصم",
+      message: `سيتم حذف خصم ${record.ruleLabel || workforceRuleTitle(workforceSettings(dashboardData), record.ruleKey)} بقيمة ${workforceMoney(record.deductionAmount || 0)} وإعادة احتساب حساب العامل.`,
+      confirmLabel: "إلغاء الخصم"
+    })) return;
+    button.disabled = true;
+    try {
+      await deleteFlexibleRecord("workforce_violations", record._recordId);
+      await refresh();
+      window.factoryUI.toast("تم إلغاء الخصم وإعادة احتساب حساب العامل.");
+    } catch (error) {
+      reportDashboardFailure(session, "تعذر إلغاء الخصم", error);
+    } finally {
+      button.disabled = false;
+    }
+  }));
   const employeeProfileForm = root.querySelector(".workforce-personal-form");
   if (employeeProfileForm) {
-    const preview = () => {
-      employeeProfileForm.querySelector("[data-workforce-rate-preview]").textContent =
-        workforceRatePreview(employeeProfileForm.elements.wageBasis.value, employeeProfileForm.elements.wageAmount.value);
-    };
-    employeeProfileForm.addEventListener("input", preview);
-    employeeProfileForm.addEventListener("change", preview);
-    preview();
     employeeProfileForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -4419,11 +4484,6 @@ function bindWorkforceActions(session) {
     const worker = workforceEmployees(dashboardData).find((entry) => entry.id === workerId);
     if (!worker) return;
     const existing = workforceProfile(dashboardData, workerId);
-    const wageAmount = form.elements.wageAmount.value.trim() ? Number(form.elements.wageAmount.value) : 0;
-    if (form.elements.wageAmount.value.trim() && (!Number.isFinite(wageAmount) || wageAmount <= 0)) {
-      window.factoryUI.toast("أدخل مرتباً أساسياً صالحاً أكبر من صفر أو اترك الحقل فارغاً.", "error");
-      return;
-    }
     const submit = form.querySelector('[type="submit"]');
     submit.disabled = true;
     try {
@@ -4436,8 +4496,6 @@ function bindWorkforceActions(session) {
         workDescription: form.elements.workDescription.value.trim(),
         workLocation: form.elements.workLocation.value.trim(),
         employmentType: form.elements.employmentType.value.trim(),
-        wageBasis: form.elements.wageBasis.value,
-        wageAmount: wageAmount || existing.wageAmount || 0,
         jobTitle: form.elements.jobTitle.value,
         employmentNotes: form.elements.employmentNotes.value.trim()
       }, existing._recordId || null, workforceLinkedAccountId(worker, dashboardData));
@@ -4452,12 +4510,50 @@ function bindWorkforceActions(session) {
         if (titleError) throw titleError;
       }
       await refresh();
-      window.factoryUI.toast("تم حفظ المسمى والمرتب والبيانات الوظيفية والشخصية.");
+      window.factoryUI.toast("تم حفظ البيانات الشخصية والوظيفية.");
     } catch (error) {
       reportDashboardFailure(session, "تعذر حفظ ملف العامل", error);
     } finally {
       submit.disabled = false;
     }
+    });
+  }
+  const employeeWageForm = root.querySelector(".workforce-wage-form");
+  if (employeeWageForm) {
+    const preview = () => {
+      employeeWageForm.querySelector("[data-workforce-rate-preview]").textContent =
+        workforceRatePreview(employeeWageForm.elements.wageBasis.value, employeeWageForm.elements.wageAmount.value);
+    };
+    employeeWageForm.addEventListener("input", preview);
+    employeeWageForm.addEventListener("change", preview);
+    preview();
+    employeeWageForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const workerId = form.dataset.workforceWageForm;
+      const worker = workforceEmployees(dashboardData).find((entry) => entry.id === workerId);
+      if (!worker) return;
+      const wageAmount = Number(form.elements.wageAmount.value);
+      if (!Number.isFinite(wageAmount) || wageAmount <= 0) {
+        window.factoryUI.toast("أدخل قيمة أجر صحيحة أكبر من صفر قبل حفظ ملف العامل.", "error");
+        return;
+      }
+      const existing = workforceProfile(dashboardData, workerId);
+      const submit = form.querySelector('[type="submit"]');
+      submit.disabled = true;
+      try {
+        await saveFlexibleRecord("workforce_profiles", {
+          ...workforceEmployeeProfilePayload(worker, existing, dashboardData),
+          wageBasis: form.elements.wageBasis.value,
+          wageAmount
+        }, existing._recordId || null, workforceLinkedAccountId(worker, dashboardData));
+        await refresh();
+        window.factoryUI.toast("تم حفظ أساس الأجر وقيمته للعامل.");
+      } catch (error) {
+        reportDashboardFailure(session, "تعذر حفظ أجر العامل", error);
+      } finally {
+        submit.disabled = false;
+      }
     });
   }
   root.querySelectorAll("[data-link-workforce-account]").forEach((button) => button.addEventListener("click", async () => {
@@ -4810,14 +4906,19 @@ function bindWorkforceActions(session) {
       window.factoryUI.toast("تعذر العثور على ملف العامل لتسجيل الغياب.", "error");
       return;
     }
-    const existingAttendance = workforceAttendanceRecord(dashboardData, worker.id, pending.date);
-    const deductionDays = pending.permission === "permitted" ? 1 : 2;
     const profile = workforceProfile(dashboardData, worker.id);
     const settings = workforceSettings(dashboardData);
-    const amount = workforceWageRates(profile, settings, pending.date.slice(0, 7), dashboardData, worker.id).daily * deductionDays;
+    const rates = workforceWageRates(profile, settings, pending.date.slice(0, 7), dashboardData, worker.id);
+    if (rates.rate <= 0) {
+      window.factoryUI.toast("سجل أجر العامل أولاً حتى يمكن احتساب خصم يوم الغياب.", "error");
+      return;
+    }
+    const existingAttendance = workforceAttendanceRecord(dashboardData, worker.id, pending.date);
+    const deductionDays = 1;
+    const amount = rates.daily * deductionDays;
     const decisionDescription = pending.permission === "permitted"
       ? "غياب بإذن · خصم يوم واحد"
-      : "غياب بدون إذن · خصم يومين (يوم الغياب + يوم جزاء)";
+      : "غياب بدون إذن · لا أجر لليوم + جزاء يوم واحد";
     button.disabled = true;
     try {
       await saveFlexibleRecord("workforce_attendance", {

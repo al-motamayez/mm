@@ -528,6 +528,22 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .workforce-profile-heading h2 { margin: 0; }
 .workforce-profile-heading p { margin: 5px 0 0; color: var(--muted); }
 .workforce-profile-stats { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); margin: 14px 0; }
+.workforce-profile-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin: 0 0 16px; padding: 5px; border-radius: 11px; background: #f0f4f1; }
+.workforce-profile-tab { min-height: 44px; padding: 9px 12px; border: 0; border-radius: 8px; color: #69766f; background: transparent; font-weight: 600; }
+.workforce-profile-tab.active { color: var(--green); background: #fff; box-shadow: 0 1px 5px #1c302d12; }
+.workforce-profile-tab-panel { display: grid; gap: 14px; min-width: 0; }
+.workforce-wage-form { display: grid; gap: 12px; }
+.workforce-wage-form h3 { margin: 0; color: var(--green-dark); font-size: 16px; }
+.workforce-finance-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.workforce-finance-card { min-width: 0; padding: 18px; border: 1px solid #e0e9e3; border-radius: 14px; background: #fff; box-shadow: 0 5px 18px #193f2b08; }
+.workforce-finance-card h3 { margin: 0 0 14px; color: var(--green-dark); font-size: 16px; }
+.workforce-finance-card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)); gap: 10px; }
+.workforce-finance-card-grid > div { display: grid; min-width: 0; align-content: start; gap: 5px; padding: 12px; border: 1px solid #e7ece8; border-radius: 9px; background: #f8faf8; }
+.workforce-finance-card-grid > div.is-net { border-color: #c9ddcf; background: #f1f8f3; }
+.workforce-finance-card-grid span, .workforce-finance-card-grid small { color: var(--muted); font-size: 11px; }
+.workforce-finance-card-grid strong { overflow-wrap: anywhere; color: var(--green-dark); font-size: 16px; }
+.workforce-personal-form { display: grid; gap: 12px; }
+.workforce-personal-form > h3, .workforce-personal-form > .workforce-profile-fields { grid-column: 1 / -1; }
 .workforce-personal-form, .workforce-new-employee-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 16px; }
 .workforce-profile-section.wide { grid-column: 1 / -1; }
 .workforce-profile-section { min-width: 0; padding: 20px; border: 1px solid #e0e9e3; border-radius: 14px; background: #fbfdfb; box-shadow: 0 5px 18px #193f2b08; }
@@ -581,6 +597,7 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
   .workforce-profile-backdrop { padding: 16px 10px; }
   .workforce-profile-modal { width: 96vw; max-width: 96vw; padding: 18px; }
   .workforce-profile-heading { flex-direction: column; padding-inline-end: 24px; }
+  .workforce-finance-cards { grid-template-columns: minmax(0, 1fr); }
   .workforce-personal-form, .workforce-new-employee-form, .workforce-profile-fields,
   .workforce-new-employee-modal .workforce-profile-section .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; }
   .worker-account-heading { align-items: flex-start; flex-direction: column; padding: 17px; }
