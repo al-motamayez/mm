@@ -166,8 +166,27 @@ input:focus, select:focus { border-color: #5e9b83; box-shadow: 0 0 0 3px #5e9b83
 .stat-detail-list b { flex: 0 0 auto; white-space: nowrap; }
 .stat-detail-list b::before { content: "|"; margin-inline-end: 6px !important; }
 .stat-detail-empty { padding: 0 !important; }
-.sewing-order-grid { display: grid; gap: 14px; padding: 14px; }
+.sewing-order-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 400px), 1fr)); gap: 14px; padding: 14px; }
 .sewing-order-card { display: grid; grid-template-columns: auto minmax(180px, 1.2fr) minmax(260px, 2fr) auto; align-items: center; min-width: 0; gap: 14px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
+.production-compact-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; min-width: 0; padding: 13px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
+.production-compact-heading { display: flex; grid-column: 1 / -1; min-width: 0; align-items: center; flex-wrap: wrap; gap: 10px; }
+.production-compact-heading h3 { flex: 1; min-width: 0; margin: 0; overflow-wrap: anywhere; color: var(--green-dark); font-size: 16px; }
+.production-compact-heading > .status { margin-inline-start: auto; }
+.production-compact-heading .model-image-trigger { flex: 0 0 54px; width: 54px; height: 54px; }
+.production-compact-heading .model-thumbnail { width: 54px; height: 54px; }
+.production-compact-total { color: var(--green-dark); font-size: 15px; }
+.production-compact-facts { display: grid; grid-column: 1 / -1; gap: 7px; min-width: 0; }
+.production-compact-facts > div { display: flex; min-width: 0; align-items: flex-start; gap: 8px; }
+.production-compact-facts > div > span:first-child { flex: 0 0 55px; padding-top: 3px; color: var(--muted); font-size: 11px; }
+.production-compact-card > .form-actions { grid-column: 1 / -1; margin: 0; }
+.order-compact-row.production-compact-card { grid-column: 1 / -1; grid-template-columns: minmax(0, 1fr) auto; }
+.order-compact-row.production-compact-card > .row-action { grid-column: auto; justify-self: start; }
+.order-compact-row.production-compact-card > .order-card-actions { grid-column: 1 / -1; margin: 0; padding-top: 8px; }
+.production-editor-modal-card { width: min(1000px, 100%); max-height: min(92vh, 900px); }
+.production-editor-modal-card > h2 { margin: 0 0 16px; color: var(--green-dark); font-size: 18px; }
+.production-editor-modal-card .cutting-finish-form { display: grid; gap: 12px; }
+.production-editor-modal-card .sewing-editor-form { display: grid; gap: 10px; }
+.production-editor-modal-card .cutting-calculated-total { margin: 0; }
 .sewing-order-quantity { margin: 0; color: var(--muted); }
 .sewing-order-quantity strong { color: var(--green-dark); }
 .sewing-order-quantity span { display: block; font-size: 11px; }
@@ -203,6 +222,8 @@ input:focus, select:focus { border-color: #5e9b83; box-shadow: 0 0 0 3px #5e9b83
 .sewing-order-heading .model-thumbnail { width: 76px; height: 76px; }
 .sewing-order-heading h3 { margin: 0 0 4px; }
 .sewing-order-card > .form-actions { flex-wrap: nowrap; margin: 0; }
+.sewing-order-card.production-compact-card { grid-template-columns: minmax(0, 1fr) auto; align-items: start; }
+.production-compact-card > .form-actions { flex-wrap: wrap; }
 .sewing-order-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)); gap: 9px; margin: 0; }
 .sewing-order-facts > div { display: grid; min-width: 0; gap: 4px; padding: 10px 12px; border: 1px solid #e7ece8; border-radius: 8px; background: #f8faf8; }
 .sewing-order-facts dt { color: var(--muted); font-size: 11px; }
@@ -451,9 +472,9 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .model-color-chip small { color: var(--muted); font-size: 10px; }
 .cutting-calculated-total { margin: 0; padding: 13px 15px; border-radius: 9px; color: var(--green-dark); background: var(--green-pale); font-weight: 600; }
 .cutting-calculated-total strong { font-size: 20px; }
-.cutting-order-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; padding: 10px; }
+.cutting-order-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 460px), 1fr)); gap: 10px; padding: 10px; }
 .cutting-order-card { min-width: 0; padding: 12px; }
-.cutting-admin-order-grid { display: grid; gap: 12px; padding: 12px; }
+.cutting-admin-order-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 12px; padding: 12px; }
 .cutting-admin-order-card { display: grid; min-width: 0; gap: 12px; padding: 15px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
 .cutting-admin-order-heading { display: flex; min-width: 0; align-items: center; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid #edf1ed; }
 .cutting-admin-order-heading > div { flex: 1; min-width: 0; }
