@@ -81,6 +81,12 @@ const WORKFLOW_MANAGED_FACTORY_ORDER_STATUSES = [
   "جاري الطباعة", "تمت الطباعة", "جاري التكييس", "تم التكييس",
   "جاري الفرز", "تم الفرز", "مكتمل", "جاهز للتسليم"
 ];
+
+function isFactoryOrderWorkflowManaged(order) {
+  return WORKFLOW_MANAGED_FACTORY_ORDER_STATUSES
+    .includes(canonicalFactoryOrderStatus(order.storedStatus || order.status))
+    || ["متاح للخياطة", "قيد الخياطة", "قيد التنفيذ", "مكتمل"].includes(order.sewingStageStatus || "");
+}
 const roleInfo = {
   admin: { title: "لوحة تحكم الإدارة", description: "نظرة شاملة على المصنع وإدارة بيانات التشغيل.", icon: "▦" },
   cutting: { title: "لوحة مشرف القص", description: "متابعة أوامر الإدارة وتسجيل بيانات الفرش والقص.", icon: "✂" },
@@ -556,6 +562,12 @@ async function readDashboardData(session) {
       .reduce((maximum, stage) => Math.max(maximum, Number(stage.completed_quantity || 0)), 0);
     const originalQuantity = Number(order.original_total_pieces ?? order.total_pieces ?? 0);
     const deliveredPieces = Number(order.delivered_pieces || 0);
+    const storedStatus = order.status || "";
+    const sewingStageStatus = sewingStage?.status || "";
+    const effectiveStatus = effectiveFactoryOrderStatus({
+      storedStatus,
+      sewingStageStatus
+    });
     return {
       id: order.id,
       clientId: order.client_id,
@@ -606,13 +618,13 @@ async function readDashboardData(session) {
       paidAmount: Number(order.paid_amount || 0),
       remainingAmount: Number(order.remaining_amount || 0),
       expectedDeliveryDate: order.expected_delivery_date || "",
-      status: canonicalFactoryOrderStatus(order.status),
+      status: effectiveStatus.status,
       cuttingStageStatus: cuttingStage?.status || "",
-      sewingStageStatus: sewingStage?.status || "",
-      storedStatus: order.status,
-      displayStatus: canonicalFactoryOrderStatus(order.status) === "قيد الفرش" && Number(cuttingStage?.layer_count) > 0
+      sewingStageStatus,
+      storedStatus,
+      displayStatus: effectiveStatus.status === "قيد الفرش" && Number(cuttingStage?.layer_count) > 0
         ? `قيد الفرش - تم فرش ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(cuttingStage.layer_count)} راقات`
-        : canonicalFactoryOrderStatus(order.status),
+        : effectiveStatus.label,
       cuttingPlys: Number(cuttingStage?.layer_count || 0),
       fabric: cuttingStage?.fabric || "",
       fabricDetails: cuttingStage?.fabric_details || "",
@@ -867,6 +879,23 @@ function canonicalFactoryOrderStatus(status) {
     "تم الانتهاء": "تم التسليم"
   };
   return aliases[status] || status || "قيد الانتظار";
+}
+
+function effectiveFactoryOrderStatus(order) {
+  const sewingStageStatus = order.sewingStageStatus || "";
+  if (["متاح للخياطة", "في انتظار الخياطة"].includes(sewingStageStatus)) {
+    return { status: "في انتظار الخياطة", label: "في انتظار الخياطة" };
+  }
+  if (["قيد الخياطة", "قيد التنفيذ"].includes(sewingStageStatus)) {
+    return { status: "جاري الخياطة", label: "قيد الخياطة" };
+  }
+
+  const storedStatus = canonicalFactoryOrderStatus(order.storedStatus || order.status);
+  if (sewingStageStatus === "مكتمل"
+      && ["تم القص", "في انتظار الخياطة", "جاري الخياطة", "تمت الخياطة"].includes(storedStatus)) {
+    return { status: "تمت الخياطة", label: "ما بعد الخياطة" };
+  }
+  return { status: storedStatus, label: storedStatus };
 }
 
 function factoryOrderStatusSequence(order) {
@@ -8122,8 +8151,7 @@ function bindActions(session) {
     orderForm.elements.savedOrderId.value = "";
     orderForm.elements.editIndex.value = String(orderIndex);
     const closedOrder = LOCKED_FACTORY_ORDER_STATUSES.includes(currentOrder.status);
-    const workflowManagedOrder = WORKFLOW_MANAGED_FACTORY_ORDER_STATUSES
-      .includes(canonicalFactoryOrderStatus(currentOrder.storedStatus || currentOrder.status));
+    const workflowManagedOrder = isFactoryOrderWorkflowManaged(currentOrder);
     orderForm.querySelector("[data-original-quantity-field]").hidden = !closedOrder;
     orderForm.elements.originalQuantity.value = String(currentOrder.originalQuantity);
     orderForm.elements.status.disabled = closedOrder || workflowManagedOrder;
@@ -8703,8 +8731,7 @@ function bindActions(session) {
     const quantity = quantityValue ? Number(quantityValue) : sizeQuantity;
     const deliveredPieces = Number(formData.get("deliveredPieces"));
     const currentStoredStatus = existingOrder?.storedStatus || existingOrder?.status || "";
-    const isWorkflowManagedOrder = WORKFLOW_MANAGED_FACTORY_ORDER_STATUSES
-      .includes(canonicalFactoryOrderStatus(currentStoredStatus));
+    const isWorkflowManagedOrder = existingOrder && isFactoryOrderWorkflowManaged(existingOrder);
     const requestedStatus = String(formData.get("status") || currentStoredStatus);
     const statusForSave = existingOrder && (isWorkflowManagedOrder
       || canonicalFactoryOrderStatus(requestedStatus) === existingOrder.status)
