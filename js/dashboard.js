@@ -857,6 +857,7 @@ function canonicalFactoryOrderStatus(status) {
     "تم الفرش / جاهز للقص": "جاهز للقص",
     "معلق - في انتظار الخياطة": "في انتظار الخياطة",
     "متاح للخياطة": "في انتظار الخياطة",
+    "قيد الخياطة": "جاري الخياطة",
     "في الخياطة": "جاري الخياطة",
     "في الخط": "جاري الخياطة",
     "متاح للإمبلاج / التعبئة": "تمت الخياطة",
@@ -884,12 +885,40 @@ function factoryOrderStatusSequence(order) {
   return statuses;
 }
 
-function isFactoryOrderInProduction(order) {
-  const statusSequence = factoryOrderStatusSequence(order).map(canonicalFactoryOrderStatus);
-  const currentStatus = canonicalFactoryOrderStatus(order.storedStatus || order.status);
-  const currentIndex = statusSequence.indexOf(currentStatus);
-  return currentIndex > statusSequence.indexOf("قيد الانتظار")
-    && currentIndex < statusSequence.indexOf("جاهز للتسليم");
+function factoryOrderPipelineCategory(order) {
+  const sewingStageStatus = order.sewingStageStatus || "";
+  if (["متاح للخياطة", "في انتظار الخياطة"].includes(sewingStageStatus)) return "waiting_sewing";
+  if (["قيد الخياطة", "قيد التنفيذ"].includes(sewingStageStatus)) return "sewing";
+  if (sewingStageStatus === "مكتمل") return "post_sewing";
+
+  const status = canonicalFactoryOrderStatus(order.storedStatus || order.status);
+  if ([
+    "تمت الخياطة", "جاري التشطيب", "تم التشطيب", "جاري المكواة", "تم الكي",
+    "جاري الطباعة", "تمت الطباعة", "جاري التكييس", "تم التكييس",
+    "جاري الفرز", "تم الفرز", "مكتمل", "جاهز للتسليم", "تم التسليم"
+  ].includes(status)) return "post_sewing";
+  if (["جاري الخياطة"].includes(status)) return "sewing";
+  if (["في انتظار الخياطة", "تم القص"].includes(status)) return "waiting_sewing";
+
+  if (["مكتمل", "تم القص"].includes(order.cuttingStageStatus || "")
+      && (order.workStages || []).includes("sewing")) return "waiting_sewing";
+  if (["قيد الانتظار", "قيد الفرش", "تم الفرش", "جاهز للقص"].includes(status)) return "before_cutting";
+  return "unclassified";
+}
+
+function factoryOrderPipelineGroups(orders) {
+  const groups = [
+    { key: "before_cutting", label: "قبل القص", orders: [] },
+    { key: "waiting_sewing", label: "في انتظار الخياطة", orders: [] },
+    { key: "sewing", label: "قيد الخياطة / جاري الخياطة", orders: [] },
+    { key: "post_sewing", label: "ما بعد الخياطة", orders: [] },
+    { key: "unclassified", label: "حالات غير مصنفة", orders: [] }
+  ];
+  const groupsByKey = new Map(groups.map((group) => [group.key, group]));
+  for (const order of orders) {
+    groupsByKey.get(factoryOrderPipelineCategory(order)).orders.push(order);
+  }
+  return groups;
 }
 
 function cuttingDetailsMarkup(order) {
@@ -2145,8 +2174,8 @@ function clientAccountCards(data) {
   return `<div class="client-account-grid">${clients.map((client) => {
     const summary = clientAccountSummary(client, data);
     const linkedUser = data.users.find((user) => user.id === client.user_id);
-    const underConstructionOrders = summary.orders.filter((order) => order.status === "قيد الانتظار");
-    const inProductionOrders = summary.orders.filter(isFactoryOrderInProduction);
+    const pipelineGroups = factoryOrderPipelineGroups(summary.orders)
+      .filter((group) => group.key !== "unclassified" || group.orders.length);
     const unpricedOrders = summary.orders.filter((order) => order.pricePerPiece <= 0);
     const uncountedOrders = summary.orders.filter((order) => order.quantity <= 0);
     const modelMetric = (label, orders, id) => `<div class="model-preview"><span>${label}</span><button class="model-preview-trigger" type="button" aria-label="${orders.length} ${label}" aria-describedby="${id}"${orders.length === 1 ? ` data-open-model-id="${escapeHtml(orders[0].id)}"` : ""}>${orders.length}</button>${previewList(orders, id)}</div>`;
@@ -2155,8 +2184,7 @@ function clientAccountCards(data) {
       <div class="client-balance-grid"><div><span>المطلوب بعد خصم المدفوع</span><strong>${money(summary.due)}</strong></div><div><span>الإجمالي المتوقع للطلبات</span><strong>${money(summary.expectedTotal)}</strong></div><div><span>المطلوب بعد التسليم</span><strong>${money(summary.requiredAfterDelivery)}</strong></div><div><span>المدفوع</span><strong>${money(summary.paid)}</strong></div><div><span>الرصيد المتبقي</span><strong>${money(summary.balance)}</strong><small>${summary.balance === 0 ? "تم السداد بالكامل" : summary.balance < 0 ? "رصيد دائن للعميل" : "مستحق على العميل"}</small></div></div>
       ${unpricedOrders.length ? '<p class="client-unpriced-alert" role="status">يوجد موديلات لم تحدد أسعارها بعد</p>' : ""}
       <div class="client-activity-grid">
-        ${modelMetric("قيد الانتظار", underConstructionOrders, `construction-${escapeHtml(client.id)}`)}
-        ${modelMetric("قيد التصنيع", inProductionOrders, `production-${escapeHtml(client.id)}`)}
+        ${pipelineGroups.map((group) => modelMetric(group.label, group.orders, `pipeline-${group.key}-${escapeHtml(client.id)}`)).join("")}
         ${modelMetric("لم يُحدد سعرها", unpricedOrders, `unpriced-${escapeHtml(client.id)}`)}
         ${modelMetric("لم يُحدد عددها", uncountedOrders, `uncounted-${escapeHtml(client.id)}`)}
       </div>
@@ -2255,8 +2283,6 @@ function cashLedgerView(data) {
 
 function adminDashboardView(data) {
   const activeOrders = data.models.filter((order) => !order.archivedAt);
-  const deliveredOrders = activeOrders.filter((order) => LOCKED_FACTORY_ORDER_STATUSES.includes(order.status));
-  const operatingOrders = activeOrders.filter((order) => !LOCKED_FACTORY_ORDER_STATUSES.includes(order.status));
   const drawerIncome = sumMoney([
     ...data.payments.map((payment) => payment.amount),
     ...data.models.map((order) => order.paidAmount),
@@ -2289,23 +2315,24 @@ function adminDashboardView(data) {
     { label: "إيرادات أخرى", note: `${data.cashTransactions.filter((entry) => entry.direction === "income").length} حركة`, value: money(sumMoney(data.cashTransactions.filter((entry) => entry.direction === "income").map((entry) => entry.amount))) },
     { label: "مصروفات ومسحوبات", note: `${data.cashTransactions.filter((entry) => entry.direction === "expense").length + workerCashOutflows(data).length} حركة`, value: money(drawerExpenses) }
   ];
-  const activeOrderDetails = operatingOrders.map((order) => orderDetail(order, order.remainingPieces ?? order.quantity, order.expectedAmount));
-  const deliveredOrderDetails = deliveredOrders.map((order) => orderDetail(order, order.deliveredPieces, order.totalAmount));
-  const groups = [...new Set(operatingOrders.map((order) => canonicalFactoryOrderStatus(order.status)))]
-    .sort((left, right) => {
-      const leftOrder = operatingOrders.find((order) => canonicalFactoryOrderStatus(order.status) === left);
-      const rightOrder = operatingOrders.find((order) => canonicalFactoryOrderStatus(order.status) === right);
-      return factoryOrderStatusSequence(leftOrder).indexOf(left) - factoryOrderStatusSequence(rightOrder).indexOf(right);
-    })
-    .map((status) => [status, operatingOrders.filter((order) => canonicalFactoryOrderStatus(order.status) === status).length]);
+  const pipelineGroups = factoryOrderPipelineGroups(activeOrders)
+    .filter((group) => group.key !== "unclassified" || group.orders.length);
+  const pipelineStats = pipelineGroups.map((group) => {
+    const details = group.orders.map((order) => {
+      const delivered = LOCKED_FACTORY_ORDER_STATUSES.includes(order.status);
+      const quantity = delivered ? order.deliveredPieces : order.remainingPieces ?? order.quantity;
+      const amount = delivered ? order.totalAmount : order.expectedAmount;
+      return orderDetail(order, quantity, amount);
+    });
+    return stat(group.label, group.orders.length, "حسب مرحلة التشغيل الحالية",
+      statDetailList(details, `لا توجد موديلات في مرحلة ${group.label}.`));
+  }).join("");
   return `<div class="stats-grid">${stat("النقدية في الدرج", money(drawerBalance), "", statDetailList(cashDetails))}${stat("مديونيات العملاء", money(customerReceivables), "", statDetailList(clientDebts.map(({ client, amount }) => ({
     label: `${client.name || "عميل بدون اسم"}${client.brand_name ? ` · ${client.brand_name}` : ""}`,
     value: money(amount)
   })), "لا توجد مديونيات مستحقة على العملاء."))}${stat("بضاعة تحت التسليم", money(upcomingReceivables), "", statDetailList(clientSummaries.flatMap((summary) => summary.orders
     .filter((order) => order.expectedAmount > 0)
-    .map((order) => orderDetail(order, order.remainingPieces ?? order.quantity, order.expectedAmount))), "لا توجد بضاعة متبقية للتسليم."))}${stat("شغل حالياً", operatingOrders.length, "طلبات قيد التشغيل", statDetailList(activeOrderDetails, "لا توجد طلبات قيد التشغيل."))}${stat("تم التسليم", deliveredOrders.length, "طلبات تم تسليمها", statDetailList(deliveredOrderDetails, "لا توجد طلبات تم تسليمها."))}${groups.map(([label, value]) => stat(label, value, "", statDetailList(operatingOrders
-    .filter((order) => order.status === label)
-    .map((order) => orderDetail(order, order.remainingPieces ?? order.quantity, order.expectedAmount)), `لا توجد موديلات في مرحلة ${label}.`))).join("")}</div>
+    .map((order) => orderDetail(order, order.remainingPieces ?? order.quantity, order.expectedAmount))), "لا توجد بضاعة متبقية للتسليم."))}${pipelineStats}</div>
     ${panel("آخر الموديلات وحالتها", activeOrders.length
       ? table(["الموديل","العميل","العدد","سعر القطعة","الحالة"], activeOrders.slice(0, 12).map((order) => `<tr><td>${escapeHtml(order.name)}${order.modelNumber ? ` · ${escapeHtml(order.modelNumber)}` : ""}</td><td>${escapeHtml(order.client || "—")}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity)}</td><td>${money(order.pricePerPiece)}</td><td>${statusTag(order.displayStatus || order.status)}</td></tr>`))
       : '<div class="empty-state">لا توجد موديلات حالية.</div>')}`;
@@ -2645,6 +2672,8 @@ function modelDetailsModalView(order, showPricingBreakdown = false) {
 function clientQuickDetailsModalView(client, data) {
   const summary = clientAccountSummary(client, data);
   const orders = summary.orders.slice(0, 8);
+  const pipelineGroups = factoryOrderPipelineGroups(summary.orders)
+    .filter((group) => group.key !== "unclassified" || group.orders.length);
   return `<header class="modal-view-heading"><div><small>ملف العميل</small><h2 id="client-account-modal-title">${escapeHtml(client.name)}</h2><p>${escapeHtml(client.brand_name || "—")} · رقم العميل ${escapeHtml(client.client_number || "—")}</p></div></header>
     <div class="client-balance-primary"><span>الرصيد الحالي</span><strong>${money(summary.balance)}</strong><small>${summary.balance < 0 ? "رصيد دائن للعميل" : summary.balance === 0 ? "تم السداد بالكامل" : "مستحق على العميل"}</small></div>
     <div class="compact-detail-grid">
@@ -2653,7 +2682,11 @@ function clientQuickDetailsModalView(client, data) {
       <div><span>خصومات التسوية</span><strong>${money(summary.accountAdjustmentsTotal)}</strong></div>
       <div><span>المدفوع</span><strong>${money(summary.paid)}</strong></div>
     </div>
-    <h3 class="modal-subheading">شغال حالياً</h3>
+    <h3 class="modal-subheading">حالات الموديلات الحالية</h3>
+    <div class="compact-detail-grid">${pipelineGroups.map((group) =>
+      `<div><span>${escapeHtml(group.label)}</span><strong>${group.orders.length}</strong></div>`
+    ).join("")}</div>
+    <h3 class="modal-subheading">آخر الموديلات</h3>
     ${orders.length ? `<div class="compact-model-list">${orders.map((order) => `<button type="button" class="compact-model-item" data-open-model-id="${escapeHtml(order.id)}"><strong>${escapeHtml(order.name || order.modelNumber || "موديل بدون اسم")}</strong><span>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity)} قطعة · ${money(order.pricePerPiece)}</span>${statusTag(order.displayStatus || order.status)}</button>`).join("")}</div>` : '<p class="empty-state">لا توجد موديلات حالية.</p>'}
     <div class="form-actions"><button class="button button-primary" type="button" data-quick-client-payment="${escapeHtml(client.id)}">إضافة دفعة</button><button class="button button-secondary" type="button" data-edit-customer="${escapeHtml(client.id)}">تعديل ملف العميل</button></div>`;
 }
@@ -3085,11 +3118,9 @@ function cuttingView(data) {
 function cuttingDashboardView(data) {
   const active = data.cutting.filter((item) => ["قيد الانتظار", "قيد الفرش", "تم الفرش", "جاهز للقص"].includes(canonicalFactoryOrderStatus(item.orderStatus)));
   const activeTotal = active.reduce((sum, item) => sum + Number(item.total), 0);
-  const completed = data.cutting.filter((item) => {
-    const orderStatus = canonicalFactoryOrderStatus(item.orderStatus);
-    return factoryOrderStatusSequence({ workStages: WORK_STAGES.map(([key]) => key) }).indexOf(orderStatus) >= 4;
-  });
-  return `<div class="stats-grid">${stat("طلبات الإدارة", active.length, "بانتظار استكمال القص")}${stat("العدد المطلوب لطلبات الإدارة", new Intl.NumberFormat("ar-EG-u-nu-latn").format(activeTotal), "قطعة")}${stat("عمليات قص مكتملة", completed.length, "مسجلة على أوامر الإنتاج")}${stat("أصناف القماش المتاحة", data.fabrics.length, "متابعة مباشرة للمخزون")}</div>${panel("ملخص العمل الحالي", `<div class="empty-state">استخدم «طلبات الإدارة» لمراجعة الأوامر وتسجيل بيانات الفرشة والقص، أو «قصة جديدة» لإنشاء قصة مباشرة.</div>`)}`;
+  const waitingForSewing = factoryOrderPipelineGroups(data.models.filter((order) => !order.archivedAt))
+    .find((group) => group.key === "waiting_sewing");
+  return `<div class="stats-grid">${stat("طلبات الإدارة", active.length, "بانتظار استكمال القص")}${stat("العدد المطلوب لطلبات الإدارة", new Intl.NumberFormat("ar-EG-u-nu-latn").format(activeTotal), "قطعة")}${stat("في انتظار الخياطة", waitingForSewing?.orders.length || 0, "قصات مكتملة لم تبدأ خياطتها بعد")}${stat("أصناف القماش المتاحة", data.fabrics.length, "متابعة مباشرة للمخزون")}</div>${panel("ملخص العمل الحالي", `<div class="empty-state">استخدم «طلبات الإدارة» لمراجعة الأوامر وتسجيل بيانات الفرشة والقص، أو «قصة جديدة» لإنشاء قصة مباشرة.</div>`)}`;
 }
 
 function modelRegistryEntries(data) {
@@ -3268,7 +3299,9 @@ function sewingView(data) {
   const available = data.sewing.filter((item) => item.stageStatus === "متاح للخياطة");
   const inProgress = data.sewing.filter((item) => item.stageStatus === "قيد الخياطة");
   const completed = data.sewing.filter((item) => item.stageStatus === "مكتمل");
-  return `<div class="stats-grid">${stat("قصّات متاحة للبدء", available.length)}${stat("قيد الخياطة الفعلية", inProgress.length)}${stat("محوّلة للإمبلاج / التعبئة", completed.length)}</div>
+  const pipelineGroups = factoryOrderPipelineGroups(data.models.filter((order) => !order.archivedAt))
+    .filter((group) => group.key !== "before_cutting" && (group.key !== "unclassified" || group.orders.length));
+  return `<div class="stats-grid">${pipelineGroups.map((group) => stat(group.label, group.orders.length)).join("")}</div>
     ${panel("قصّات متاحة للبدء", sewingOrderRows(available, "بدء الخياطة", "start", false), "لا يبدأ العمل إلا بعد استلام المشرف للقصّة")}
     ${panel("قصّات قيد الخياطة الفعلية", sewingOrderRows(inProgress, "إنهاء الخياطة", "finish", false))}
     ${panel("قصّات مكتملة الخياطة", sewingOrderRows(completed, "", "", false), "تم تسليمها للمرحلة التالية")}`;
@@ -3278,7 +3311,9 @@ function adminSewingView(data) {
   const available = data.sewing.filter((item) => item.stageStatus === "متاح للخياطة");
   const inProgress = data.sewing.filter((item) => item.stageStatus === "قيد الخياطة");
   const completed = data.sewing.filter((item) => item.stageStatus === "مكتمل");
-  return `<div class="stats-grid">${stat("متاحة للخياطة", available.length)}${stat("بدأت الخياطة", inProgress.length)}${stat("مكتملة / محوّلة", completed.length)}</div>
+  const pipelineGroups = factoryOrderPipelineGroups(data.models.filter((order) => !order.archivedAt))
+    .filter((group) => group.key !== "before_cutting" && (group.key !== "unclassified" || group.orders.length));
+  return `<div class="stats-grid">${pipelineGroups.map((group) => stat(group.label, group.orders.length)).join("")}</div>
     ${panel("قصّات متاحة للخياطة", sewingOrderRows(available, "بدء الخياطة", "start"))}
     ${panel("قصّات بدأ المشرف خياطتها", sewingOrderRows(inProgress, "إنهاء الخياطة", "finish"))}
     ${panel("قصّات مكتملة ومحوّلة للإمبلاج / التعبئة", sewingOrderRows(completed))}`;
