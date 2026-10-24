@@ -75,6 +75,12 @@ const FACTORY_ORDER_STATUSES = [
   "تم التسليم"
 ];
 const LOCKED_FACTORY_ORDER_STATUSES = ["تم التسليم"];
+const WORKFLOW_MANAGED_FACTORY_ORDER_STATUSES = [
+  "في انتظار الخياطة", "جاري الخياطة", "تمت الخياطة",
+  "جاري التشطيب", "تم التشطيب", "جاري المكواة", "تم الكي",
+  "جاري الطباعة", "تمت الطباعة", "جاري التكييس", "تم التكييس",
+  "جاري الفرز", "تم الفرز", "مكتمل", "جاهز للتسليم"
+];
 const roleInfo = {
   admin: { title: "لوحة تحكم الإدارة", description: "نظرة شاملة على المصنع وإدارة بيانات التشغيل.", icon: "▦" },
   cutting: { title: "لوحة مشرف القص", description: "متابعة أوامر الإدارة وتسجيل بيانات الفرش والقص.", icon: "✂" },
@@ -2957,7 +2963,7 @@ function adminView(data, accounts) {
           <div class="model-allocation field"><label>توزيع العدد على الألوان والمقاسات</label><div data-model-allocation-grid><p class="muted">أدخل العدد الكلي واختر الألوان والمقاسات لعرض التوزيع.</p></div><input type="hidden" name="colorSizeDistribution" value='{"colors":[]}'></div>
           <div class="field model-image-field"><span>صور الموديل (اختياري - صورتان كحد أقصى)</span><small>يمكن رفع أو تبديل كل صورة أو حذفها. الحد الأقصى لكل صورة 25 ميجابايت.</small><div class="model-image-slots" data-model-image-slots>${[1, 2].map((slot) => `<section class="model-image-slot" data-model-image-slot="${slot}"><strong>الصورة ${slot}</strong><input type="file" name="modelImage${slot}" accept="image/*" hidden><div data-model-image-preview="${slot}"></div><div class="form-actions"><button class="row-action" type="button" data-model-image-replace="${slot}">${slot === 1 ? "إضافة / تبديل الصورة" : "إضافة الصورة الثانية"}</button><button class="row-action order-delete-action" type="button" data-model-image-delete="${slot}" hidden>حذف الصورة</button></div></section>`).join("")}</div></div>
           <div class="field" data-expected-delivery-field><label for="model-expected-delivery">تاريخ التسليم المتوقع (اختياري)</label><input id="model-expected-delivery" name="expectedDeliveryDate" type="date"></div>
-          <div class="field"><label for="model-status">حالة الطلب</label><select id="model-status" name="status">${FACTORY_ORDER_STATUSES.map((status) => `<option>${status}</option>`).join("")}</select></div>
+          <div class="field"><label for="model-status">حالة الطلب</label><select id="model-status" name="status">${FACTORY_ORDER_STATUSES.map((status) => `<option>${status}</option>`).join("")}</select><small data-workflow-status-hint hidden>حالة الإنتاج الحالية تُدار من خطوات التشغيل، وستبقى كما هي عند حفظ بيانات الموديل.</small></div>
           <div class="field" data-initial-delivery-field hidden><label for="model-delivered-pieces">العدد المسلّم</label><input id="model-delivered-pieces" name="deliveredPieces" type="text" inputmode="numeric" autocomplete="off"><small>يُسجل كدفعة تسليم تاريخية ويُحتسب ضمن حساب العميل.</small></div>
           <div class="field" data-model-priority-field><label for="model-priority">أولوية التنفيذ</label><select id="model-priority" name="priority"><option>عادي</option><option>مرتفع</option><option>عاجل</option></select></div>
         </div></section>
@@ -8081,9 +8087,12 @@ function bindActions(session) {
     orderForm.elements.savedOrderId.value = "";
     orderForm.elements.editIndex.value = String(orderIndex);
     const closedOrder = LOCKED_FACTORY_ORDER_STATUSES.includes(currentOrder.status);
+    const workflowManagedOrder = WORKFLOW_MANAGED_FACTORY_ORDER_STATUSES
+      .includes(canonicalFactoryOrderStatus(currentOrder.storedStatus || currentOrder.status));
     orderForm.querySelector("[data-original-quantity-field]").hidden = !closedOrder;
     orderForm.elements.originalQuantity.value = String(currentOrder.originalQuantity);
-    orderForm.elements.status.disabled = closedOrder;
+    orderForm.elements.status.disabled = closedOrder || workflowManagedOrder;
+    orderForm.querySelector("[data-workflow-status-hint]").hidden = !workflowManagedOrder;
     orderForm.elements.operationalExpenses.readOnly = true;
     for (const field of ["customerId", "name", "clientModelCode", "pricePerPiece", "paidAmount", "operationalExpenses", "status", "priority", "productionType", "pricingMode", "expectedDeliveryDate"]) {
       orderForm.elements[field].value = currentOrder[field] ?? "";
@@ -8658,9 +8667,13 @@ function bindActions(session) {
     const sizeQuantity = sizePickerTotal(form);
     const quantity = quantityValue ? Number(quantityValue) : sizeQuantity;
     const deliveredPieces = Number(formData.get("deliveredPieces"));
-    const requestedStatus = String(formData.get("status"));
-    const statusForSave = existingOrder && canonicalFactoryOrderStatus(requestedStatus) === existingOrder.status
-      ? existingOrder.storedStatus || requestedStatus
+    const currentStoredStatus = existingOrder?.storedStatus || existingOrder?.status || "";
+    const isWorkflowManagedOrder = WORKFLOW_MANAGED_FACTORY_ORDER_STATUSES
+      .includes(canonicalFactoryOrderStatus(currentStoredStatus));
+    const requestedStatus = String(formData.get("status") || currentStoredStatus);
+    const statusForSave = existingOrder && (isWorkflowManagedOrder
+      || canonicalFactoryOrderStatus(requestedStatus) === existingOrder.status)
+      ? currentStoredStatus || requestedStatus
       : requestedStatus;
     const pricePerPiece = Number(formData.get("pricePerPiece"));
     const paidAmount = Number(formData.get("paidAmount"));
