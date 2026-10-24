@@ -705,6 +705,7 @@ alter table public.orders
   add column if not exists operational_expenses numeric(14, 2) not null default 0,
   add column if not exists expected_delivery_date date,
   add column if not exists model_image_url text,
+  add column if not exists model_image_url_2 text,
   add column if not exists priority text not null default 'عادي',
   add column if not exists production_type text not null default 'full_cutting',
   add column if not exists work_stages text[] not null default array['cutting', 'sewing', 'finishing']::text[],
@@ -1167,6 +1168,7 @@ returns table (
   archived_at timestamptz,
   expected_delivery_date date,
   model_image_url text,
+  model_image_url_2 text,
   price_per_piece numeric,
   operational_expenses numeric,
   total_amount numeric,
@@ -1208,6 +1210,7 @@ begin
            factory_order.archived_at,
            factory_order.expected_delivery_date,
            factory_order.model_image_url,
+           factory_order.model_image_url_2,
            factory_order.price_per_piece,
            factory_order.operational_expenses,
            factory_order.total_amount,
@@ -1233,6 +1236,7 @@ drop function if exists public.save_factory_order(uuid, uuid, text, text, intege
 drop function if exists public.save_factory_order(uuid, uuid, text, text, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb, text, jsonb, text[], text, jsonb, numeric);
 drop function if exists public.save_factory_order(uuid, uuid, text, text, integer, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb, text, jsonb, text[], text, jsonb, numeric);
 drop function if exists public.save_factory_order(uuid, uuid, text, text, integer, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb, text, jsonb, text[], text, jsonb, numeric, text);
+drop function if exists public.save_factory_order(uuid, uuid, text, text, integer, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb, text, jsonb, text[], text, jsonb, numeric, text, text);
 create function public.save_factory_order(
   requested_order_id uuid,
   requested_customer_id uuid,
@@ -1258,7 +1262,8 @@ create function public.save_factory_order(
   requested_pricing_mode text,
   requested_stage_prices jsonb,
   requested_operational_expenses numeric,
-  requested_client_model_code text
+  requested_client_model_code text,
+  requested_model_image_url_2 text
 )
 returns uuid
 language plpgsql
@@ -1489,7 +1494,7 @@ begin
   if requested_order_id is null then
     insert into public.orders (
       client_id, customer_id, model_name, model_number, colors, color_names, sizes,
-      original_total_pieces, total_pieces, delivered_pieces, price_per_piece, paid_amount, expected_delivery_date, model_image_url, priority,
+      original_total_pieces, total_pieces, delivered_pieces, price_per_piece, paid_amount, expected_delivery_date, model_image_url, model_image_url_2, priority,
       production_type, work_stages, pricing_mode, stage_prices, color_size_distribution, operational_expenses, client_model_code, status
     )
     values (
@@ -1497,7 +1502,7 @@ begin
       coalesce(trim(requested_model_number), ''),
       coalesce(trim(requested_colors), ''), normalized_color_names, coalesce(trim(requested_sizes), ''),
       requested_original_quantity, requested_quantity, requested_delivered_pieces,
-      requested_price_per_piece, requested_paid_amount, requested_expected_delivery_date, requested_model_image_url,
+      requested_price_per_piece, requested_paid_amount, requested_expected_delivery_date, requested_model_image_url, requested_model_image_url_2,
       trim(requested_priority), requested_production_type, requested_work_stages, requested_pricing_mode,
       requested_stage_prices, requested_color_size_distribution, requested_operational_expenses,
       trim(coalesce(requested_client_model_code, '')), trim(requested_status)
@@ -1624,6 +1629,7 @@ begin
         paid_amount = requested_paid_amount,
         expected_delivery_date = requested_expected_delivery_date,
         model_image_url = requested_model_image_url,
+        model_image_url_2 = requested_model_image_url_2,
         priority = trim(requested_priority),
         production_type = requested_production_type,
         work_stages = requested_work_stages,
@@ -5981,7 +5987,7 @@ grant select on public.factory_order_expenses to authenticated;
 grant select (id, client_id, customer_id, model_name, model_number, factory_model_code, client_model_code, production_type, work_stages, colors, color_names, color_size_distribution, sizes, original_total_pieces, total_pieces, delivered_pieces, archived_at, status, priority, created_at)
   on public.orders to authenticated;
 grant select (sender_name) on public.orders to authenticated;
-grant select (model_image_url) on public.orders to authenticated;
+grant select (model_image_url, model_image_url_2) on public.orders to authenticated;
 grant select on public.production_stages to authenticated;
 grant select, insert, update on public.factory_records to authenticated;
 grant select on public.factory_deliveries to authenticated;
@@ -6456,8 +6462,8 @@ revoke all on function public.submit_factory_client_model_request(text, text, in
 grant execute on function public.submit_factory_client_model_request(text, text, integer, text, text) to authenticated;
 revoke all on function public.read_factory_cutting_clients() from public, anon, authenticated;
 grant execute on function public.read_factory_cutting_clients() to authenticated;
-revoke all on function public.save_factory_order(uuid, uuid, text, text, integer, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb, text, jsonb, text[], text, jsonb, numeric, text) from public, anon, authenticated;
-grant execute on function public.save_factory_order(uuid, uuid, text, text, integer, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb, text, jsonb, text[], text, jsonb, numeric, text) to authenticated;
+revoke all on function public.save_factory_order(uuid, uuid, text, text, integer, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb, text, jsonb, text[], text, jsonb, numeric, text, text) from public, anon, authenticated;
+grant execute on function public.save_factory_order(uuid, uuid, text, text, integer, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb, text, jsonb, text[], text, jsonb, numeric, text, text) to authenticated;
 revoke all on function public.admin_update_factory_order_stage_status(uuid, text) from public, anon, authenticated;
 grant execute on function public.admin_update_factory_order_stage_status(uuid, text) to authenticated;
 revoke all on function public.record_factory_delivery(uuid, integer, text) from public, anon, authenticated;

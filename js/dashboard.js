@@ -452,7 +452,7 @@ async function readDashboardData(session) {
   } else if (["cutting", "sewing"].includes(session.role)) {
     let ordersQuery = supabaseClient
       .from("orders")
-      .select("id, customer_id, model_name, model_number, factory_model_code, client_model_code, sender_name, colors, color_names, color_size_distribution, production_type, work_stages, sizes, original_total_pieces, total_pieces, model_image_url, priority, archived_at, status, created_at")
+      .select("id, customer_id, model_name, model_number, factory_model_code, client_model_code, sender_name, colors, color_names, color_size_distribution, production_type, work_stages, sizes, original_total_pieces, total_pieces, model_image_url, model_image_url_2, priority, archived_at, status, created_at")
       .order("created_at", { ascending: false });
     ({ data: orders, error: ordersError } = await ordersQuery);
     if (ordersError?.code === "42703") {
@@ -580,6 +580,8 @@ async function readDashboardData(session) {
       stagePrices: order.stage_prices || {},
       sizes: cuttingSizePickerValue(order.sizes, cuttingStage?.color_ply_data),
       modelImageUrl: order.model_image_url || "",
+      modelImageUrl2: order.model_image_url_2 || "",
+      modelImageUrls: [order.model_image_url || "", order.model_image_url_2 || ""],
       priority: order.priority || "عادي",
       deliveredPieces,
       deliveryHistory: data.deliveries
@@ -640,6 +642,7 @@ async function readDashboardData(session) {
       sizes: cuttingSizePickerValue(ordersById.get(stage.order_id)?.sizes, stage.color_ply_data),
       colors: ordersById.get(stage.order_id)?.colors || "",
       modelImageUrl: ordersById.get(stage.order_id)?.model_image_url || "",
+      modelImageUrls: [ordersById.get(stage.order_id)?.model_image_url || "", ordersById.get(stage.order_id)?.model_image_url_2 || ""],
       fabric: stage.fabric || data.fabrics.find((fabric) => fabric.id === stage.fabric_id)?.name || stage.external_fabric_source || "",
       fabricDetails: stage.fabric_details || "",
       fabricId: stage.fabric_id || (stage.external_fabric_source ? "external" : ""),
@@ -683,6 +686,7 @@ async function readDashboardData(session) {
         clientModelCode: order?.client_model_code || "",
         client: clientsById.get(order?.customer_id)?.name || "",
         modelImageUrl: order?.model_image_url || "",
+        modelImageUrls: [order?.model_image_url || "", order?.model_image_url_2 || ""],
         colors: order?.colors || "",
         colorNames: {
           ...Object.fromEntries(parseColorPlyData(cuttingStage?.color_ply_data).map((entry) => [entry.color, entry.name]).filter(([, name]) => name)),
@@ -908,7 +912,7 @@ function cuttingDetailsMarkup(order) {
 }
 
 function cuttingOrderDetailsMarkup(item) {
-  return `<header class="production-details-heading">${modelImageMarkup(item.modelImageUrl)}<div><small>تفاصيل أمر القص</small><h2>${escapeHtml(item.model || item.name || "موديل بدون اسم")}</h2><p>كود الموديل بالنظام: ${escapeHtml(item.factoryModelCode || "—")} · كود/رقم الموديل للعميل: ${escapeHtml(item.clientModelCode || "—")} · العميل: ${escapeHtml(item.client || "—")}</p></div>${statusTag(item.displayStatus || item.orderStatus || item.status)}</header>
+  return `<header class="production-details-heading">${modelImageMarkup(item.modelImageUrls || item.modelImageUrl)}<div><small>تفاصيل أمر القص</small><h2>${escapeHtml(item.model || item.name || "موديل بدون اسم")}</h2><p>كود الموديل بالنظام: ${escapeHtml(item.factoryModelCode || "—")} · كود/رقم الموديل للعميل: ${escapeHtml(item.clientModelCode || "—")} · العميل: ${escapeHtml(item.client || "—")}</p></div>${statusTag(item.displayStatus || item.orderStatus || item.status)}</header>
     <dl class="sewing-order-facts"><div><dt>رقم الطلب</dt><dd>${escapeHtml(item.order || item.id || "—")}</dd></div><div><dt>العدد الإجمالي</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.total ?? item.quantity ?? 0)} قطعة</dd></div><div><dt>العدد المنجز في القص</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.cut || 0)} قطعة</dd></div><div><dt>الأولوية</dt><dd>${escapeHtml(item.priority || "عادي")}</dd></div><div><dt>تم الإرسال بواسطة</dt><dd>${escapeHtml(item.senderName || "—")}</dd></div><div><dt>الأقسام المطلوبة</dt><dd>${escapeHtml(workStageLabels(item.workStages).join("، ") || "—")}</dd></div><div><dt>الألوان</dt><dd>${colorSummaryMarkup(item.colors, item.colorNames, item.colorPlyData)}</dd></div><div><dt>المقاسات</dt><dd>${escapeHtml(sizeSummary(item.sizes) || "—")}</dd></div></dl>
     <h3 class="modal-subheading">توزيع المقاسات والألوان</h3>${modelSizeColorCardsMarkup(item)}
     ${cuttingDetailsMarkup(item)}
@@ -916,7 +920,7 @@ function cuttingOrderDetailsMarkup(item) {
 }
 
 function sewingOrderDetailsMarkup(item) {
-  return `<header class="production-details-heading">${modelImageMarkup(item.modelImageUrl)}<div><small>تفاصيل أمر الخياطة</small><h2>${escapeHtml(item.model || "موديل بدون اسم")}</h2><p>كود الموديل بالنظام: ${escapeHtml(item.factoryModelCode || "—")} · كود/رقم الموديل للعميل: ${escapeHtml(item.clientModelCode || item.modelNumber || "—")}</p></div>${statusTag(item.status)}</header>
+  return `<header class="production-details-heading">${modelImageMarkup(item.modelImageUrls || item.modelImageUrl)}<div><small>تفاصيل أمر الخياطة</small><h2>${escapeHtml(item.model || "موديل بدون اسم")}</h2><p>كود الموديل بالنظام: ${escapeHtml(item.factoryModelCode || "—")} · كود/رقم الموديل للعميل: ${escapeHtml(item.clientModelCode || item.modelNumber || "—")}</p></div>${statusTag(item.status)}</header>
     <dl class="sewing-order-facts"><div><dt>إجمالي العدد</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.target || 0)} قطعة</dd></div><div><dt>العدد المطلوب الأصلي</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.originalQuantity || 0)} قطعة</dd></div><div><dt>المنجز بالخياطة</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.produced || 0)} قطعة</dd></div></dl>
     <h3 class="modal-subheading">المقاسات والألوان</h3>${modelSizeColorCardsMarkup(item)}`;
 }
@@ -928,6 +932,7 @@ function sewingDetailsProjection(item) {
     factoryModelCode: item.factoryModelCode || "",
     clientModelCode: item.clientModelCode || "",
     modelImageUrl: item.modelImageUrl || "",
+    modelImageUrls: item.modelImageUrls || (item.modelImageUrl ? [item.modelImageUrl] : []),
     status: item.status || item.orderStatus || "",
     target: Number(item.target ?? item.quantity ?? item.total ?? 0),
     originalQuantity: Number(item.originalQuantity ?? item.originalTotal ?? item.quantity ?? item.total ?? 0),
@@ -941,7 +946,7 @@ function sewingDetailsProjection(item) {
 }
 
 function sewingHistoryDetailsMarkup(item) {
-  return `<header class="production-details-heading">${modelImageMarkup(item.modelImageUrl)}<div><small>سجل قصة سابقة</small><h2>${escapeHtml(item.model || "موديل بدون اسم")}</h2><p>كود الموديل بالنظام: ${escapeHtml(item.factoryModelCode || "—")} · كود/رقم الموديل للعميل: ${escapeHtml(item.clientModelCode || "—")}</p></div>${statusTag(item.status || item.orderStatus || "—")}</header>
+  return `<header class="production-details-heading">${modelImageMarkup(item.modelImageUrls || item.modelImageUrl)}<div><small>سجل قصة سابقة</small><h2>${escapeHtml(item.model || "موديل بدون اسم")}</h2><p>كود الموديل بالنظام: ${escapeHtml(item.factoryModelCode || "—")} · كود/رقم الموديل للعميل: ${escapeHtml(item.clientModelCode || "—")}</p></div>${statusTag(item.status || item.orderStatus || "—")}</header>
     <dl class="sewing-order-facts"><div><dt>إجمالي القطع في القصة</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.target || item.total || item.cut || 0)} قطعة</dd></div></dl>
     <h3 class="modal-subheading">المقاسات والألوان</h3>${modelSizeColorCardsMarkup(item)}`;
 }
@@ -1593,6 +1598,18 @@ async function uploadModelImage(orderId, file) {
   return supabaseClient.storage.from("factory-model-images").getPublicUrl(path).data.publicUrl;
 }
 
+async function deleteOrderModelImage(imageUrl, orderId) {
+  if (!imageUrl) return;
+  const publicPath = "/storage/v1/object/public/factory-model-images/";
+  const imagePath = new URL(imageUrl).pathname;
+  const bucketPathIndex = imagePath.indexOf(publicPath);
+  if (bucketPathIndex === -1) return;
+  const objectPath = decodeURIComponent(imagePath.slice(bucketPathIndex + publicPath.length));
+  if (!objectPath.startsWith(`${orderId}/`)) return;
+  const { error } = await supabaseClient.storage.from("factory-model-images").remove([objectPath]);
+  if (error) throw error;
+}
+
 async function uploadWorkerProductionImage(workerId, file) {
   if (!file) return null;
   return uploadFactoryModelImage(`worker-submissions/${workerId}`, file);
@@ -1651,7 +1668,13 @@ async function deleteFactoryModelImages() {
 }
 
 function modelImageMarkup(url, label = "صورة القطعة", imageClass = "") {
-  return url ? `<button class="model-image-trigger${imageClass ? ` ${escapeHtml(imageClass)}-trigger` : ""}" type="button" data-model-image-lightbox="${escapeHtml(url)}" data-image-alt="${escapeHtml(label)}" aria-label="تكبير ${escapeHtml(label)}"><img class="model-thumbnail${imageClass ? ` ${escapeHtml(imageClass)}` : ""}" src="${escapeHtml(url)}" alt="${escapeHtml(label)}" loading="lazy"></button>` : "";
+  const imageUrls = Array.isArray(url) ? url.filter(Boolean) : url ? [url] : [];
+  if (!imageUrls.length) return "";
+  const images = imageUrls.map((imageUrl, index) => {
+    const imageLabel = imageUrls.length > 1 ? `${label} ${index + 1}` : label;
+    return `<button class="model-image-trigger${imageClass ? ` ${escapeHtml(imageClass)}-trigger` : ""}" type="button" data-model-image-lightbox="${escapeHtml(imageUrl)}" data-image-alt="${escapeHtml(imageLabel)}" aria-label="تكبير ${escapeHtml(imageLabel)}"><img class="model-thumbnail${imageClass ? ` ${escapeHtml(imageClass)}` : ""}" src="${escapeHtml(imageUrl)}" alt="${escapeHtml(imageLabel)}" loading="lazy"></button>`;
+  }).join("");
+  return imageUrls.length > 1 ? `<span class="model-image-gallery">${images}</span>` : images;
 }
 
 function formatDateTime(value) {
@@ -1958,7 +1981,7 @@ function orderCards(models, withActions = false) {
       && ["مكتمل", "تم القص"].includes(item.cuttingStageStatus)
       && !["متاح للخياطة", "قيد الخياطة", "مكتمل"].includes(item.sewingStageStatus);
     return `<article class="order-card order-compact-row">
-      <header class="production-compact-heading">${modelImageMarkup(item.modelImageUrl)}<h3>${escapeHtml(item.name || "موديل بدون اسم")}</h3></header>
+      <header class="production-compact-heading">${modelImageMarkup(item.modelImageUrls || item.modelImageUrl)}<h3>${escapeHtml(item.name || "موديل بدون اسم")}</h3></header>
       <strong class="production-compact-total">${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.quantity)} قطعة</strong>
       <div class="production-compact-facts"><div><span>الألوان</span>${colorSummaryMarkup(item.colors, item.colorNames, item.colorPlyData)}</div><div><span>المقاسات</span>${sizeBadgesMarkup(item.sizes)}</div></div>
       ${withActions ? `<button class="row-action order-expense-trigger" type="button" data-add-model-expense="${escapeHtml(item.id)}">＋ إضافة مصروف خارجي</button>` : ""}
@@ -1983,7 +2006,7 @@ function clientOrderRows(orders) {
 function clientOrderCards(orders) {
   if (!orders.length) return '<div class="empty-state">لا توجد طلبيات لعرضها حاليًا.</div>';
   return `<div class="order-cards">${orders.map((item) => `<article class="order-card client-order-card">
-    <header class="order-card-heading">${modelImageMarkup(item.modelImageUrl)}<div><p class="order-card-label">كود الموديل بالنظام: ${escapeHtml(item.factoryModelCode || "—")} · كود/رقم الموديل للعميل: ${escapeHtml(item.clientModelCode || "—")}</p><h3>${escapeHtml(item.name || "موديل بدون اسم")}</h3></div>${statusTag(item.displayStatus || item.status)}</header>
+    <header class="order-card-heading">${modelImageMarkup(item.modelImageUrls || item.modelImageUrl)}<div><p class="order-card-label">كود الموديل بالنظام: ${escapeHtml(item.factoryModelCode || "—")} · كود/رقم الموديل للعميل: ${escapeHtml(item.clientModelCode || "—")}</p><h3>${escapeHtml(item.name || "موديل بدون اسم")}</h3></div>${statusTag(item.displayStatus || item.status)}</header>
     <dl class="order-card-details">
       ${item.cutterName ? `<div><dt>مين اللي قص القصة؟</dt><dd>${escapeHtml(item.cutterName)}</dd></div>` : ""}
       <div><dt>الخامة المستخدمة</dt><dd>${escapeHtml(item.fabric || item.externalFabricSource || "—")}</dd></div>
@@ -2410,7 +2433,7 @@ function clientDetailsView(client, data) {
     const locked = Boolean(order.archivedAt) || LOCKED_FACTORY_ORDER_STATUSES.includes(order.status);
     return `<article class="order-card client-history-card">
     <label class="print-model-select"><input type="checkbox" data-print-model-select="${escapeHtml(order.id)}"><span>اختيار للطباعة</span></label>
-    <header class="order-card-heading">${modelImageMarkup(order.modelImageUrl)}<div><p class="order-card-label">${archived ? "طلب مؤرشف" : "طلب حالي"} · كود الموديل بالنظام: ${escapeHtml(order.factoryModelCode || "—")} · كود/رقم الموديل للعميل: ${escapeHtml(order.clientModelCode || "—")}</p><h3>${escapeHtml(order.name || "موديل بدون اسم")}</h3></div>${statusTag(order.displayStatus || order.status)}</header>
+    <header class="order-card-heading">${modelImageMarkup(order.modelImageUrls || order.modelImageUrl)}<div><p class="order-card-label">${archived ? "طلب مؤرشف" : "طلب حالي"} · كود الموديل بالنظام: ${escapeHtml(order.factoryModelCode || "—")} · كود/رقم الموديل للعميل: ${escapeHtml(order.clientModelCode || "—")}</p><h3>${escapeHtml(order.name || "موديل بدون اسم")}</h3></div>${statusTag(order.displayStatus || order.status)}</header>
     <dl class="order-card-details">
       <div><dt>العدد الإجمالي بعد القص</dt><dd>${order.quantity ? `${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity)} قطعة` : "بانتظار الحصر"}</dd></div>
       <div><dt>المستلم</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.deliveredPieces)} قطعة</dd></div>
@@ -2581,7 +2604,7 @@ function modelDetailsModalView(order, showPricingBreakdown = false) {
   const deliveryHistory = order.deliveryHistory?.length
     ? table(["#", "الكمية", "المستلم", "تاريخ التسليم", ...(canEditDeliveryQuantities ? ["تعديل التسليم"] : [])], order.deliveryHistory.map((delivery, index) => `<tr><td>${index + 1}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(delivery.quantity)} قطعة</td><td>${escapeHtml(delivery.recipient_name || "—")}</td><td>${formatDateTime(delivery.delivered_at)}</td>${canEditDeliveryQuantities ? `<td><label class="field"><span>كمية الدفعة ${index + 1} (صفر لحذفها)</span><input type="number" min="0" step="1" value="${delivery.quantity}" data-edit-delivery-quantity="${escapeHtml(delivery.id)}"></label><button class="row-action" type="button" data-save-delivery-quantity="${escapeHtml(delivery.id)}">حفظ التسليم</button></td>` : ""}</tr>`))
     : '<div class="empty-state">لا توجد دفعات تسليم مسجلة.</div>';
-  return `<header class="modal-view-heading">${modelImageMarkup(order.modelImageUrl)}<div><small>تفاصيل الطلبية / الفرشة</small><h2 id="model-details-title">${escapeHtml(order.name || "موديل بدون اسم")}</h2><p>كود الموديل بالنظام: ${escapeHtml(order.factoryModelCode || "—")} · كود/رقم الموديل للعميل: ${escapeHtml(order.clientModelCode || "—")}</p><p>العميل: ${escapeHtml(order.client || "—")}</p></div>${statusTag(order.displayStatus || order.status)}</header>
+  return `<header class="modal-view-heading">${modelImageMarkup(order.modelImageUrls || order.modelImageUrl)}<div><small>تفاصيل الطلبية / الفرشة</small><h2 id="model-details-title">${escapeHtml(order.name || "موديل بدون اسم")}</h2><p>كود الموديل بالنظام: ${escapeHtml(order.factoryModelCode || "—")} · كود/رقم الموديل للعميل: ${escapeHtml(order.clientModelCode || "—")}</p><p>العميل: ${escapeHtml(order.client || "—")}</p></div>${statusTag(order.displayStatus || order.status)}</header>
     <div class="compact-detail-grid">
       <div><span>العدد المطلوب الأصلي</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.originalQuantity)} قطعة</strong></div>
       <div><span>العدد</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity)} قطعة</strong></div>
@@ -2932,7 +2955,7 @@ function adminView(data, accounts) {
           ${colorPickerMarkup("", "model-colors")}
           ${sizePickerMarkup("", "model-sizes", true, true)}
           <div class="model-allocation field"><label>توزيع العدد على الألوان والمقاسات</label><div data-model-allocation-grid><p class="muted">أدخل العدد الكلي واختر الألوان والمقاسات لعرض التوزيع.</p></div><input type="hidden" name="colorSizeDistribution" value='{"colors":[]}'></div>
-          <label class="field model-image-field"><span>صورة الموديل (اختياري)</span><input type="file" name="modelImage" accept="image/*"><small>يمكن رفع صيغ الصور الشائعة حتى 25 ميجابايت.</small><div data-model-image-preview></div></label>
+          <div class="field model-image-field"><span>صور الموديل (اختياري - صورتان كحد أقصى)</span><small>يمكن رفع أو تبديل كل صورة أو حذفها. الحد الأقصى لكل صورة 25 ميجابايت.</small><div class="model-image-slots" data-model-image-slots>${[1, 2].map((slot) => `<section class="model-image-slot" data-model-image-slot="${slot}"><strong>الصورة ${slot}</strong><input type="file" name="modelImage${slot}" accept="image/*" hidden><div data-model-image-preview="${slot}"></div><div class="form-actions"><button class="row-action" type="button" data-model-image-replace="${slot}">${slot === 1 ? "إضافة / تبديل الصورة" : "إضافة الصورة الثانية"}</button><button class="row-action order-delete-action" type="button" data-model-image-delete="${slot}" hidden>حذف الصورة</button></div></section>`).join("")}</div></div>
           <div class="field" data-expected-delivery-field><label for="model-expected-delivery">تاريخ التسليم المتوقع (اختياري)</label><input id="model-expected-delivery" name="expectedDeliveryDate" type="date"></div>
           <div class="field"><label for="model-status">حالة الطلب</label><select id="model-status" name="status">${FACTORY_ORDER_STATUSES.map((status) => `<option>${status}</option>`).join("")}</select></div>
           <div class="field" data-initial-delivery-field hidden><label for="model-delivered-pieces">العدد المسلّم</label><input id="model-delivered-pieces" name="deliveredPieces" type="text" inputmode="numeric" autocomplete="off"><small>يُسجل كدفعة تسليم تاريخية ويُحتسب ضمن حساب العميل.</small></div>
@@ -3018,7 +3041,7 @@ function cuttingView(data) {
       ? `قيد الفرش - تم فرش ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.layerCount)} راقات`
       : orderStatus;
     return `<article class="order-card cutting-order-card production-compact-card">
-    <header class="production-compact-heading">${modelImageMarkup(item.modelImageUrl)}<h3>${escapeHtml(item.model)}</h3>${statusTag(displayStatus)}</header>
+    <header class="production-compact-heading">${modelImageMarkup(item.modelImageUrls || item.modelImageUrl)}<h3>${escapeHtml(item.model)}</h3>${statusTag(displayStatus)}</header>
     <strong class="production-compact-total">${item.total > 0 ? `${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.total)} قطعة` : "بانتظار الحصر"}</strong>
     <div class="production-compact-facts"><div><span>الألوان</span>${colorSummaryMarkup(item.colors, item.colorNames, item.colorPlyData)}</div><div><span>المقاسات</span>${sizeBadgesMarkup(item.sizes)}</div></div>
     <div class="form-actions">${productionDetailsButton("cutting", item)}<button class="button button-secondary" type="button" data-open-cutting-editor="${escapeHtml(item.order)}">تعديل / استكمال القص</button></div>
@@ -3080,7 +3103,7 @@ function modelRegistryEntries(data) {
 function modelRegistryView(data, allowRepeat = false, detailsKind = "cutting") {
   const entries = modelRegistryEntries(data);
   const cards = entries.map(({ code, model, orders }) => `<article class="cutting-story-card production-compact-card">
-    <header class="production-compact-heading">${modelImageMarkup(model.modelImageUrl)}<h3>${escapeHtml(model.name || "موديل بدون اسم")}</h3></header>
+    <header class="production-compact-heading">${modelImageMarkup(model.modelImageUrls || model.modelImageUrl)}<h3>${escapeHtml(model.name || "موديل بدون اسم")}</h3></header>
     <strong class="production-compact-total">${new Intl.NumberFormat("ar-EG-u-nu-latn").format(orders.reduce((sum, order) => sum + Number(order.quantity || 0), 0))} قطعة</strong>
     <div class="production-compact-facts"><div><span>الألوان</span>${colorSummaryMarkup(model.colors, model.colorNames, model.colorPlyData)}</div><div><span>المقاسات</span>${sizeBadgesMarkup(model.sizes)}</div></div>
     <div class="form-actions">${productionDetailsButton(detailsKind, detailsKind === "sewing" ? sewingDetailsProjection(model) : model)}
@@ -3213,7 +3236,7 @@ function sewingOrderRows(orders, actionLabel = "", action = "", allowEdit = true
     ? `<div class="sewing-order-grid">${orders.map((item) => {
       const canEdit = allowEdit && item.stageStatus !== "مكتمل";
       return `<article class="sewing-order-card production-compact-card">
-      <header class="production-compact-heading">${modelImageMarkup(item.modelImageUrl)}<h3>${escapeHtml(item.model)}</h3>${statusTag(item.status)}</header>
+      <header class="production-compact-heading">${modelImageMarkup(item.modelImageUrls || item.modelImageUrl)}<h3>${escapeHtml(item.model)}</h3>${statusTag(item.status)}</header>
       <strong class="production-compact-total">${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.target)} قطعة</strong>
       <div class="production-compact-facts"><div><span>الألوان</span>${colorSummaryMarkup(item.colors, item.colorNames, item.colorPlyData)}</div><div><span>المقاسات</span>${sizeBadgesMarkup(item.sizes)}</div></div>
       <div class="form-actions">${productionDetailsButton("sewing", sewingDetailsProjection(item))}${canEdit ? `<button class="button button-secondary" type="button" data-open-sewing-editor="${escapeHtml(item.order)}">تعديل</button>` : ""}${action ? `<button class="button button-primary" type="button" data-sewing-action="${action}" data-sewing-order="${escapeHtml(item.order)}">${actionLabel}</button>` : ""}</div>
@@ -3274,7 +3297,7 @@ function adminCuttingTransferView(data) {
     hasEnteredSewing(order)
   );
   const orderCard = (order, transferred = false) => `<article class="cutting-admin-order-card production-compact-card">
-    <header class="production-compact-heading">${modelImageMarkup(order.modelImageUrl)}<h3>${escapeHtml(order.name || "موديل بدون اسم")}</h3>${statusTag(order.displayStatus || order.status)}</header>
+    <header class="production-compact-heading">${modelImageMarkup(order.modelImageUrls || order.modelImageUrl)}<h3>${escapeHtml(order.name || "موديل بدون اسم")}</h3>${statusTag(order.displayStatus || order.status)}</header>
     <strong class="production-compact-total">${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity || 0)} قطعة</strong>
     <div class="production-compact-facts"><div><span>الألوان</span>${colorSummaryMarkup(order.colors, order.colorNames, order.colorPlyData)}</div><div><span>المقاسات</span>${sizeBadgesMarkup(order.sizes)}</div></div>
     <div class="form-actions">${productionDetailsButton("cutting", order)}${!order.archivedAt ? `<button class="button button-secondary" type="button" data-edit-kind="models" data-index="${dashboardData.models.findIndex((entry) => entry.id === order.id)}">تعديل</button>` : ""}${!transferred && ["مكتمل", "تم القص"].includes(order.cuttingStageStatus) && !["متاح للخياطة", "قيد الخياطة", "مكتمل"].includes(order.sewingStageStatus) ? `<button class="button button-primary" type="button" data-make-sewing-available="${escapeHtml(order.id)}">إدخال للخياطة</button>` : ""}</div>
@@ -6079,6 +6102,7 @@ async function persistFactoryOrder(order, changes = {}) {
     requested_paid_amount: Number(updated.paidAmount || 0),
     requested_expected_delivery_date: updated.expectedDeliveryDate || null,
     requested_model_image_url: updated.modelImageUrl || null,
+    requested_model_image_url_2: updated.modelImageUrl2 || null,
     requested_priority: updated.priority || "عادي",
     requested_color_names: parseColorNames(updated.colorNames),
     requested_production_type: updated.productionType || "full_cutting",
@@ -6496,7 +6520,7 @@ function bindCuttingActions(session) {
       codePreview.textContent = `كود الموديل بالنظام الثابت: ${code || "—"}`;
       codePreview.hidden = false;
       codeLabel.textContent = `كود الموديل بالنظام: ${code || "—"} (ثابت عند تكرار القص)`;
-      imagePreview.innerHTML = modelImageMarkup(model.modelImageUrl, `صورة الموديل ${model.name || ""}`);
+      imagePreview.innerHTML = modelImageMarkup(model.modelImageUrls || model.modelImageUrl, `صورة الموديل ${model.name || ""}`);
     });
     submitForm.addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -7961,14 +7985,59 @@ function bindActions(session) {
       updateOrderTotals();
     }
   });
-  let modelPreviewObjectUrl = "";
-  orderForm.elements.modelImage.addEventListener("change", () => {
-    const file = orderForm.elements.modelImage.files[0];
-    if (modelPreviewObjectUrl) URL.revokeObjectURL(modelPreviewObjectUrl);
-    modelPreviewObjectUrl = file ? URL.createObjectURL(file) : "";
-    orderForm.querySelector("[data-model-image-preview]").innerHTML = file
-      ? modelImageMarkup(modelPreviewObjectUrl, "معاينة صورة القطعة")
-      : "";
+  const modelImageSlots = [
+    { url: "", originalUrl: "", file: null, previewUrl: "" },
+    { url: "", originalUrl: "", file: null, previewUrl: "" }
+  ];
+  const renderModelImageSlot = (index) => {
+    const slotNumber = index + 1;
+    const slot = modelImageSlots[index];
+    const section = orderForm.querySelector(`[data-model-image-slot="${slotNumber}"]`);
+    const imageUrl = slot.previewUrl || slot.url;
+    section.querySelector(`[data-model-image-preview="${slotNumber}"]`).innerHTML = imageUrl
+      ? modelImageMarkup(imageUrl, `معاينة الصورة ${slotNumber}`)
+      : '<p class="muted">لا توجد صورة مضافة.</p>';
+    section.querySelector(`[data-model-image-delete="${slotNumber}"]`).hidden = !imageUrl;
+    section.querySelector(`[data-model-image-replace="${slotNumber}"]`).textContent = imageUrl
+      ? "تبديل الصورة"
+      : index === 0 ? "إضافة الصورة" : "إضافة الصورة الثانية";
+  };
+  const resetModelImageSlots = (urls = []) => {
+    modelImageSlots.forEach((slot, index) => {
+      if (slot.previewUrl) URL.revokeObjectURL(slot.previewUrl);
+      slot.url = urls[index] || "";
+      slot.originalUrl = slot.url;
+      slot.file = null;
+      slot.previewUrl = "";
+      orderForm.elements[`modelImage${index + 1}`].value = "";
+      renderModelImageSlot(index);
+    });
+  };
+  orderForm.querySelector("[data-model-image-slots]").addEventListener("click", (event) => {
+    const replaceButton = event.target.closest("[data-model-image-replace]");
+    if (replaceButton) {
+      orderForm.elements[`modelImage${replaceButton.dataset.modelImageReplace}`].click();
+      return;
+    }
+    const deleteButton = event.target.closest("[data-model-image-delete]");
+    if (!deleteButton) return;
+    const index = Number(deleteButton.dataset.modelImageDelete) - 1;
+    const slot = modelImageSlots[index];
+    if (slot.previewUrl) URL.revokeObjectURL(slot.previewUrl);
+    slot.url = "";
+    slot.file = null;
+    slot.previewUrl = "";
+    orderForm.elements[`modelImage${index + 1}`].value = "";
+    renderModelImageSlot(index);
+  });
+  modelImageSlots.forEach((slot, index) => {
+    const input = orderForm.elements[`modelImage${index + 1}`];
+    input.addEventListener("change", () => {
+      if (slot.previewUrl) URL.revokeObjectURL(slot.previewUrl);
+      slot.file = input.files[0] || null;
+      slot.previewUrl = slot.file ? URL.createObjectURL(slot.file) : "";
+      renderModelImageSlot(index);
+    });
   });
   const removeWorkflowStatusOptions = () => {
     orderForm.elements.status.querySelectorAll("[data-workflow-status-option]").forEach((option) => option.remove());
@@ -7988,9 +8057,7 @@ function bindActions(session) {
     updateStagePricing(orderForm);
     orderForm.querySelector("#model-price-history-note").hidden = true;
     orderForm.querySelector("[data-cutting-pricing-details]").innerHTML = '<p class="muted">تظهر تفاصيل القص والخامة هنا عند تسعير موديل مسجل.</p>';
-    if (modelPreviewObjectUrl) URL.revokeObjectURL(modelPreviewObjectUrl);
-    modelPreviewObjectUrl = "";
-    orderForm.querySelector("[data-model-image-preview]").innerHTML = "";
+    resetModelImageSlots();
     orderForm.querySelector('[type="submit"]').textContent = "حفظ الطلبية";
     orderForm.querySelector("[data-cancel-edit]").hidden = true;
     document.querySelector("#order-modal-title").textContent = "إضافة موديل / طلبية";
@@ -8003,8 +8070,7 @@ function bindActions(session) {
       window.factoryUI.toast("هذا الطلب غير متاح للتعديل.", "error");
       return;
     }
-    if (modelPreviewObjectUrl) URL.revokeObjectURL(modelPreviewObjectUrl);
-    modelPreviewObjectUrl = "";
+    resetModelImageSlots();
     removeWorkflowStatusOptions();
     orderForm.reset();
     if (![...orderForm.elements.status.options].some((option) => option.value === currentOrder.status)) {
@@ -8044,7 +8110,7 @@ function bindActions(session) {
       cuttingEditor.hidden = true;
       cuttingEditor.replaceChildren();
     }
-    orderForm.querySelector("[data-model-image-preview]").innerHTML = modelImageMarkup(currentOrder.modelImageUrl);
+    resetModelImageSlots(currentOrder.modelImageUrls || [currentOrder.modelImageUrl]);
     orderForm.querySelector("#model-price-history-note").hidden = currentOrder.deliveredPieces <= 0;
     orderForm.querySelector('[type="submit"]').textContent = "حفظ التعديلات";
     orderForm.querySelector("[data-cancel-edit]").hidden = false;
@@ -8518,6 +8584,7 @@ function bindActions(session) {
     if (newOrderButton) {
       removeWorkflowStatusOptions();
       orderForm.reset();
+      resetModelImageSlots();
       orderForm.elements.editIndex.value = "";
       orderForm.elements.operationalExpenses.readOnly = false;
       orderForm.querySelector("[data-cutting-pricing-details]").innerHTML = '<p class="muted">تظهر تفاصيل القص والخامة هنا عند تسعير موديل مسجل.</p>';
@@ -8525,7 +8592,6 @@ function bindActions(session) {
       syncOrderCustomerSelection(orderForm, newOrderButton.dataset.openOrderForClient);
       updateStagePricing(orderForm);
       orderForm.querySelector("#model-price-history-note").hidden = true;
-      orderForm.querySelector("[data-model-image-preview]").innerHTML = "";
       orderForm.querySelector('[type="submit"]').textContent = "حفظ الطلبية";
       orderForm.querySelector("[data-cancel-edit]").hidden = true;
       document.querySelector("#order-modal-title").textContent = "إضافة موديل للعميل";
@@ -8689,13 +8755,30 @@ function bindActions(session) {
         colorNames,
         colorSizeDistribution,
         sizes: String(formData.get("sizes") || "").trim(),
-        modelImageUrl: existingOrder?.modelImageUrl || "",
+        modelImageUrl: modelImageSlots[0].file ? modelImageSlots[0].originalUrl : modelImageSlots[0].url,
+        modelImageUrl2: modelImageSlots[1].file ? modelImageSlots[1].originalUrl : modelImageSlots[1].url,
         expectedDeliveryDate: String(formData.get("expectedDeliveryDate") || "")
       };
+      const previousImageUrls = modelImageSlots.map((slot) => slot.originalUrl);
       savedOrderId = await persistFactoryOrder(orderToSave);
       form.elements.savedOrderId.value = savedOrderId;
-      const imageUrl = await uploadModelImage(savedOrderId, form.elements.modelImage.files[0]);
-      if (imageUrl) await persistFactoryOrder({ ...orderToSave, id: savedOrderId, modelImageUrl: imageUrl });
+      const savedImageUrls = [orderToSave.modelImageUrl, orderToSave.modelImageUrl2];
+      for (const [index, slot] of modelImageSlots.entries()) {
+        if (slot.file) savedImageUrls[index] = await uploadModelImage(savedOrderId, slot.file);
+      }
+      if (savedImageUrls[0] !== orderToSave.modelImageUrl || savedImageUrls[1] !== orderToSave.modelImageUrl2) {
+        await persistFactoryOrder({
+          ...orderToSave,
+          id: savedOrderId,
+          modelImageUrl: savedImageUrls[0] || "",
+          modelImageUrl2: savedImageUrls[1] || ""
+        });
+      }
+      for (const [index, previousUrl] of previousImageUrls.entries()) {
+        if (previousUrl && previousUrl !== savedImageUrls[index]) {
+          await deleteOrderModelImage(previousUrl, savedOrderId);
+        }
+      }
       closeOrderModal();
       await refreshDashboard(session);
       window.factoryUI.toast(editIndex ? "تم تحديث أمر التشغيل بنجاح." : "تم حفظ أمر التشغيل بنجاح.");
