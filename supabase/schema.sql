@@ -5533,6 +5533,112 @@ begin
 end;
 $$;
 
+create or replace function public.ensure_factory_workforce_profile(requested_user_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  staff_account public.users%rowtype;
+  existing_profile public.factory_records%rowtype;
+  profile_payload jsonb;
+  profile_worker_id uuid;
+begin
+  select *
+    into staff_account
+  from public.users
+  where id = requested_user_id
+    and role in ('worker', 'cutting', 'sewing')
+    and status in ('active', 'suspended');
+  if not found then
+    return;
+  end if;
+  if auth.uid() is not null and not public.is_active_factory_admin() then
+    raise exception 'Only active admins can synchronize workforce profiles.';
+  end if;
+
+  profile_worker_id := staff_account.id;
+  select *
+    into existing_profile
+  from public.factory_records
+  where collection = 'workforce_profiles'
+    and (
+      payload ->> 'linkedUserId' = staff_account.id::text
+      or (
+        payload ->> 'workerId' = staff_account.id::text
+        and coalesce(nullif(payload ->> 'linkedUserId', ''), staff_account.id::text) = staff_account.id::text
+      )
+    )
+  order by coalesce(payload ->> 'linkedUserId' = staff_account.id::text, false) desc, created_at
+  limit 1
+  for update;
+  if not found and exists (
+    select 1
+    from public.factory_records
+    where collection = 'workforce_profiles'
+      and payload ->> 'workerId' = staff_account.id::text
+  ) then
+    profile_worker_id := gen_random_uuid();
+  end if;
+
+  profile_payload := jsonb_build_object(
+    'workerId', coalesce(nullif(existing_profile.payload ->> 'workerId', ''), profile_worker_id::text),
+    'linkedUserId', staff_account.id,
+    'employeeName', staff_account.name,
+    'username', staff_account.username,
+    'phone', coalesce(staff_account.phone, ''),
+    'roleKey', staff_account.role,
+    'jobTitle', coalesce(nullif(existing_profile.payload ->> 'jobTitle', ''), staff_account.job_title, 'عامل إنتاج')
+  );
+
+  if existing_profile.id is null then
+    insert into public.factory_records (collection, owner_id, payload, created_at, updated_at)
+    values ('workforce_profiles', staff_account.id, profile_payload, now(), now());
+  else
+    update public.factory_records
+    set owner_id = staff_account.id,
+        payload = existing_profile.payload || profile_payload,
+        updated_at = now()
+    where id = existing_profile.id;
+  end if;
+end;
+$$;
+
+create or replace function public.sync_factory_workforce_profile_trigger()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  perform public.ensure_factory_workforce_profile(new.id);
+  return new;
+end;
+$$;
+
+drop trigger if exists sync_factory_workforce_profile on public.users;
+create trigger sync_factory_workforce_profile
+  after insert or update of name, username, phone, role, status, job_title
+  on public.users
+  for each row
+  execute function public.sync_factory_workforce_profile_trigger();
+
+do $$
+declare
+  staff_account record;
+begin
+  for staff_account in
+    select id
+    from public.users
+    where role in ('worker', 'cutting', 'sewing')
+      and status in ('active', 'suspended')
+  loop
+    perform public.ensure_factory_workforce_profile(staff_account.id);
+  end loop;
+end;
+$$;
+
 alter table public.orders enable row level security;
 alter table public.production_stages enable row level security;
 alter table public.factory_records enable row level security;
@@ -5591,7 +5697,8 @@ create policy "Users read relevant production stages"
   );
 
 drop policy if exists "Supervisors update their production stages" on public.production_stages;
-create policy "Supervisors update their production stages"
+drop policy if exists "Admins and cutters update production stages" on public.production_stages;
+create policy "Admins and cutters update production stages"
   on public.production_stages for update to authenticated
   using (
     (
@@ -5613,16 +5720,6 @@ create policy "Supervisors update their production stages"
           and orders.status not in ('تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق')
       )
     )
-    or (
-      stage_name = 'sewing'
-      and public.has_active_factory_role(array['sewing'])
-      and exists (
-        select 1 from public.orders
-        where orders.id = production_stages.order_id
-          and orders.archived_at is null
-          and orders.status not in ('تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق')
-      )
-    )
   )
   with check (
     (
@@ -5637,16 +5734,6 @@ create policy "Supervisors update their production stages"
     or (
       stage_name = 'cutting'
       and public.has_active_factory_role(array['cutting'])
-      and exists (
-        select 1 from public.orders
-        where orders.id = production_stages.order_id
-          and orders.archived_at is null
-          and orders.status not in ('تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق')
-      )
-    )
-    or (
-      stage_name = 'sewing'
-      and public.has_active_factory_role(array['sewing'])
       and exists (
         select 1 from public.orders
         where orders.id = production_stages.order_id
@@ -6040,11 +6127,8 @@ declare
   current_order public.orders%rowtype;
   current_stage public.production_stages%rowtype;
 begin
-  if not (
-    public.is_active_factory_admin()
-    or public.has_active_factory_role(array['sewing'])
-  ) then
-    raise exception 'Only active admins or sewing supervisors can update sewing details.';
+  if not public.is_active_factory_admin() then
+    raise exception 'Only active admins can update sewing details.';
   end if;
   if requested_order_id is null
      or requested_target_quantity is null
@@ -6433,6 +6517,9 @@ revoke all on function public.save_factory_client_account_adjustment(uuid, numer
 grant execute on function public.save_factory_client_account_adjustment(uuid, numeric, text, text) to authenticated;
 revoke all on function public.settle_factory_client_account(uuid) from public, anon, authenticated;
 grant execute on function public.settle_factory_client_account(uuid) to authenticated;
+revoke all on function public.ensure_factory_workforce_profile(uuid) from public, anon, authenticated;
+grant execute on function public.ensure_factory_workforce_profile(uuid) to authenticated;
+revoke all on function public.sync_factory_workforce_profile_trigger() from public, anon, authenticated;
 revoke all on function public.save_factory_cash_transaction(text, text, text, numeric, text, timestamptz, uuid) from public, anon, authenticated;
 grant execute on function public.save_factory_cash_transaction(text, text, text, numeric, text, timestamptz, uuid) to authenticated;
 

@@ -507,9 +507,12 @@ async function readDashboardData(session) {
 
   let stages = [];
   if (session.role === "admin" || orders.length) {
+    const stageColumns = session.role === "sewing"
+      ? "id, order_id, stage_name, color_ply_data, line_name, target_quantity, completed_quantity, status, updated_at"
+      : "id, order_id, stage_name, worker_name, cutter_name, fabric, fabric_details, fabric_id, external_fabric_source, external_fabric_unit, fabric_quantity, bolt_count, layer_count, color_ply_data, technical_notes, line_name, target_quantity, completed_quantity, status, updated_at";
     let stagesQuery = supabaseClient
       .from("production_stages")
-      .select("id, order_id, stage_name, worker_name, cutter_name, fabric, fabric_details, fabric_id, external_fabric_source, external_fabric_unit, fabric_quantity, bolt_count, layer_count, color_ply_data, technical_notes, line_name, target_quantity, completed_quantity, status, updated_at");
+      .select(stageColumns);
     if (session.role !== "admin") {
       stagesQuery = stagesQuery.in("order_id", orders.map((order) => order.id));
     }
@@ -871,6 +874,14 @@ function factoryOrderStatusSequence(order) {
   return statuses;
 }
 
+function isFactoryOrderInProduction(order) {
+  const statusSequence = factoryOrderStatusSequence(order).map(canonicalFactoryOrderStatus);
+  const currentStatus = canonicalFactoryOrderStatus(order.storedStatus || order.status);
+  const currentIndex = statusSequence.indexOf(currentStatus);
+  return currentIndex > statusSequence.indexOf("قيد الانتظار")
+    && currentIndex < statusSequence.indexOf("جاهز للتسليم");
+}
+
 function cuttingDetailsMarkup(order) {
   const sizeData = parseSizeData(order.sizes);
   const sizes = orderedSizeEntries(sizeData);
@@ -905,11 +916,34 @@ function cuttingOrderDetailsMarkup(item) {
 }
 
 function sewingOrderDetailsMarkup(item) {
-  return `<header class="production-details-heading">${modelImageMarkup(item.modelImageUrl)}<div><small>تفاصيل أمر الخياطة</small><h2>${escapeHtml(item.model || "موديل بدون اسم")}</h2><p>كود الموديل بالنظام: ${escapeHtml(item.factoryModelCode || "—")} · كود/رقم الموديل للعميل: ${escapeHtml(item.clientModelCode || "—")} · العميل: ${escapeHtml(item.client || "—")}</p></div>${statusTag(item.status)}</header>
-    <dl class="sewing-order-facts"><div><dt>إجمالي العدد</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.target)} قطعة</dd></div><div><dt>العدد المطلوب الأصلي</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.originalQuantity)} قطعة</dd></div><div><dt>المنجز بالخياطة</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.produced)} قطعة</dd></div><div><dt>خط الخياطة</dt><dd>${escapeHtml(item.line || "—")}</dd></div><div><dt>مشرف الخياطة</dt><dd>${escapeHtml(item.supervisor || "—")}</dd></div></dl>
-    <h3 class="modal-subheading">تفاصيل المقاسات والألوان</h3>${modelSizeColorCardsMarkup(item)}
-    ${cuttingDetailsMarkup(item)}
-    ${item.technicalNotes ? `<p class="cutting-details-notes"><strong>تعليمات الخياطة:</strong> ${escapeHtml(item.technicalNotes)}</p>` : ""}`;
+  return `<header class="production-details-heading">${modelImageMarkup(item.modelImageUrl)}<div><small>تفاصيل أمر الخياطة</small><h2>${escapeHtml(item.model || "موديل بدون اسم")}</h2><p>كود الموديل بالنظام: ${escapeHtml(item.factoryModelCode || "—")} · كود/رقم الموديل للعميل: ${escapeHtml(item.clientModelCode || item.modelNumber || "—")}</p></div>${statusTag(item.status)}</header>
+    <dl class="sewing-order-facts"><div><dt>إجمالي العدد</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.target || 0)} قطعة</dd></div><div><dt>العدد المطلوب الأصلي</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.originalQuantity || 0)} قطعة</dd></div><div><dt>المنجز بالخياطة</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.produced || 0)} قطعة</dd></div></dl>
+    <h3 class="modal-subheading">المقاسات والألوان</h3>${modelSizeColorCardsMarkup(item)}`;
+}
+
+function sewingDetailsProjection(item) {
+  return {
+    model: item.model || item.name || "",
+    modelNumber: item.modelNumber || "",
+    factoryModelCode: item.factoryModelCode || "",
+    clientModelCode: item.clientModelCode || "",
+    modelImageUrl: item.modelImageUrl || "",
+    status: item.status || item.orderStatus || "",
+    target: Number(item.target ?? item.quantity ?? item.total ?? 0),
+    originalQuantity: Number(item.originalQuantity ?? item.originalTotal ?? item.quantity ?? item.total ?? 0),
+    produced: Number(item.produced ?? item.completedPieces ?? item.cut ?? 0),
+    sizes: item.sizes || "",
+    colors: item.colors || "",
+    colorNames: item.colorNames || {},
+    colorPlyData: item.colorPlyData || null,
+    colorSizeDistribution: item.colorSizeDistribution || { colors: [] }
+  };
+}
+
+function sewingHistoryDetailsMarkup(item) {
+  return `<header class="production-details-heading">${modelImageMarkup(item.modelImageUrl)}<div><small>سجل قصة سابقة</small><h2>${escapeHtml(item.model || "موديل بدون اسم")}</h2><p>كود الموديل بالنظام: ${escapeHtml(item.factoryModelCode || "—")} · كود/رقم الموديل للعميل: ${escapeHtml(item.clientModelCode || "—")}</p></div>${statusTag(item.status || item.orderStatus || "—")}</header>
+    <dl class="sewing-order-facts"><div><dt>إجمالي القطع في القصة</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.target || item.total || item.cut || 0)} قطعة</dd></div></dl>
+    <h3 class="modal-subheading">المقاسات والألوان</h3>${modelSizeColorCardsMarkup(item)}`;
 }
 
 function cuttingStoryDetailsMarkup(story) {
@@ -2083,10 +2117,7 @@ function clientAccountCards(data) {
     const summary = clientAccountSummary(client, data);
     const linkedUser = data.users.find((user) => user.id === client.user_id);
     const underConstructionOrders = summary.orders.filter((order) => order.status === "قيد الانتظار");
-    const inProductionOrders = summary.orders.filter((order) =>
-      ["قيد الفرش", "تم الفرش", "جاهز للقص", "تم القص", "جاري الخياطة", "تمت الخياطة"].includes(order.status)
-      || factoryOrderStatusSequence(order).slice(7, -2).includes(order.status)
-    );
+    const inProductionOrders = summary.orders.filter(isFactoryOrderInProduction);
     const unpricedOrders = summary.orders.filter((order) => order.pricePerPiece <= 0);
     const uncountedOrders = summary.orders.filter((order) => order.quantity <= 0);
     const modelMetric = (label, orders, id) => `<div class="model-preview"><span>${label}</span><button class="model-preview-trigger" type="button" aria-label="${orders.length} ${label}" aria-describedby="${id}"${orders.length === 1 ? ` data-open-model-id="${escapeHtml(orders[0].id)}"` : ""}>${orders.length}</button>${previewList(orders, id)}</div>`;
@@ -3046,13 +3077,13 @@ function modelRegistryEntries(data) {
   }));
 }
 
-function modelRegistryView(data, allowRepeat = false) {
+function modelRegistryView(data, allowRepeat = false, detailsKind = "cutting") {
   const entries = modelRegistryEntries(data);
   const cards = entries.map(({ code, model, orders }) => `<article class="cutting-story-card production-compact-card">
     <header class="production-compact-heading">${modelImageMarkup(model.modelImageUrl)}<h3>${escapeHtml(model.name || "موديل بدون اسم")}</h3></header>
     <strong class="production-compact-total">${new Intl.NumberFormat("ar-EG-u-nu-latn").format(orders.reduce((sum, order) => sum + Number(order.quantity || 0), 0))} قطعة</strong>
     <div class="production-compact-facts"><div><span>الألوان</span>${colorSummaryMarkup(model.colors, model.colorNames, model.colorPlyData)}</div><div><span>المقاسات</span>${sizeBadgesMarkup(model.sizes)}</div></div>
-    <div class="form-actions">${productionDetailsButton("cutting", model)}
+    <div class="form-actions">${productionDetailsButton(detailsKind, detailsKind === "sewing" ? sewingDetailsProjection(model) : model)}
       ${allowRepeat
         ? `<button class="button button-primary" type="button" data-repeat-cut="${escapeHtml(orders[0].id)}" data-model-code="${escapeHtml(code)}">تكرار القصة / قص جديد</button>`
         : ""}
@@ -3064,21 +3095,23 @@ function modelRegistryView(data, allowRepeat = false) {
     : '<div class="empty-state">لا توجد موديلات مسجلة حتى الآن.</div>')}</section>`;
 }
 
-function cuttingHistoryView(data, allowRepeat = false) {
+function cuttingHistoryView(data, allowRepeat = false, sewingView = false) {
   const rows = [...data.cutting]
     .sort((left, right) => String(right.createdAt || right.order).localeCompare(String(left.createdAt || left.order)))
     .map((cut) => `<tr>
       <td>${escapeHtml(cut.model)}</td><td>${escapeHtml(cut.factoryModelCode || "—")}</td>
       <td>${escapeHtml(cut.clientModelCode || "—")}</td><td>${escapeHtml(cut.client || "—")}</td>
-      <td>${escapeHtml(cut.fabric || "—")} · ${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(cut.fabricQuantity || 0)} ${escapeHtml(cut.fabricUnit || "")}</td>
-      <td>${cut.layerCount || 0}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(cut.cut || cut.total || 0)}</td>
+      ${sewingView ? "" : `<td>${escapeHtml(cut.fabric || "—")} · ${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(cut.fabricQuantity || 0)} ${escapeHtml(cut.fabricUnit || "")}</td><td>${cut.layerCount || 0}</td>`}
+      <td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(cut.cut || cut.total || 0)}</td>
       <td>${escapeHtml(cut.status || cut.orderStatus || "—")}</td>
-      <td><div class="form-actions">${productionDetailsButton("cutting", cut)}${allowRepeat
+      <td><div class="form-actions">${productionDetailsButton(sewingView ? "sewing-history" : "cutting", sewingView ? sewingDetailsProjection(cut) : cut)}${allowRepeat
         ? `<button type="button" class="row-action" data-repeat-cut="${escapeHtml(cut.order)}" data-model-code="${escapeHtml(cut.factoryModelCode || "")}">تكرار القصة</button>`
         : ""}</div></td>
     </tr>`);
   return `<section id="cutting-history" class="dashboard-section">${panel("سجل القصات المنفذة", rows.length
-    ? table(["الموديل","كود النظام","كود العميل","العميل","الخامة والكمية","الراقات","القطع","الحالة","الإجراء"], rows)
+    ? table(sewingView
+      ? ["الموديل","كود النظام","كود العميل","العميل","القطع","الحالة","الإجراء"]
+      : ["الموديل","كود النظام","كود العميل","العميل","الخامة والكمية","الراقات","القطع","الحالة","الإجراء"], rows)
     : '<div class="empty-state">لا توجد قصات مسجلة بعد.</div>')}</section>`;
 }
 
@@ -3175,15 +3208,15 @@ function cuttingPersonalAccountView(data, session) {
       : '<div class="empty-state">لا توجد تصفيات محفوظة لحسابك.</div>')}`;
 }
 
-function sewingOrderRows(orders, actionLabel = "", action = "") {
+function sewingOrderRows(orders, actionLabel = "", action = "", allowEdit = true) {
   return orders.length
     ? `<div class="sewing-order-grid">${orders.map((item) => {
-      const canEdit = item.stageStatus !== "مكتمل";
+      const canEdit = allowEdit && item.stageStatus !== "مكتمل";
       return `<article class="sewing-order-card production-compact-card">
       <header class="production-compact-heading">${modelImageMarkup(item.modelImageUrl)}<h3>${escapeHtml(item.model)}</h3>${statusTag(item.status)}</header>
       <strong class="production-compact-total">${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.target)} قطعة</strong>
       <div class="production-compact-facts"><div><span>الألوان</span>${colorSummaryMarkup(item.colors, item.colorNames, item.colorPlyData)}</div><div><span>المقاسات</span>${sizeBadgesMarkup(item.sizes)}</div></div>
-      <div class="form-actions">${productionDetailsButton("sewing", item)}${canEdit ? `<button class="button button-secondary" type="button" data-open-sewing-editor="${escapeHtml(item.order)}">تعديل</button>` : ""}${action ? `<button class="button button-primary" type="button" data-sewing-action="${action}" data-sewing-order="${escapeHtml(item.order)}">${actionLabel}</button>` : ""}</div>
+      <div class="form-actions">${productionDetailsButton("sewing", sewingDetailsProjection(item))}${canEdit ? `<button class="button button-secondary" type="button" data-open-sewing-editor="${escapeHtml(item.order)}">تعديل</button>` : ""}${action ? `<button class="button button-primary" type="button" data-sewing-action="${action}" data-sewing-order="${escapeHtml(item.order)}">${actionLabel}</button>` : ""}</div>
     </article>
     ${canEdit ? `<div class="modal-backdrop sewing-editor-modal" data-sewing-editor-modal="${escapeHtml(item.order)}" hidden>
       <section class="modal-card production-editor-modal-card" role="dialog" aria-modal="true" aria-label="تعديل بيانات الخياطة">
@@ -3207,9 +3240,9 @@ function sewingView(data) {
   const inProgress = data.sewing.filter((item) => item.stageStatus === "قيد الخياطة");
   const completed = data.sewing.filter((item) => item.stageStatus === "مكتمل");
   return `<div class="stats-grid">${stat("قصّات متاحة للبدء", available.length)}${stat("قيد الخياطة الفعلية", inProgress.length)}${stat("محوّلة للإمبلاج / التعبئة", completed.length)}</div>
-    ${panel("قصّات متاحة للبدء", sewingOrderRows(available, "بدء الخياطة", "start"), "لا يبدأ العمل إلا بعد استلام المشرف للقصّة")}
-    ${panel("قصّات قيد الخياطة الفعلية", sewingOrderRows(inProgress, "إنهاء الخياطة", "finish"))}
-    ${panel("قصّات مكتملة الخياطة", sewingOrderRows(completed), "تم تسليمها للمرحلة التالية")}`;
+    ${panel("قصّات متاحة للبدء", sewingOrderRows(available, "بدء الخياطة", "start", false), "لا يبدأ العمل إلا بعد استلام المشرف للقصّة")}
+    ${panel("قصّات قيد الخياطة الفعلية", sewingOrderRows(inProgress, "إنهاء الخياطة", "finish", false))}
+    ${panel("قصّات مكتملة الخياطة", sewingOrderRows(completed, "", "", false), "تم تسليمها للمرحلة التالية")}`;
 }
 
 function adminSewingView(data) {
@@ -4546,7 +4579,6 @@ function bindWorkforceActions(session) {
       const submit = form.querySelector('[type="submit"]');
       submit.disabled = true;
       try {
-        const workerId = crypto.randomUUID();
         if (account) {
           const { error: accountError } = await supabaseClient.from("users")
             .update({
@@ -4561,6 +4593,19 @@ function bindWorkforceActions(session) {
             .single();
           if (accountError) throw accountError;
         }
+        const linkedProfileResult = account
+          ? await supabaseClient.from("factory_records")
+            .select("id, payload")
+            .eq("collection", "workforce_profiles")
+            .eq("payload->>linkedUserId", account.id)
+            .order("created_at", { ascending: true })
+            .limit(1)
+            .maybeSingle()
+          : { data: null, error: null };
+        if (linkedProfileResult.error) throw linkedProfileResult.error;
+        const workerId = linkedProfileResult.data?.payload?.workerId
+          || account?.id
+          || crypto.randomUUID();
         await saveFlexibleRecord("workforce_profiles", {
           workerId,
           employeeName: name,
@@ -4579,7 +4624,7 @@ function bindWorkforceActions(session) {
           address: form.elements.address.value.trim(),
           emergencyContact: form.elements.emergencyContact.value.trim(),
           employmentNotes: form.elements.employmentNotes.value.trim()
-        }, null, account?.id || null);
+        }, linkedProfileResult.data?.id || null, account?.id || null);
         showNewWorkforceEmployeeModal = false;
         selectedWorkforceEmployeeId = workerId;
         selectedWorkforceProfileTab = "finance";
@@ -5582,7 +5627,7 @@ function render(session, data, accounts) {
       : session.role === "cutting"
         ? `<section id="dashboard" class="dashboard-section">${cuttingDashboardView(data)}</section>${cuttingRequestsView(data)}${fabricStockView(data, false)}<section id="personal-account" class="dashboard-section">${cuttingPersonalAccountView(data, session)}</section>`
       : session.role === "sewing"
-        ? `<section id="dashboard" class="dashboard-section">${sewingView(data)}</section>${modelRegistryView(data)}${cuttingHistoryView(data)}<section id="personal-account" class="dashboard-section">${cuttingPersonalAccountView(data, session)}</section>`
+        ? `<section id="dashboard" class="dashboard-section">${sewingView(data)}</section>${modelRegistryView(data, false, "sewing")}${cuttingHistoryView(data, false, true)}<section id="personal-account" class="dashboard-section">${cuttingPersonalAccountView(data, session)}</section>`
         : workerView(data, session);
   document.querySelector("#app").innerHTML = `
     <div class="app-shell${collapsedClass}">
@@ -7544,6 +7589,7 @@ function bindProductionDetailsModal(session) {
       const renderDetails = {
         cutting: cuttingOrderDetailsMarkup,
         sewing: sewingOrderDetailsMarkup,
+        "sewing-history": sewingHistoryDetailsMarkup,
         story: cuttingStoryDetailsMarkup
       }[trigger.dataset.productionDetailsKind];
       const modal = document.querySelector("#production-details-modal");
