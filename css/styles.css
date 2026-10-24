@@ -382,6 +382,10 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .model-image-trigger:focus-visible { outline: 3px solid #5e9b83; outline-offset: 2px; }
 .model-image-trigger:hover .model-thumbnail { border-color: #5e9b83; }
 .model-image-gallery { display: inline-flex; flex: 0 0 auto; gap: 5px; }
+.register-model-cell { display: inline-flex; align-items: center; gap: 9px; min-width: 150px; }
+.register-model-cell > span:last-child { min-width: 0; }
+.register-thumbnail-trigger, .register-thumbnail-trigger .model-thumbnail { width: 42px; height: 42px; flex-basis: 42px; border-radius: 6px; }
+.register-thumbnail-placeholder { display: grid; width: 42px; height: 42px; flex: 0 0 42px; place-items: center; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); background: #f5f7f4; }
 .model-thumbnail { display: block; width: 68px; height: 68px; border: 1px solid var(--line); border-radius: 9px; background: #f5f7f4; object-fit: contain; }
 .model-image-field { grid-column: 1 / -1; }
 .model-image-field [data-model-image-preview] { margin-top: 8px; }

@@ -5303,6 +5303,7 @@ declare
   adjustment_time timestamptz := clock_timestamp();
   opening_balance numeric(14, 2) := 0;
   delivered_total numeric(14, 2) := 0;
+  pending_total numeric(14, 2) := 0;
   client_expenses_total numeric(14, 2) := 0;
   order_paid_total numeric(14, 2) := 0;
   payments_total numeric(14, 2) := 0;
@@ -5348,8 +5349,12 @@ begin
   opening_balance := coalesce(opening_balance, 0);
 
   select round(coalesce(sum(total_amount), 0), 2),
+         round(coalesce(sum(case
+           when status in ('تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق') then 0
+           else expected_total_amount
+         end), 0), 2),
          round(coalesce(sum(paid_amount), 0), 2)
-    into delivered_total, order_paid_total
+    into delivered_total, pending_total, order_paid_total
   from public.orders
   where customer_id = matched_client.id
     and archived_at is null;
@@ -5385,7 +5390,7 @@ begin
     );
 
   current_balance := round(
-    opening_balance + delivered_total + client_expenses_total
+    opening_balance + delivered_total + pending_total + client_expenses_total
       - order_paid_total - payments_total - existing_adjustments_total,
     2
   );
@@ -5427,6 +5432,7 @@ declare
   matched_client public.factory_clients%rowtype;
   opening_balance numeric(14, 2) := 0;
   delivered_total numeric(14, 2) := 0;
+  pending_total numeric(14, 2) := 0;
   client_expenses_total numeric(14, 2) := 0;
   order_paid_total numeric(14, 2) := 0;
   payments_total numeric(14, 2) := 0;
@@ -5461,8 +5467,12 @@ begin
   opening_balance := coalesce(opening_balance, 0);
 
   select round(coalesce(sum(total_amount), 0), 2),
+         round(coalesce(sum(case
+           when status in ('تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق') then 0
+           else expected_total_amount
+         end), 0), 2),
          round(coalesce(sum(paid_amount), 0), 2)
-    into delivered_total, order_paid_total
+    into delivered_total, pending_total, order_paid_total
   from public.orders
   where customer_id = matched_client.id
     and archived_at is null;
@@ -5498,7 +5508,7 @@ begin
     );
 
   closing_balance := round(
-    opening_balance + delivered_total + client_expenses_total - order_paid_total - payments_total - account_adjustments_total,
+    opening_balance + delivered_total + pending_total + client_expenses_total - order_paid_total - payments_total - account_adjustments_total,
     2
   );
 
@@ -5516,6 +5526,7 @@ begin
       'clientName', matched_client.name,
       'openingBalance', opening_balance,
       'deliveredTotal', delivered_total,
+      'pendingTotal', pending_total,
       'clientExpensesTotal', client_expenses_total,
       'orderPaidTotal', order_paid_total,
       'paymentsTotal', payments_total,
