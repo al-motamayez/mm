@@ -2067,7 +2067,7 @@ function syncOrderCustomerSelection(form, customerId = form.elements.customerId.
   form.elements.brandSelection.value = source === "brandSelection" ? customerId || "" : "";
 }
 
-function table(headers, rows) {
+function table(headers, rows, className = "") {
   if (typeof rows === "string") {
     rows = rows.match(/<tr\b[\s\S]*?<\/tr>/gi) || [];
   }
@@ -2088,7 +2088,7 @@ function table(headers, rows) {
       return `<td${attributes} data-label="${escapeHtml(label)}">`;
     });
   });
-  return `<div class="table-wrap"><table><thead><tr>${headers.map((heading) => `<th>${heading}</th>`).join("")}</tr></thead><tbody>${labeledRows.join("")}</tbody></table></div>`;
+  return `<div class="table-wrap${className ? ` ${escapeHtml(className)}-wrap` : ""}"><table${className ? ` class="${escapeHtml(className)}"` : ""}><thead><tr>${headers.map((heading) => `<th>${heading}</th>`).join("")}</tr></thead><tbody>${labeledRows.join("")}</tbody></table></div>`;
 }
 
 function panel(title, content, subtitle = "", id = "") {
@@ -2277,6 +2277,19 @@ function clientAccountSummary(client, data) {
     receivableBalance,
     creditBalance
   };
+}
+
+function pendingGoodsBreakdown(summary) {
+  let paymentRemainder = Math.min(Math.max(summary.paid, 0), summary.expectedTotal);
+  return [...summary.orders]
+    .filter((order) => order.expectedAmount > 0)
+    .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime())
+    .map((order) => {
+      const amount = Math.max(0, subtractMoney(order.expectedAmount, paymentRemainder));
+      paymentRemainder = Math.max(0, subtractMoney(paymentRemainder, order.expectedAmount));
+      return { order, amount };
+    })
+    .filter((entry) => entry.amount > 0);
 }
 
 function moneyCents(value) {
@@ -2484,9 +2497,9 @@ function adminDashboardView(data) {
   return `<div class="stats-grid">${stat("النقدية في الدرج", money(drawerBalance), "", statDetailList(cashDetails))}${stat("مديونيات العملاء", money(customerReceivables), "", statDetailList(clientDebts.map(({ client, amount }) => ({
     label: `${client.name || "عميل بدون اسم"}${client.brand_name ? ` · ${client.brand_name}` : ""}`,
     value: money(amount)
-  })), "لا توجد مديونيات مستحقة على العملاء."))}${stat("بضاعة تحت التسليم", money(upcomingReceivables), "", statDetailList(clientSummaries.flatMap((summary) => summary.orders
-    .filter((order) => order.expectedAmount > 0)
-    .map((order) => orderDetail(order, order.remainingPieces ?? order.quantity, order.expectedAmount))), "لا توجد بضاعة متبقية للتسليم."))}${pipelineStats}</div>
+  })), "لا توجد مديونيات مستحقة على العملاء."))}${stat("بضاعة تحت التسليم", money(upcomingReceivables), "صافي القيمة بعد خصم الدفعات المقدمة", statDetailList(clientSummaries.flatMap((summary) =>
+    pendingGoodsBreakdown(summary).map(({ order, amount }) => orderDetail(order, order.remainingPieces ?? order.quantity, amount))
+  ), "لا توجد بضاعة متبقية للتسليم."))}${pipelineStats}</div>
     ${panel("آخر الموديلات وحالتها", activeOrders.length
       ? table(["الموديل","العميل","العدد","سعر القطعة","الحالة"], activeOrders.slice(0, 12).map((order) => `<tr><td>${escapeHtml(order.name)}${order.modelNumber ? ` · ${escapeHtml(order.modelNumber)}` : ""}</td><td>${escapeHtml(order.client || "—")}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity)}</td><td>${money(order.pricePerPiece)}</td><td>${statusTag(order.displayStatus || order.status)}</td></tr>`))
       : '<div class="empty-state">لا توجد موديلات حالية.</div>')}`;
@@ -2564,11 +2577,11 @@ function clientFinancialStatementMarkup(entries) {
         : entry.cashTransaction && !entry.cashTransaction.order_id
         ? `<button class="row-action" type="button" data-edit-cash-transaction="${escapeHtml(entry.cashTransaction.id)}">تعديل</button> <button class="row-action order-delete-action" type="button" data-delete-cash-transaction="${escapeHtml(entry.cashTransaction.id)}">حذف الحركة</button>`
         : "—";
-    return `<tr data-client-statement-row="${escapeHtml(dateValue)}"><td>${escapeHtml(entry.type)}</td><td>${escapeHtml(entry.reference)}</td><td>${escapeHtml(entry.detail)}</td><td class="${entry.amount < 0 ? "financial-credit" : "financial-debit"}">${money(entry.amount)}</td><td>${formatDateTime(entry.date)}</td><td>${actions}</td></tr>`;
+    return `<tr data-client-statement-row="${escapeHtml(dateValue)}"><td>${escapeHtml(entry.type)}</td><td>${escapeHtml(entry.reference)}</td><td>${escapeHtml(entry.detail)}</td><td class="${entry.amount < 0 ? "financial-credit" : "financial-debit"}">${money(entry.amount)}</td><td class="client-statement-date">${formatDateTime(entry.date)}</td><td>${actions}</td></tr>`;
   }).join("");
   return `<div class="client-statement-filters"><label class="field"><span>من تاريخ</span><input type="date" data-client-statement-from></label><label class="field"><span>إلى تاريخ</span><input type="date" data-client-statement-to></label><button class="row-action" type="button" data-clear-client-statement-filter>عرض كل الفترات</button><span data-client-statement-count>${entries.length} حركة</span></div>
     ${entries.length
-      ? table(["الحركة","المرجع","التفاصيل","الأثر على الحساب","التاريخ والوقت","إجراء"], rows)
+      ? table(["الحركة","المرجع","التفاصيل","الأثر على الحساب","التاريخ والوقت","إجراء"], rows, "client-statement-table")
       : '<div class="empty-state">لا توجد حركات مالية مسجلة لهذا العميل حتى الآن.</div>'}`;
 }
 
@@ -2577,6 +2590,12 @@ function clientDetailsView(client, data) {
   const pricedOrders = summary.orders.filter((order) => order.pricePerPiece > 0);
   const unpricedOrders = summary.orders.filter((order) => order.pricePerPiece <= 0);
   const archivedOrders = summary.archivedOrders;
+  const clientModelRequests = (data.clientModelRequests || []).filter((request) => request.client_id === client.id);
+  const pendingClientModelRequests = clientModelRequests.filter((request) => request.status === "pending");
+  const reviewedClientModelRequests = clientModelRequests.filter((request) => request.status !== "pending");
+  const clientRequestRows = (requests) => requests.map((request) =>
+    `<tr><td>${escapeHtml(request.model_name || "—")}</td><td>${escapeHtml(request.model_number || "—")}</td><td>${request.quantity ?? "—"}</td><td>${modelImageMarkup(request.imageUrl, `صورة الموديل ${request.model_name || ""}`) || "—"}</td><td>${statusTag(request.status === "pending" ? "بانتظار المراجعة" : request.status)}</td><td>${formatDateTime(request.created_at)}</td></tr>`
+  );
   const deliveries = data.deliveries.filter((delivery) => delivery.customer_id === client.id);
   const clientFabrics = data.fabrics.filter((fabric) => fabric.customer_id === client.id);
   const clientFabricIds = new Set(clientFabrics.map((fabric) => fabric.id));
@@ -2703,6 +2722,10 @@ function clientDetailsView(client, data) {
     <div data-client-profile-panel="overview"${activeClientProfileTab === "overview" ? "" : " hidden"}>
     ${accountLinkSection}
     ${clientFabricBalanceSection}
+    ${panel("موديلات مطلوبة للقص / قيد الانتظار", pendingClientModelRequests.length
+      ? table(["اسم الموديل","كود/رقم العميل","العدد","الصورة","الحالة","تاريخ الطلب"], clientRequestRows(pendingClientModelRequests))
+      : '<div class="empty-state">لا توجد طلبات قص بانتظار المراجعة.</div>', "هذه الطلبات منفصلة عن سجل الموديلات ولا تدخل التشغيل أو الحساب حتى إتمام القص فعلياً.")}
+    ${reviewedClientModelRequests.length ? panel("طلبات القص السابقة", table(["اسم الموديل","كود/رقم العميل","العدد","الصورة","الحالة","تاريخ الطلب"], clientRequestRows(reviewedClientModelRequests))) : ""}
     <div class="stats-grid client-finance-summary">${summary.latestSettlement ? stat("الرصيد المرحّل من آخر تصفية", money(summary.openingBalance), "قبل حركات الفترة الحالية") : ""}${stat("المتبقي من البضاعة غير المسلّمة", money(summary.pendingGoodsBalance), "بعد تخصيص الدفعات لها؛ لا يُعد ديناً قبل التسليم")}${stat("المستحق فعلياً بعد التسليم", money(summary.deliveredDue), "بعد تخصيص الدفعات أولاً للبضاعة المعلقة")}${stat("مصروفات وعهد العميل", money(summary.clientExpensesTotal))}${stat("خصومات التسوية", money(summary.accountAdjustmentsTotal), "خصومات غير نقدية")}${stat("إجمالي المدفوع", money(summary.paid))}${stat("الرصيد الإجمالي", money(summary.balance), summary.balance === 0 ? "تم السداد بالكامل" : summary.balance < 0 ? "رصيد دائن للعميل" : summary.deliveredDue > 0 ? "يوجد مبلغ مستحق بعد التسليم" : summary.hasUndeliveredGoods ? "يشمل بضاعة معلقة غير مستحقة بعد" : "مديونية مستحقة بعد التسليم")}</div>
     </div>
     <div data-client-profile-panel="statement"${activeClientProfileTab === "statement" ? "" : " hidden"}>
@@ -2956,13 +2979,16 @@ function printClientAccount(client, data) {
   ].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
   const modelRows = orders.map((order) => {
     const total = addMoney(order.totalAmount, order.expectedAmount);
-    return `<tr><td>${escapeHtml(order.name || "—")}</td><td>${escapeHtml(order.modelNumber || "—")}</td><td>${new Intl.NumberFormat("en-US").format(order.quantity || 0)}</td><td>${money(order.pricePerPiece)}</td><td>${money(order.operationalExpenses)}</td><td>${money(total)}</td><td>${escapeHtml(order.status || "—")}</td></tr>`;
+    const thumbnail = order.modelImageUrl
+      ? `<img class="print-model-thumbnail" src="${escapeHtml(order.modelImageUrl)}" alt="صورة ${escapeHtml(order.name || "الموديل")}">`
+      : "—";
+    return `<tr><td>${thumbnail}</td><td><strong>${escapeHtml(order.name || "—")}</strong><small class="print-model-code">كود النظام: ${escapeHtml(order.factoryModelCode || "—")}</small></td><td>${escapeHtml(order.modelNumber || "—")}</td><td>${new Intl.NumberFormat("en-US").format(order.quantity || 0)}</td><td>${money(order.pricePerPiece)}</td><td>${money(order.operationalExpenses)}</td><td>${money(total)}</td><td>${escapeHtml(order.status || "—")}</td></tr>`;
   }).join("");
   const movementRows = movements.map((entry) =>
     `<tr><td>${escapeHtml(entry.type)}</td><td>${escapeHtml(entry.description || "—")}</td><td>${money(entry.amount)}</td><td>${formatDateTime(entry.date)}</td></tr>`
   ).join("");
   const body = `<section class="print-section"><h2>كشف الحساب · ${escapeHtml(client.name)}</h2><p>البراند: ${escapeHtml(client.brand_name || "—")} · رقم العميل: ${escapeHtml(client.client_number || "—")}</p><div class="print-summary"><div><span>الرصيد السابق المرحّل</span><strong>${money(summary.openingBalance)}</strong></div><div><span>المستحق بعد التسليم والدفعات المخصصة</span><strong>${money(summary.deliveredDue)}</strong></div><div><span>المتبقي من البضاعة غير المسلّمة بعد الدفعات</span><strong>${money(summary.pendingGoodsBalance)}</strong></div><div><span>المصروفات والعهد الحالية</span><strong>${money(summary.clientExpensesTotal)}</strong></div><div><span>خصومات التسوية الحالية</span><strong>${money(summary.accountAdjustmentsTotal)}</strong></div><div><span>إجمالي المدفوع</span><strong>${money(summary.paid)}</strong></div><div><span>المديونية المستحقة بعد التسليم</span><strong>${money(summary.receivableBalance)}</strong></div><div><span>الرصيد الإجمالي للحساب</span><strong>${money(summary.balance)}</strong></div></div></section>
-    <section class="print-section"><h2>الموديلات والطلبيات</h2><table><thead><tr><th>الموديل</th><th>الرقم</th><th>العدد</th><th>سعر القطعة</th><th>مصاريف التشغيل</th><th>الإجمالي</th><th>الحالة</th></tr></thead><tbody>${modelRows || '<tr><td colspan="7">لا توجد موديلات مسجلة.</td></tr>'}</tbody></table></section>
+    <section class="print-section"><h2>الموديلات والطلبيات</h2><table class="print-models-table"><thead><tr><th>الصورة</th><th>اسم الموديل وكود النظام</th><th>كود العميل</th><th>العدد</th><th>سعر القطعة</th><th>مصاريف التشغيل</th><th>الإجمالي</th><th>الحالة</th></tr></thead><tbody>${modelRows || '<tr><td colspan="8">لا توجد موديلات مسجلة.</td></tr>'}</tbody></table></section>
     <section class="print-section"><h2>حركة الحساب</h2><table><thead><tr><th>نوع الحركة</th><th>البيان</th><th>الأثر المالي</th><th>التاريخ</th></tr></thead><tbody>${movementRows || '<tr><td colspan="4">لا توجد حركات مسجلة.</td></tr>'}</tbody></table></section>`;
   printDocument("كشف حساب العميل", body);
 }
@@ -4268,10 +4294,12 @@ function clientView(data, session) {
         `<tr><td>${escapeHtml(item.fabric_name)} · ${escapeHtml(item.color_name || "—")}</td><td>${escapeHtml(item.transaction_type)}</td><td>${fabricQuantity(item.movement_quantity)} ${escapeHtml(item.unit)}</td><td>${escapeHtml(item.movement_notes || "—")}</td><td>${formatDateTime(item.movement_created_at)}</td></tr>`
       ))
       : '<div class="empty-state">لا توجد حركات قماش مسجلة.</div>')}</section>`;
-  const clientModelRequests = data.clientModelRequests || [];
-  const requestRows = clientModelRequests.map((request) =>
+  const clientModelRequests = (data.clientModelRequests || []).filter((request) => request.user_id === session.accountId);
+  const requestRows = (requests) => requests.map((request) =>
     `<tr><td>${escapeHtml(request.model_name || "—")}</td><td>${escapeHtml(request.model_number || "—")}</td><td>${request.quantity ?? "—"}</td><td>${modelImageMarkup(request.imageUrl, `صورة القطعة ${request.model_name || ""}`) || "—"}</td><td>${statusTag(request.status === "pending" ? "بانتظار مراجعة الإدارة" : request.status)}</td><td>${formatDateTime(request.created_at)}</td></tr>`
   );
+  const pendingClientModelRequests = clientModelRequests.filter((request) => request.status === "pending");
+  const reviewedClientModelRequests = clientModelRequests.filter((request) => request.status !== "pending");
   const clientModelRequestSection = `<section id="model-requests" class="dashboard-section">${panel("إرسال قصة / موديل جديد", `<form class="form-grid client-model-request-form" data-client-model-request novalidate>
     <label class="field"><span>اسم الموديل (اختياري)</span><input name="modelName" maxlength="160"></label>
     <label class="field"><span>كود/رقم الموديل للعميل (اختياري)</span><input name="modelNumber" maxlength="100"></label>
@@ -4280,9 +4308,10 @@ function clientView(data, session) {
     <label class="field"><span>ملاحظات (اختياري)</span><textarea name="notes" rows="3" maxlength="2000"></textarea></label>
     <div class="form-actions"><button class="button button-primary" type="submit">إرسال للإدارة</button></div>
   </form>`, "كل الحقول اختيارية؛ الطلب منفصل عن أوامر الإنتاج والمخزون والحسابات حتى مراجعته من الإدارة.")}
-    ${panel("قصصي / موديلاتي المرسلة", requestRows.length
-      ? table(["اسم الموديل","كود/رقم الموديل للعميل","العدد","الصورة","الحالة","تاريخ الإرسال"], requestRows)
-      : '<div class="empty-state">لم ترسل قصصاً أو موديلات جديدة بعد.</div>')}</section>`;
+    ${panel("موديلات مطلوبة للقص / قيد الانتظار", pendingClientModelRequests.length
+      ? table(["اسم الموديل","كود/رقم الموديل للعميل","العدد","الصورة","الحالة","تاريخ الإرسال"], requestRows(pendingClientModelRequests))
+      : '<div class="empty-state">لا توجد موديلات مطلوبة للقص بانتظار المراجعة.</div>', "هذه الطلبات منفصلة عن الموديلات والطلبيات؛ لا تدخل سجل الإنتاج أو حساب البضاعة حتى اعتمادها وقصها فعلياً.")}
+    ${reviewedClientModelRequests.length ? panel("طلبات القص السابقة", table(["اسم الموديل","كود/رقم الموديل للعميل","العدد","الصورة","الحالة","تاريخ الإرسال"], requestRows(reviewedClientModelRequests))) : ""}</section>`;
   return `<section id="dashboard" class="dashboard-section"><article class="client-balance-spotlight ${balanceState}" role="status" aria-live="polite"><span>الرصيد الإجمالي للحساب</span><strong>${money(Math.abs(due))}</strong><small>${balanceCaption}</small></article><div class="stats-grid">${stat("موديلاتي الحالية", currentOrders.length, "ضمن الفترة الحالية")}${latestSettlement ? stat("الرصيد المرحّل من آخر تصفية", money(openingBalance), "قبل حركات الفترة الحالية") : ""}${stat("المتبقي من البضاعة غير المسلّمة", money(pendingGoodsBalance), "بعد تخصيص الدفعات؛ لا يعد ديناً قبل التسليم")}${stat("المستحق بعد التسليم", money(deliveredDue), "بعد تخصيص الدفعات للبضاعة المعلقة أولاً")}${stat("مصروفات وعهد على الحساب", money(clientExpensesTotal))}${stat("إجمالي المدفوع", money(totalPaid))}${stat("الرصيد المتبقي", money(remaining), remaining === 0 ? "تم السداد بالكامل" : remaining < 0 ? "رصيد دائن للعميل" : hasUndeliveredGoods ? "يشمل بضاعة معلقة غير مستحقة بعد" : "مديونية مستحقة بعد التسليم")}</div></section><section id="orders" class="dashboard-section">${panel("موديلاتي والطلبيات الحالية", clientOrderCards(currentOrders))}${archivedOrders.length ? panel("الطلبات المؤرشفة", clientOrderCards(archivedOrders)) : ""}</section>${clientModelRequestSection}<section id="finished-goods" class="dashboard-section">${panel("المخزني · مخزون الإنتاج المستلم", table(["الموديل","الكمية","الألوان","الصورة","العامل","تاريخ الاستلام"], finishedGoodsRows))}</section>${fabricSection}<section id="finance" class="dashboard-section">${financialLedger}</section>`;
 }
 
