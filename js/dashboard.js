@@ -76,6 +76,9 @@ const FACTORY_ORDER_STATUSES = [
   "تم التسليم"
 ];
 const LOCKED_FACTORY_ORDER_STATUSES = ["تم التسليم"];
+const DEFAULT_MODEL_IMAGE_URL = `data:image/svg+xml,${encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 120"><rect width="160" height="120" rx="12" fill="#f1f4f2"/><path d="M80 28a17 17 0 1 0 0 34 17 17 0 0 0 0-34ZM43 101c3-19 17-29 37-29s34 10 37 29" fill="none" stroke="#9aa8a0" stroke-linecap="round" stroke-width="7"/><path d="M24 108h112" stroke="#c7d0ca" stroke-linecap="round" stroke-width="4"/></svg>'
+)}`;
 const WORKFLOW_MANAGED_FACTORY_ORDER_STATUSES = [
   "في انتظار الخياطة", "جاري الخياطة", "تمت الخياطة",
   "جاري التشطيب", "تم التشطيب", "جاري المكواة", "تم الكي",
@@ -1693,7 +1696,9 @@ function distributeModelQuantity(form, useEnteredTotal = true) {
 async function uploadModelImage(orderId, file) {
   if (!file) return null;
   const path = await uploadFactoryModelImage(`${orderId}`, file);
-  return supabaseClient.storage.from("factory-model-images").getPublicUrl(path).data.publicUrl;
+  const imageUrl = supabaseClient.storage.from("factory-model-images").getPublicUrl(path).data.publicUrl;
+  if (!imageUrl) throw new Error("تم رفع الصورة لكن تعذر إنشاء رابط عرضها من التخزين.");
+  return imageUrl;
 }
 
 async function deleteOrderModelImage(imageUrl, orderId) {
@@ -3163,7 +3168,7 @@ function adminView(data, accounts) {
       </form><div data-order-cutting-editor hidden></div></section></div>
       <div class="modal-backdrop" id="delivery-modal" hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="delivery-modal-title"><button class="modal-close" type="button" data-close-delivery aria-label="إغلاق">×</button><h2 id="delivery-modal-title">تسجيل تسليم جديد</h2><p id="delivery-modal-description">أدخل كمية هذه الدفعة واسم مستلمها؛ ستُضاف إلى إجمالي ما تم تسليمه حتى الآن.</p><form id="delivery-form" class="modal-form"><input type="hidden" name="orderId"><input type="hidden" name="finalize" value=""><label for="delivery-settlement-choice" data-settlement-choice-field hidden>طريقة التسوية</label><select id="delivery-settlement-choice" name="settlementChoice" data-settlement-choice-field hidden></select><label for="delivery-quantity" id="delivery-quantity-label">كمية التسليم</label><input id="delivery-quantity" name="quantity" type="number" min="1" step="1" required><label for="delivery-recipient">اسم المستلم</label><input id="delivery-recipient" name="recipientName" required><div class="form-actions"><button class="button button-primary" type="submit">تسجيل التسليم</button><button class="row-action" type="button" data-close-delivery>إلغاء</button></div></form></section></div>
     </section>
-    ${factoryRegistersView(data, true, "cutting", false, true)}
+    ${factoryRegistersView(data, true, "cutting", false, true, true)}
     ${clientModelRequestsAdminView(data)}
     <section id="cutting" class="dashboard-section">${adminCuttingTransferView(data)}</section>
     <section id="sewing" class="dashboard-section">${adminSewingView(data)}</section>
@@ -3283,6 +3288,7 @@ function modelRegistryEntries(data) {
   }
   return [...groups.values()].map((entry) => {
     const orders = entry.orders.sort((left, right) => String(left.createdAt || left.id).localeCompare(String(right.createdAt || right.id)));
+    const latestOrder = orders[orders.length - 1];
     const model = entry.catalogModel
       ? {
         id: entry.catalogModel.id,
@@ -3290,14 +3296,25 @@ function modelRegistryEntries(data) {
         modelNumber: entry.catalogModel.client_model_code,
         clientModelCode: entry.catalogModel.client_model_code,
         factoryModelCode: entry.catalogModel.factory_model_code,
-        modelImageUrl: entry.catalogModel.model_image_url,
-        modelImageUrls: [entry.catalogModel.model_image_url, ""],
+        modelImageUrl: entry.catalogModel.model_image_url || DEFAULT_MODEL_IMAGE_URL,
+        modelImageUrls: [entry.catalogModel.model_image_url || DEFAULT_MODEL_IMAGE_URL, ""],
         customerId: entry.catalogModel.customer_id,
         colors: orders[0]?.colors || "",
         sizes: orders[0]?.sizes || ""
       }
       : orders[0];
-    return { code: entry.code, orders, model, catalogModel: entry.catalogModel };
+    return {
+      code: entry.code,
+      orders,
+      model,
+      catalogModel: entry.catalogModel,
+      latestActivityAt: Math.max(
+        Date.parse(entry.catalogModel?.created_at) || 0,
+        Date.parse(latestOrder?.createdAt) || 0
+      )
+    };
+  }).sort((left, right) => {
+    return right.latestActivityAt - left.latestActivityAt || right.code.localeCompare(left.code);
   });
 }
 
@@ -3307,7 +3324,7 @@ function modelRegistryView(data, allowRepeat = false, detailsKind = "cutting", c
     `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)}${client.brand_name ? ` · ${escapeHtml(client.brand_name)}` : ""}</option>`
   ).join("");
   const registrationForm = canRequestCut
-    ? `<form class="form-grid cutting-model-register-form" data-register-factory-model><label class="field"><span>العميل / البراند</span><select name="customerId" required><option value="">اختر العميل</option>${customerOptions}</select></label><label class="field"><span>اسم الموديل</span><input name="modelName" maxlength="160" required></label><label class="field"><span>كود/رقم الموديل للعميل (اختياري)</span><input name="clientModelCode" maxlength="100"></label><label class="field"><span>صورة الموديل</span><input name="modelImage" type="file" accept="image/*" required></label><div class="form-actions"><button class="button button-primary" type="submit">إضافة إلى سجل الموديلات</button></div></form>`
+    ? `<form class="form-grid cutting-model-register-form" data-register-factory-model><label class="field"><span>العميل / البراند</span><select name="customerId" required><option value="">اختر العميل</option>${customerOptions}</select></label><label class="field"><span>اسم الموديل</span><input name="modelName" maxlength="160" required></label><label class="field"><span>كود/رقم الموديل للعميل (اختياري)</span><input name="clientModelCode" maxlength="100"></label><label class="field"><span>صورة الموديل (اختياري)</span><input name="modelImage" type="file" accept="image/*"><small>عند عدم رفع صورة، سيُستخدم شكل افتراضي للموديل.</small></label><div class="form-actions"><button class="button button-primary" type="submit">إضافة إلى سجل الموديلات</button></div></form>`
     : "";
   const cards = entries.map(({ code, model, orders, catalogModel }) => `<article class="cutting-story-card production-compact-card">
     <header class="production-compact-heading">${modelImageMarkup(model.modelImageUrls || model.modelImageUrl)}<h3>${escapeHtml(model.name || "موديل بدون اسم")}</h3></header>
@@ -3350,15 +3367,50 @@ function cuttingHistoryView(data, allowRepeat = false, sewingView = false) {
     : '<div class="empty-state">لا توجد قصات مسجلة بعد.</div>');
 }
 
-function factoryRegistersView(data, allowRepeat = false, detailsKind = "cutting", sewingView = false, canRequestCut = false) {
-  const modelsSelected = activeRegisterTab === "models";
+function dispatchedCuttingRequestsView(data) {
+  const requests = [...(data.cuttingRequests || [])]
+    .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
+  const rows = requests.map((request) => {
+    const catalogModel = data.modelCatalog.find((entry) => entry.id === request.catalog_model_id);
+    const sourceOrder = data.models.find((entry) => entry.id === request.source_order_id);
+    const modelName = catalogModel?.model_name || sourceOrder?.name || "موديل غير متاح";
+    const modelCode = catalogModel?.factory_model_code || sourceOrder?.factoryModelCode || "—";
+    const modelImage = catalogModel?.model_image_url || sourceOrder?.modelImageUrl || DEFAULT_MODEL_IMAGE_URL;
+    const client = data.clients.find((entry) => entry.id === request.customer_id)?.name
+      || sourceOrder?.client
+      || "—";
+    const statusLabel = {
+      pending: "بانتظار استلام مخزن القص",
+      submitted: "تم إرسال القصة للمراجعة",
+      cancelled: "ملغي"
+    }[request.status] || request.status || "غير معروف";
+    return `<tr>
+      <td><span class="register-model-cell">${modelImageMarkup(modelImage, `صورة الموديل ${modelName}`, "register-thumbnail")}<span>${escapeHtml(modelName)}</span></span></td>
+      <td>${escapeHtml(modelCode)}</td>
+      <td>${escapeHtml(client)}</td>
+      <td>${formatDateTime(request.created_at)}</td>
+      <td>${statusTag(statusLabel)}</td>
+      <td>${request.submitted_at ? formatDateTime(request.submitted_at) : "—"}</td>
+    </tr>`;
+  });
+  return panel("الموديلات المرسلة للقص", rows.length
+    ? table(["الموديل","كود النظام","العميل","تاريخ الطلب","حالة الطلب","تاريخ إرسال القصة"], rows)
+    : '<div class="empty-state">لا توجد موديلات مرسلة إلى مخزن القص حتى الآن.</div>');
+}
+
+function factoryRegistersView(data, allowRepeat = false, detailsKind = "cutting", sewingView = false, canRequestCut = false, showDispatchedRequests = false) {
+  if (activeRegisterTab === "requests" && !showDispatchedRequests) activeRegisterTab = "models";
+  const historySelected = activeRegisterTab === "history";
+  const requestsSelected = activeRegisterTab === "requests";
   return `<section id="records" class="dashboard-section">
     <div class="client-management-tabs" role="tablist" aria-label="سجلات الموديلات والقصات">
-      <button type="button" role="tab" aria-selected="${modelsSelected}" class="client-management-tab${modelsSelected ? " active" : ""}" data-register-tab="models">سجل الموديلات</button>
-      <button type="button" role="tab" aria-selected="${!modelsSelected}" class="client-management-tab${!modelsSelected ? " active" : ""}" data-register-tab="history">سجل القصات</button>
+      <button type="button" role="tab" aria-selected="${activeRegisterTab === "models"}" class="client-management-tab${activeRegisterTab === "models" ? " active" : ""}" data-register-tab="models">سجل الموديلات</button>
+      <button type="button" role="tab" aria-selected="${historySelected}" class="client-management-tab${historySelected ? " active" : ""}" data-register-tab="history">سجل القصات</button>
+      ${showDispatchedRequests ? `<button type="button" role="tab" aria-selected="${requestsSelected}" class="client-management-tab${requestsSelected ? " active" : ""}" data-register-tab="requests">الموديلات المرسلة للقص</button>` : ""}
     </div>
-    <div data-register-panel="models"${modelsSelected ? "" : " hidden"}>${modelRegistryView(data, allowRepeat, detailsKind, canRequestCut)}</div>
-    <div data-register-panel="history"${modelsSelected ? " hidden" : ""}>${cuttingHistoryView(data, allowRepeat, sewingView)}</div>
+    <div data-register-panel="models"${activeRegisterTab === "models" ? "" : " hidden"}>${modelRegistryView(data, allowRepeat, detailsKind, canRequestCut)}</div>
+    <div data-register-panel="history"${historySelected ? "" : " hidden"}>${cuttingHistoryView(data, allowRepeat, sewingView)}</div>
+    ${showDispatchedRequests ? `<div data-register-panel="requests"${requestsSelected ? "" : " hidden"}>${dispatchedCuttingRequestsView(data)}</div>` : ""}
   </section>`;
 }
 
@@ -3413,7 +3465,7 @@ function cuttingRequestsView(data) {
         id: catalogModel.id,
         name: catalogModel.model_name,
         factoryModelCode: catalogModel.factory_model_code,
-        modelImageUrls: [catalogModel.model_image_url, ""],
+        modelImageUrls: [catalogModel.model_image_url || DEFAULT_MODEL_IMAGE_URL, ""],
         client: data.clients.find((client) => client.id === catalogModel.customer_id)?.name || ""
       }
       : sourceOrder;
@@ -3423,7 +3475,7 @@ function cuttingRequestsView(data) {
       <div class="form-actions"><button class="button button-primary" type="button" data-open-cutting-request="${escapeHtml(request.id)}"${model ? "" : " disabled"}>استلام وبدء بيانات القصة</button></div>
     </article>`;
   }).join("");
-  return `${factoryRegistersView(data, true)}
+  return `${factoryRegistersView(data, true, "cutting", false, false, true)}
   <section id="cutting-requests" class="dashboard-section">${panel("طلبات القص الجديدة", requestCards || '<div class="empty-state">لا توجد طلبات قص جديدة حالياً.</div>', "تتضمن الطلبات صورة الموديل واسمه وكود النظام؛ أكمل بيانات الخامة والفرش والمقاسات ثم أرسل القصة.")}</section>
   <section id="admin-requests" class="dashboard-section">${cuttingView(data)}</section>
   <section id="new-cutting" class="dashboard-section">${panel("قصة جديدة", cuttingSubmissionFormMarkup(data), "تُحفظ القصة في سجل القص المعلق، ولا تُضاف للموديلات أو الخياطة إلا بعد قرار الإدارة.")}</section>`;
@@ -6785,8 +6837,8 @@ function bindCuttingActions(session) {
     const customerId = String(values.get("customerId") || "");
     const clientModelCode = String(values.get("clientModelCode") || "").trim();
     const imageFile = form.elements.modelImage.files[0];
-    if (!customerId || !modelName || !imageFile) {
-      window.factoryUI.toast("اختر العميل وأدخل اسم الموديل وارفع صورته قبل التسجيل.", "error");
+    if (!customerId || !modelName) {
+      window.factoryUI.toast("اختر العميل وأدخل اسم الموديل قبل التسجيل.", "error");
       return;
     }
     const submit = form.querySelector('[type="submit"]');
@@ -6796,7 +6848,9 @@ function bindCuttingActions(session) {
     let imageUrl = null;
     let modelSaved = false;
     try {
-      imageUrl = await uploadModelImage(modelId, imageFile);
+      imageUrl = imageFile
+        ? await uploadModelImage(modelId, imageFile)
+        : DEFAULT_MODEL_IMAGE_URL;
       const { error } = await supabaseClient.rpc("admin_create_factory_model", {
         requested_model_id: modelId,
         requested_customer_id: customerId,
@@ -6808,7 +6862,7 @@ function bindCuttingActions(session) {
       if (error) throw error;
       modelSaved = true;
       await refreshDashboard(session);
-      window.factoryUI.toast("تم تسجيل الموديل في السجل بكود نظامي ثابت. أرسل بعد ذلك طلب قصة جديدة إلى مخزن القص.");
+      window.factoryUI.toast(`تم تسجيل الموديل في السجل بكود نظامي ثابت${imageFile ? " وحُفظت صورته" : " مع صورة افتراضية"}. أرسل بعد ذلك طلب قصة جديدة إلى مخزن القص.`);
     } catch (error) {
       if (imageUrl && !modelSaved) {
         try {
@@ -6860,8 +6914,8 @@ function bindCuttingActions(session) {
           name: catalogModel.model_name,
           clientModelCode: catalogModel.client_model_code,
           factoryModelCode: catalogModel.factory_model_code,
-          modelImageUrl: catalogModel.model_image_url,
-          modelImageUrls: [catalogModel.model_image_url, ""]
+          modelImageUrl: catalogModel.model_image_url || DEFAULT_MODEL_IMAGE_URL,
+          modelImageUrls: [catalogModel.model_image_url || DEFAULT_MODEL_IMAGE_URL, ""]
         }
         : sourceOrder;
       const codePreview = submitForm.querySelector("[data-repeat-model-code]");
