@@ -984,7 +984,7 @@ function factoryOrderLedgerAmounts(order) {
   if (totalPieces <= 0) {
     const totalAmount = Number(order.totalAmount || 0);
     const expectedAmount = Number(order.expectedAmount || 0);
-    return deliveredPieces > 0
+    return deliveredPieces > 0 || factoryOrderFullyDelivered(order)
       ? { deliveredAmount: totalAmount, pendingAmount: expectedAmount }
       : { deliveredAmount: 0, pendingAmount: addMoney(totalAmount, expectedAmount) };
   }
@@ -2285,37 +2285,98 @@ function calculateClientAccountLedger({
   accountAdjustments
 }) {
   const openingBalance = roundMoney(latestSettlement?.balance || 0);
-  const orderLedgerAmounts = orders.map(factoryOrderLedgerAmounts);
-  const deliveredTotal = sumMoney(orderLedgerAmounts.map((amounts) => amounts.deliveredAmount));
-  const expectedTotal = sumMoney(orderLedgerAmounts.map((amounts) => amounts.pendingAmount));
-  const orderPaid = sumMoney(orders.map((order) => order.paidAmount));
+  const orderLedgers = orders.map((order) => {
+    const amounts = factoryOrderLedgerAmounts(order);
+    const orderPaid = Math.max(0, Number(order.paidAmount || 0));
+    const paidToPending = Math.min(orderPaid, amounts.pendingAmount);
+    const paidToDelivered = Math.min(
+      Math.max(0, subtractMoney(orderPaid, paidToPending)),
+      amounts.deliveredAmount
+    );
+    const excessPayment = Math.max(
+      0,
+      subtractMoney(subtractMoney(orderPaid, paidToPending), paidToDelivered)
+    );
+    return {
+      ...order,
+      ledgerDeliveredAmount: amounts.deliveredAmount,
+      ledgerPendingAmount: amounts.pendingAmount,
+      deliveredBalance: subtractMoney(amounts.deliveredAmount, paidToDelivered),
+      pendingBalance: subtractMoney(amounts.pendingAmount, paidToPending),
+      ledgerPaidAmount: orderPaid,
+      ledgerPendingPaid: paidToPending,
+      ledgerDeliveredPaid: paidToDelivered,
+      ledgerExcessPayment: excessPayment
+    };
+  });
+  const deliveredTotal = sumMoney(orderLedgers.map((order) => order.ledgerDeliveredAmount));
+  const expectedTotal = sumMoney(orderLedgers.map((order) => order.ledgerPendingAmount));
+  const orderPaid = sumMoney(orderLedgers.map((order) => order.ledgerPaidAmount));
   const paymentsTotal = sumMoney(payments.map((payment) => payment.amount));
   const clientExpenses = cashTransactions.filter((entry) => entry.direction === "expense");
   const clientExpensesTotal = sumMoney(clientExpenses.map((entry) => entry.amount));
   const accountAdjustmentsTotal = sumMoney(accountAdjustments.map((adjustment) => adjustment.amount));
-  const grossDue = subtractMoney(addMoney(addMoney(openingBalance, deliveredTotal), clientExpensesTotal), accountAdjustmentsTotal);
+  const accountBalanceBeforePayments = subtractMoney(
+    addMoney(openingBalance, clientExpensesTotal),
+    accountAdjustmentsTotal
+  );
+  let availableClientPayment = addMoney(
+    paymentsTotal,
+    sumMoney(orderLedgers.map((order) => order.ledgerExcessPayment))
+  );
+  let pendingPaid = sumMoney(orderLedgers.map((order) => order.ledgerPendingPaid));
+  let paidAfterPending = sumMoney(orderLedgers.map((order) => order.ledgerDeliveredPaid));
+  const orderedLedgers = [...orderLedgers].sort((left, right) =>
+    String(left.createdAt || left.id).localeCompare(String(right.createdAt || right.id))
+  );
+  for (const order of orderedLedgers) {
+    const allocated = Math.min(availableClientPayment, order.pendingBalance);
+    order.pendingBalance = subtractMoney(order.pendingBalance, allocated);
+    order.ledgerPendingPaid = addMoney(order.ledgerPendingPaid, allocated);
+    availableClientPayment = subtractMoney(availableClientPayment, allocated);
+    pendingPaid = addMoney(pendingPaid, allocated);
+  }
+  for (const order of orderedLedgers) {
+    const allocated = Math.min(availableClientPayment, order.deliveredBalance);
+    order.deliveredBalance = subtractMoney(order.deliveredBalance, allocated);
+    order.ledgerDeliveredPaid = addMoney(order.ledgerDeliveredPaid, allocated);
+    availableClientPayment = subtractMoney(availableClientPayment, allocated);
+    paidAfterPending = addMoney(paidAfterPending, allocated);
+  }
+  const accountPayment = Math.min(availableClientPayment, Math.max(0, accountBalanceBeforePayments));
+  const accountBalance = subtractMoney(accountBalanceBeforePayments, accountPayment);
+  availableClientPayment = subtractMoney(availableClientPayment, accountPayment);
+  let accountCredit = Math.max(0, -accountBalance);
+  for (const order of orderedLedgers) {
+    const allocated = Math.min(accountCredit, order.deliveredBalance);
+    order.deliveredBalance = subtractMoney(order.deliveredBalance, allocated);
+    accountCredit = subtractMoney(accountCredit, allocated);
+  }
+  const deliveredOrderBalance = sumMoney(orderLedgers.map((order) => order.deliveredBalance));
+  const pendingGoodsBalance = sumMoney(orderLedgers.map((order) => order.pendingBalance));
+  const deliveredNetBalance = addMoney(deliveredOrderBalance, Math.max(0, accountBalance));
+  const creditBalance = addMoney(accountCredit, availableClientPayment);
   const paid = addMoney(orderPaid, paymentsTotal);
-  const pendingPaid = Math.min(Math.max(paid, 0), expectedTotal);
-  const pendingGoodsBalance = Math.max(0, subtractMoney(expectedTotal, pendingPaid));
-  const paidAfterPending = Math.max(0, subtractMoney(paid, pendingPaid));
-  const deliveredNetBalance = subtractMoney(grossDue, paidAfterPending);
-  const balance = addMoney(deliveredNetBalance, pendingGoodsBalance);
+  const grossDue = addMoney(deliveredTotal, accountBalanceBeforePayments);
+  const balance = subtractMoney(addMoney(deliveredNetBalance, pendingGoodsBalance), creditBalance);
   const hasUndeliveredGoods = orders.some((order) => !factoryOrderFullyDelivered(order));
   const deliveredDue = Math.max(0, deliveredNetBalance);
   const due = balance;
   const receivableBalance = deliveredDue;
-  const creditBalance = Math.max(0, -balance);
   return {
     clientName,
     settlements,
     latestSettlement,
     openingBalance,
-    orders,
+    orders: orderLedgers,
     archivedOrders,
     deliveredTotal,
     expectedTotal,
     requiredAfterDelivery: deliveredTotal,
     grossDue,
+    accountBalance: Math.max(0, accountBalance),
+    accountBalanceBeforePayments,
+    deliveredOrderBalance,
     deliveredNetBalance,
     deliveredDue,
     orderPaid,
@@ -2373,15 +2434,31 @@ function clientAccountSummary(client, data) {
 }
 
 function pendingGoodsBreakdown(summary) {
-  return summary.pendingGoodsBalance > 0
-    ? [{
-      label: summary.clientName || "عميل",
-      note: summary.hasUndeliveredGoods
-        ? `رصيد مستحق عند استلام البضاعة · ${summary.orders.filter((order) => !factoryOrderFullyDelivered(order)).length} طلب غير مسلّم`
-        : "قيمة متبقية لبضاعة غير مسلّمة بعد خصم الدفعات المقدمة",
-      value: money(summary.pendingGoodsBalance)
-    }]
-    : [];
+  return summary.orders
+    .filter((order) => order.pendingBalance > 0)
+    .map((order) => ({
+      label: `${summary.clientName || "عميل"} · ${order.name || order.modelNumber || "طلب بدون اسم"}`,
+      note: `${order.factoryModelCode ? `كود ${order.factoryModelCode} · ` : ""}${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity || 0)} قطعة · ${order.displayStatus || order.status || "لم يتم التسليم"} · بعد الدفعات`,
+      value: money(order.pendingBalance)
+    }));
+}
+
+function deliveredDebtBreakdown(summary) {
+  const details = summary.orders
+    .filter((order) => order.deliveredBalance > 0)
+    .map((order) => ({
+      label: `${summary.clientName || "عميل"} · ${order.name || order.modelNumber || "طلب بدون اسم"}`,
+      note: `${order.factoryModelCode ? `كود ${order.factoryModelCode} · ` : ""}${new Intl.NumberFormat("ar-EG-u-nu-latn").format(factoryOrderDeliveredQuantity(order))} قطعة مستلمة · بعد الدفعات`,
+      value: money(order.deliveredBalance)
+    }));
+  if (summary.accountBalance > 0) {
+    details.push({
+      label: `${summary.clientName || "عميل"} · رصيد مرحّل / حركات الحساب`,
+      note: "رصيد سابق أو حركات حساب لا تخص طلباً غير مستلم",
+      value: money(summary.accountBalance)
+    });
+  }
+  return details;
 }
 
 function moneyCents(value) {
@@ -2562,6 +2639,8 @@ function adminDashboardView(data) {
   })).filter((entry) => entry.amount > 0).sort((left, right) => right.amount - left.amount);
   const customerReceivables = sumMoney(clientDebts.map((entry) => entry.amount));
   const upcomingReceivables = sumMoney(clientSummaries.map((summary) => summary.pendingGoodsBalance));
+  const deliveredDebtDetails = clientSummaries.flatMap((summary) => deliveredDebtBreakdown(summary));
+  const pendingGoodsDetails = clientSummaries.flatMap((summary) => pendingGoodsBreakdown(summary));
   const orderDetail = (order, quantity, amount) => ({
     label: `${order.name}${order.client ? ` · ${order.client}` : ""}`,
     note: `${new Intl.NumberFormat("ar-EG-u-nu-latn").format(quantity)} قطعة · ${order.displayStatus || order.status || "الحالة غير محددة"} · الأقسام: ${workStageLabels(order.workStages).join("، ") || "غير محددة"}`,
@@ -2590,12 +2669,7 @@ function adminDashboardView(data) {
     return stat(group.label, group.orders.length, "حسب مرحلة التشغيل الحالية",
       statDetailList(details, `لا توجد موديلات في مرحلة ${group.label}.`));
   }).join("");
-  return `<div class="stats-grid">${stat("النقدية في الدرج", money(drawerBalance), "", statDetailList(cashDetails))}${stat("مديونيات العملاء", money(customerReceivables), "تشمل مستحقات البضاعة المسلّمة فقط", statDetailList(clientDebts.map(({ client, amount }) => ({
-    label: `${client.name || "عميل بدون اسم"}${client.brand_name ? ` · ${client.brand_name}` : ""}`,
-    value: money(amount)
-  })), "لا توجد مديونيات مستحقة على العملاء."))}${stat("بضاعة تحت التسليم", money(upcomingReceivables), "صافي القيمة بعد خصم الدفعات المقدمة", statDetailList(clientSummaries.flatMap((summary) =>
-    pendingGoodsBreakdown(summary)
-  ), "لا توجد بضاعة متبقية للتسليم."))}${pipelineStats}</div>
+  return `<div class="stats-grid">${stat("النقدية في الدرج", money(drawerBalance), "", statDetailList(cashDetails))}${stat("مديونيات العملاء", money(customerReceivables), "مجموع الطلبات المسلّمة فقط بعد الدفعات", statDetailList(deliveredDebtDetails, "لا توجد مديونيات مستحقة على الطلبات المسلّمة."))}${stat("بضاعة تحت التسليم", money(upcomingReceivables), "مجموع الطلبات غير المسلّمة فقط بعد الدفعات", statDetailList(pendingGoodsDetails, "لا توجد بضاعة متبقية للتسليم."))}${pipelineStats}</div>
     ${panel("آخر الموديلات وحالتها", activeOrders.length
       ? table(["الموديل","العميل","العدد","سعر القطعة","الحالة"], activeOrders.slice(0, 12).map((order) => `<tr><td>${escapeHtml(order.name)}${order.modelNumber ? ` · ${escapeHtml(order.modelNumber)}` : ""}</td><td>${escapeHtml(order.client || "—")}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity)}</td><td>${money(order.pricePerPiece)}</td><td>${statusTag(order.displayStatus || order.status)}</td></tr>`))
       : '<div class="empty-state">لا توجد موديلات حالية.</div>')}`;
