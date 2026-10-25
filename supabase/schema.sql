@@ -5267,6 +5267,9 @@ begin
     if not found or existing_record.payload ->> 'customerId' <> matched_client.id::text then
       raise exception 'The selected payment does not belong to this customer.';
     end if;
+    if existing_record.payload ->> 'accountVoided' = 'true' then
+      raise exception 'Voided payments cannot be edited.';
+    end if;
     if matched_client.account_period_started_at is not null
        and existing_record.created_at < matched_client.account_period_started_at then
       raise exception 'Payments in a settled period are read-only.';
@@ -6024,9 +6027,16 @@ begin
     raise exception 'A valid payment record is required.';
   end if;
 
-  delete from public.factory_records
+  update public.factory_records
+  set payload = payload || jsonb_build_object(
+        'accountVoided', true,
+        'accountVoidedAt', clock_timestamp(),
+        'accountVoidedBy', auth.uid()
+      ),
+      updated_at = clock_timestamp()
   where id = requested_record_id
-    and collection = 'payments';
+    and collection = 'payments'
+    and coalesce(payload ->> 'accountVoided', 'false') <> 'true';
   if not found then
     raise exception 'Payment record not found.';
   end if;

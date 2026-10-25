@@ -5,6 +5,7 @@ let dashboardData;
 let usersTableHasStatus = false;
 let selectedClientId = "";
 let clientManagementTab = "summary";
+let activeClientProfileTab = "overview";
 let realtimeChannel = null;
 let presenceChannel = null;
 let realtimeRefreshTimer = null;
@@ -86,6 +87,13 @@ function isFactoryOrderWorkflowManaged(order) {
   return WORKFLOW_MANAGED_FACTORY_ORDER_STATUSES
     .includes(canonicalFactoryOrderStatus(order.storedStatus || order.status))
     || ["متاح للخياطة", "قيد الخياطة", "قيد التنفيذ", "مكتمل"].includes(order.sewingStageStatus || "");
+}
+
+function factoryOrderStatusForSave(order, requestedStatus) {
+  if (order && isFactoryOrderWorkflowManaged(order)) {
+    return order.storedStatus || order.status;
+  }
+  return requestedStatus;
 }
 const roleInfo = {
   admin: { title: "لوحة تحكم الإدارة", description: "نظرة شاملة على المصنع وإدارة بيانات التشغيل.", icon: "▦" },
@@ -755,6 +763,8 @@ async function readDashboardData(session) {
       clientName: client?.name || payment.clientName || payment.client || "عميل غير معروف"
     };
   });
+  data.voidedPayments = data.payments.filter((payment) => payment.accountVoided === true);
+  data.payments = data.payments.filter((payment) => payment.accountVoided !== true);
   return data;
 }
 
@@ -2217,7 +2227,7 @@ function clientAccountCards(data) {
         ${modelMetric("لم يُحدد عددها", uncountedOrders, `uncounted-${escapeHtml(client.id)}`)}
       </div>
       <p class="client-notes-preview">${escapeHtml(client.notes || "لا توجد ملاحظات مسجلة.")}</p>
-      <div class="client-card-actions"><button class="button button-primary" type="button" data-open-client-details="${escapeHtml(client.id)}">التفاصيل</button><button class="button button-secondary" type="button" data-quick-client-payment="${escapeHtml(client.id)}">＋ إضافة دفعة مالية</button><button class="row-action" type="button" data-edit-customer="${escapeHtml(client.id)}">تعديل بيانات العميل</button><button class="row-action order-delete-action" type="button" data-delete-customer="${escapeHtml(client.id)}">حذف العميل</button></div>
+      <div class="client-card-actions"><button class="button button-primary" type="button" data-open-client-details="${escapeHtml(client.id)}">التفاصيل</button><button class="button button-secondary" type="button" data-quick-client-payment="${escapeHtml(client.id)}">＋ إضافة دفعة مالية</button><button class="row-action" type="button" data-open-client-adjustment="${escapeHtml(client.id)}">خصم تسوية / كسور</button><button class="row-action" type="button" data-edit-customer="${escapeHtml(client.id)}">تعديل بيانات العميل</button><button class="row-action order-delete-action" type="button" data-delete-customer="${escapeHtml(client.id)}">حذف العميل</button></div>
     </article>`;
   }).join("")}</div>`;
 }
@@ -2260,7 +2270,9 @@ function workerCashOutflows(data) {
 
 function cashLedgerView(data) {
   const workerWithdrawals = workerCashOutflows(data);
-  const customerIncome = data.payments.reduce((sum, payment) => addMoney(sum, payment.amount), 0);
+  const voidedPayments = data.voidedPayments || [];
+  const customerIncome = [...data.payments, ...voidedPayments]
+    .reduce((sum, payment) => addMoney(sum, payment.amount), 0);
   const otherIncome = data.cashTransactions
     .filter((entry) => entry.direction === "income")
     .reduce((sum, entry) => addMoney(sum, entry.amount), 0);
@@ -2275,6 +2287,14 @@ function cashLedgerView(data) {
       direction: "income",
       category: "دفعة عميل",
       description: `${payment.clientName || payment.client || ""}${payment.reference ? ` · ${payment.reference}` : ""}`,
+      amount: Number(payment.amount),
+      method: payment.method || "غير محدد",
+      date: payment._createdAt || payment.created_at || payment.date
+    })),
+    ...voidedPayments.map((payment) => ({
+      direction: "income",
+      category: "دفعة مستبعدة من حساب العميل",
+      description: `${payment.clientName || payment.client || ""}${payment.reference ? ` · ${payment.reference}` : ""} · قيد محفوظ دون احتسابه على العميل`,
       amount: Number(payment.amount),
       method: payment.method || "غير محدد",
       date: payment._createdAt || payment.created_at || payment.date
@@ -2319,6 +2339,7 @@ function adminDashboardView(data) {
   const activeOrders = data.models.filter((order) => !order.archivedAt);
   const drawerIncome = sumMoney([
     ...data.payments.map((payment) => payment.amount),
+    ...(data.voidedPayments || []).map((payment) => payment.amount),
     ...data.models.map((order) => order.paidAmount),
     ...data.cashTransactions.filter((entry) => entry.direction === "income").map((entry) => entry.amount)
   ]);
@@ -2345,6 +2366,7 @@ function adminDashboardView(data) {
   });
   const cashDetails = [
     { label: "دفعات العملاء", note: `${data.payments.length} دفعة`, value: money(sumMoney(data.payments.map((payment) => payment.amount))) },
+    { label: "دفعات مستبعدة من حساب العميل", note: `${(data.voidedPayments || []).length} قيد محفوظ للخزنة`, value: money(sumMoney((data.voidedPayments || []).map((payment) => payment.amount))) },
     { label: "مدفوعات على الطلبات", note: `${activeOrders.length} موديل`, value: money(sumMoney(data.models.map((order) => order.paidAmount))) },
     { label: "إيرادات أخرى", note: `${data.cashTransactions.filter((entry) => entry.direction === "income").length} حركة`, value: money(sumMoney(data.cashTransactions.filter((entry) => entry.direction === "income").map((entry) => entry.amount))) },
     { label: "مصروفات ومسحوبات", note: `${data.cashTransactions.filter((entry) => entry.direction === "expense").length + workerCashOutflows(data).length} حركة`, value: money(drawerExpenses) }
@@ -2425,6 +2447,33 @@ function clientAccountLinkOptions(client, data) {
   }).join("");
 }
 
+function clientFinancialStatementMarkup(entries) {
+  const rows = entries.map((entry) => {
+    const timestamp = new Date(entry.date);
+    const dateValue = Number.isNaN(timestamp.getTime()) ? "" : timestamp.toISOString().slice(0, 10);
+    const settled = entry.payment
+      && entry.paymentPeriodStart
+      && timestamp.getTime() < new Date(entry.paymentPeriodStart).getTime();
+    const settledCash = entry.cashTransaction
+      && entry.cashPeriodStart
+      && timestamp.getTime() < new Date(entry.cashPeriodStart).getTime();
+    const actions = entry.payment
+      ? settled
+        ? '<span class="status">فترة مصفّاة</span>'
+        : `<button class="row-action" type="button" data-edit-client-payment="${escapeHtml(entry.payment._recordId)}">تعديل</button> <button class="row-action order-delete-action" type="button" data-delete-payment="${escapeHtml(entry.payment._recordId)}">حذف الدفعة</button>`
+      : settledCash
+        ? '<span class="status">فترة مصفّاة</span>'
+        : entry.cashTransaction && !entry.cashTransaction.order_id
+        ? `<button class="row-action" type="button" data-edit-cash-transaction="${escapeHtml(entry.cashTransaction.id)}">تعديل</button> <button class="row-action order-delete-action" type="button" data-delete-cash-transaction="${escapeHtml(entry.cashTransaction.id)}">حذف الحركة</button>`
+        : "—";
+    return `<tr data-client-statement-row="${escapeHtml(dateValue)}"><td>${escapeHtml(entry.type)}</td><td>${escapeHtml(entry.reference)}</td><td>${escapeHtml(entry.detail)}</td><td class="${entry.amount < 0 ? "financial-credit" : "financial-debit"}">${money(entry.amount)}</td><td>${formatDateTime(entry.date)}</td><td>${actions}</td></tr>`;
+  }).join("");
+  return `<div class="client-statement-filters"><label class="field"><span>من تاريخ</span><input type="date" data-client-statement-from></label><label class="field"><span>إلى تاريخ</span><input type="date" data-client-statement-to></label><button class="row-action" type="button" data-clear-client-statement-filter>عرض كل الفترات</button><span data-client-statement-count>${entries.length} حركة</span></div>
+    ${entries.length
+      ? table(["الحركة","المرجع","التفاصيل","الأثر على الحساب","التاريخ والوقت","إجراء"], rows)
+      : '<div class="empty-state">لا توجد حركات مالية مسجلة لهذا العميل حتى الآن.</div>'}`;
+}
+
 function clientDetailsView(client, data) {
   const summary = clientAccountSummary(client, data);
   const pricedOrders = summary.orders.filter((order) => order.pricePerPiece > 0);
@@ -2455,6 +2504,8 @@ function clientDetailsView(client, data) {
     ? table(["نوع القماش","اللون","عدد الأثواب","المتاح بالمتر"], fabricBalanceRows)
     : '<div class="empty-state">لا يوجد قماش متاح مسجل لهذا العميل حالياً.</div>')}</section>`;
   const payments = data.payments.filter((payment) => payment.customerId === client.id);
+  const clientCashTransactions = data.cashTransactions.filter((entry) => entry.customer_id === client.id);
+  const clientAdjustments = data.accountAdjustments.filter((entry) => entry.customerId === client.id);
   const financialEntries = [
     ...deliveries.map((delivery) => {
       const order = data.models.find((item) => item.id === delivery.order_id);
@@ -2471,7 +2522,9 @@ function clientDetailsView(client, data) {
       reference: payment.reference || "—",
       detail: `${payment.method || "—"}${payment.notes ? ` · ${payment.notes}` : ""}`,
       amount: -Number(payment.amount || 0),
-      date: payment._createdAt || payment.created_at || payment.date
+      date: payment._createdAt || payment.created_at || payment.date,
+      payment,
+      paymentPeriodStart: client.account_period_started_at
     })),
     ...data.models.filter((order) => order.customerId === client.id && Number(order.paidAmount) > 0).map((order) => ({
       type: "دفعة مثبتة على الموديل",
@@ -2480,12 +2533,21 @@ function clientDetailsView(client, data) {
       amount: -Number(order.paidAmount),
       date: order.created_at
     })),
-    ...summary.clientExpenses.map((entry) => ({
-      type: "مصروف خارجي مستحق على العميل",
-      reference: entry.category || "مصروف مرتبط بالموديل",
+    ...clientCashTransactions.map((entry) => ({
+      type: entry.direction === "income" ? "مبلغ وارد" : "مصروف / مبلغ منصرف على حساب العميل",
+      reference: entry.category || "حركة حساب",
       detail: entry.description || "—",
-      amount: Number(entry.amount),
-      date: entry.occurred_at
+      amount: entry.direction === "income" ? -Number(entry.amount) : Number(entry.amount),
+      date: entry.occurred_at,
+      cashTransaction: entry,
+      cashPeriodStart: client.account_period_started_at
+    })),
+    ...clientAdjustments.map((entry) => ({
+      type: "خصم تسوية غير نقدي",
+      reference: entry.reason || "خصم تسوية",
+      detail: entry.notes || "خصم من رصيد العميل دون حركة خزينة",
+      amount: -Number(entry.amount),
+      date: entry._createdAt || entry.created_at
     })),
     ...summary.settlements.map((entry) => ({
       type: "تصفية وترحيل رصيد",
@@ -2533,22 +2595,33 @@ function clientDetailsView(client, data) {
     : "لا يوجد حساب دخول مرتبط بملف العميل."}</p>${linkOptions
       ? `<div class="client-account-link-controls"><label class="field"><span>اختر حساباً معلقاً أو حساب عميل موجوداً</span><select data-client-link-account="${escapeHtml(client.id)}"><option value="">اختر الحساب</option>${linkOptions}</select></label><button class="button button-secondary" type="button" data-action="link-client-account" data-customer-id="${escapeHtml(client.id)}">ربط بحساب تسجيل الدخول</button></div>`
       : '<div class="empty-state">لا توجد حسابات معلقة أو حسابات عملاء متاحة للربط.</div>'}`, "يؤدي ربط حساب معلق إلى اعتماده كعميل وربطه بهذا الملف.")}</section>`;
-  return `<div class="clients-toolbar client-detail-toolbar"><div><h2>${escapeHtml(client.name)} · تفاصيل الحساب والعمولة</h2><p>كود العميل: ${escapeHtml(client.code_letter || "—")} · ${escapeHtml(client.brand_name || "لا يوجد اسم محل/براند")} · رقم العميل: ${escapeHtml(client.client_number || "—")} · واتساب: ${escapeHtml(client.whatsapp || "—")}</p></div><div class="client-detail-actions"><button class="button button-primary" type="button" data-quick-client-payment="${escapeHtml(client.id)}">＋ إضافة دفعة</button><button class="button button-secondary" type="button" data-open-account-adjustment>إضافة خصم / تسوية حساب</button><button class="button button-secondary" type="button" data-print-account>طباعة كشف الحساب</button><button class="button button-secondary" type="button" data-print-selected-models>طباعة الموديلات المحددة</button><button class="row-action" type="button" data-return-clients>العودة للعملاء</button></div></div>
+  return `<div class="clients-toolbar client-detail-toolbar"><div><h2>${escapeHtml(client.name)} · تفاصيل الحساب والعمولة</h2><p>كود العميل: ${escapeHtml(client.code_letter || "—")} · ${escapeHtml(client.brand_name || "لا يوجد اسم محل/براند")} · رقم العميل: ${escapeHtml(client.client_number || "—")} · واتساب: ${escapeHtml(client.whatsapp || "—")}</p></div><div class="client-detail-actions"><button class="button button-primary" type="button" data-quick-client-payment="${escapeHtml(client.id)}">＋ إضافة دفعة</button><button class="button button-secondary" type="button" data-open-account-adjustment>خصم التسوية / الكسور</button><button class="button button-secondary" type="button" data-print-account>طباعة كشف الحساب</button><button class="button button-secondary" type="button" data-print-selected-models>طباعة الموديلات المحددة</button><button class="row-action" type="button" data-return-clients>العودة للعملاء</button></div></div>
     <div class="modal-backdrop" data-account-adjustment-modal hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="account-adjustment-title"><button class="modal-close" type="button" data-close-account-adjustment aria-label="إغلاق">×</button><h2 id="account-adjustment-title">إضافة خصم / تسوية حساب</h2><p>يُخصم القيد من رصيد العميل فقط، ولا يُسجّل كحركة نقدية بالخزنة.</p><form class="form-grid" data-account-adjustment-form="${escapeHtml(client.id)}"><label class="field"><span>مبلغ الخصم (ج.م)</span><input name="amount" type="number" min="0.01" step="0.01" required></label><label class="field"><span>سبب الخصم / البيان</span><select name="reason" required><option value="">اختر سبب التسوية</option><option>تنزيل كسور/فكة</option><option>خصم خطأ تشغيلي</option><option>إشعار خصم تسوية</option></select></label><label class="field wide"><span>تفاصيل إضافية (اختياري)</span><textarea name="notes" rows="2" maxlength="500"></textarea></label><div class="form-actions wide"><button class="button button-primary" type="submit">حفظ الخصم على الحساب</button><button class="row-action" type="button" data-close-account-adjustment>إلغاء</button></div></form></section></div>
     <div class="client-profile-compact"><span>الهاتف: ${escapeHtml(client.phone || "—")}</span><span>كاش: ${escapeHtml(client.cash_phone || "—")}</span><span>إنستا: ${escapeHtml(client.instagram || "—")}</span><span>تاريخ الملف: ${formatDateTime(client.created_at)}</span></div>
+    <div class="client-management-tabs" role="tablist" aria-label="تبويبات ملف العميل">
+      <button type="button" role="tab" aria-selected="${activeClientProfileTab === "overview"}" class="client-management-tab${activeClientProfileTab === "overview" ? " active" : ""}" data-client-profile-tab="overview">الملف والحساب</button>
+      <button type="button" role="tab" aria-selected="${activeClientProfileTab === "statement"}" class="client-management-tab${activeClientProfileTab === "statement" ? " active" : ""}" data-client-profile-tab="statement">كشف الحساب والسجل المالي</button>
+    </div>
+    <div data-client-profile-panel="overview"${activeClientProfileTab === "overview" ? "" : " hidden"}>
     ${accountLinkSection}
     ${clientFabricBalanceSection}
     <div class="stats-grid client-finance-summary">${summary.latestSettlement ? stat("الرصيد المرحّل من آخر تصفية", money(summary.openingBalance), "قبل حركات الفترة الحالية") : ""}${stat("المطلوب المتوقع غير المسلّم", money(summary.expectedTotal), "الكمية غير المسلّمة + مصاريف التشغيل")}${stat("المبلغ المستحق فعلياً", money(summary.requiredAfterDelivery), "قيمة المسلّم + مصاريف التشغيل")}${stat("مصروفات وعهد العميل", money(summary.clientExpensesTotal))}${stat("خصومات التسوية", money(summary.accountAdjustmentsTotal), "خصومات غير نقدية")}${stat("إجمالي المطلوب بعد المدفوع", money(summary.due), "الرصيد المرحّل + المستحق + البضاعة غير المسلّمة + المصروفات − الخصومات − المدفوع")}${stat("إجمالي المدفوع", money(summary.paid))}${stat("الرصيد الحالي", money(summary.balance), summary.balance === 0 ? "تم السداد بالكامل" : summary.balance < 0 ? "رصيد دائن للعميل" : "مستحق على العميل")}</div>
+    </div>
+    <div data-client-profile-panel="statement"${activeClientProfileTab === "statement" ? "" : " hidden"}>
+    <section class="client-detail-section">${panel("كشف الحساب والسجل المالي", `<p>يعرض التسليمات والدفعات والمصروفات والخصومات والتسويات بترتيب زمني. تعديل أو حذف الدفعة الخاطئة يعيد احتساب حساب العميل دون إنشاء حركة صرف نقدية عكسية.</p><form class="form-grid client-cash-form" data-client-cash-form="${escapeHtml(client.id)}"><div class="field"><label for="client-cash-category-${escapeHtml(client.id)}">بند المصروف / العهدة</label><input id="client-cash-category-${escapeHtml(client.id)}" name="category" maxlength="120" placeholder="مثل: سلفة، خيط، نقل" required></div><div class="field"><label for="client-cash-amount-${escapeHtml(client.id)}">المبلغ على حساب العميل (ج.م)</label><input id="client-cash-amount-${escapeHtml(client.id)}" name="amount" type="number" min="0.01" step="0.01" required></div><div class="field"><label for="client-cash-method-${escapeHtml(client.id)}">طريقة الصرف</label><input id="client-cash-method-${escapeHtml(client.id)}" name="method" value="نقدي" maxlength="80"></div><div class="field"><label for="client-cash-date-${escapeHtml(client.id)}">تاريخ الحركة</label><input id="client-cash-date-${escapeHtml(client.id)}" name="occurredAt" type="datetime-local" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}" required></div><div class="field wide"><label for="client-cash-description-${escapeHtml(client.id)}">البيان / التفاصيل</label><input id="client-cash-description-${escapeHtml(client.id)}" name="description" maxlength="500" required></div><div class="form-actions"><button class="button button-primary" type="submit">تسجيل المصروف على الحساب</button></div></form>${clientFinancialStatementMarkup(financialEntries)}`)}</section>
+    <div class="modal-backdrop" data-client-payment-modal hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="client-payment-edit-title"><button class="modal-close" type="button" data-close-client-payment aria-label="إغلاق">×</button><h2 id="client-payment-edit-title">تعديل دفعة العميل</h2><form class="form-grid" data-client-payment-edit-form><input type="hidden" name="recordId"><label class="field"><span>المبلغ (ج.م)</span><input name="amount" type="number" min="0.01" step="0.01" required></label><label class="field"><span>التاريخ</span><input name="date" type="date" required></label><label class="field"><span>طريقة الدفع</span><select name="method"><option>تحويل بنكي</option><option>نقدي</option><option>محفظة إلكترونية</option></select></label><label class="field"><span>رقم الطلبية / المرجع</span><input name="reference" maxlength="160"></label><label class="field wide"><span>ملاحظات</span><input name="notes" maxlength="500"></label><div class="form-actions wide"><button class="button button-primary" type="submit">حفظ التعديل</button><button class="row-action" type="button" data-close-client-payment>إلغاء</button></div></form></section></div>
+    </div>
+    <div data-client-profile-panel="overview"${activeClientProfileTab === "overview" ? "" : " hidden"}>
     <section class="client-detail-section"><header class="section-heading"><div><h2>الموديلات التي تم تسعيرها</h2><p>يُحتسب المطلوب المالي على الكمية التي تم تسليمها.</p></div><button class="button button-secondary" type="button" data-open-order-for-client="${escapeHtml(client.id)}">＋ إضافة موديل للعميل</button></header>${pricedOrders.length ? `<div class="order-cards">${pricedOrders.map((order) => orderCard(order)).join("")}</div>` : '<div class="empty-state">لا توجد موديلات مسعّرة في الفترة الحالية.</div>'}</section>
     <section class="client-detail-section"><header class="section-heading"><div><h2>موديلات لم تُسعّر بعد</h2><p>طلبات في القص أو الانتظار أو مراحل التشغيل الأخرى.</p></div></header>${unpricedOrders.length ? `<div class="order-cards">${unpricedOrders.map((order) => orderCard(order)).join("")}</div>` : '<div class="empty-state">لا توجد موديلات بانتظار التسعير.</div>'}</section>
     <section class="client-detail-section">${panel("الموديلات المسلّمة", deliveries.length ? table(["الموديل","الكمية","سعر القطعة","القيمة المستحقة","المستلم","التاريخ"], deliveries.map((delivery) => { const order = data.models.find((item) => item.id === delivery.order_id); return `<tr><td>${escapeHtml(order?.name || "طلب مؤرشف")}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(delivery.quantity)} قطعة</td><td>${money(delivery.price_per_piece)}</td><td>${money(delivery.amount)}</td><td>${escapeHtml(delivery.recipient_name || "—")}</td><td>${formatDateTime(delivery.delivered_at)}</td></tr>`; })) : '<div class="empty-state">لا توجد تسليمات مسجلة لهذا العميل.</div>')}</section>
     <section class="client-detail-section">${panel("سجل القماش الداخل للعميل", clientFabrics.length ? table(["القماش / اللون","المتاح","الحركة","الكمية","التاريخ"], clientFabricTransactions.map((transaction) => { const fabric = clientFabrics.find((item) => item.id === transaction.fabric_id); return `<tr><td>${escapeHtml(fabric?.name || "—")} · ${escapeHtml(fabric?.color_name || "لون غير مسمى")}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(fabric?.quantity_available || 0)} ${escapeHtml(fabric?.unit || "")}</td><td>${escapeHtml(transaction.transaction_type)}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(transaction.quantity)} ${escapeHtml(fabric?.unit || "")}</td><td>${formatDateTime(transaction.created_at)}</td></tr>`; })) : '<div class="empty-state">لا يوجد قماش مرتبط بهذا العميل.</div>')}</section>
-    <section class="client-detail-section">${panel("الداخل والخارج للعميل", `<form class="form-grid client-cash-form" data-client-cash-form="${escapeHtml(client.id)}"><div class="field"><label for="client-cash-category-${escapeHtml(client.id)}">بند المصروف / العهدة</label><input id="client-cash-category-${escapeHtml(client.id)}" name="category" maxlength="120" placeholder="مثل: سلفة، خيط، نقل" required></div><div class="field"><label for="client-cash-amount-${escapeHtml(client.id)}">المبلغ على حساب العميل (ج.م)</label><input id="client-cash-amount-${escapeHtml(client.id)}" name="amount" type="number" min="0.01" step="0.01" required></div><div class="field"><label for="client-cash-method-${escapeHtml(client.id)}">طريقة الصرف</label><input id="client-cash-method-${escapeHtml(client.id)}" name="method" value="نقدي" maxlength="80"></div><div class="field"><label for="client-cash-date-${escapeHtml(client.id)}">تاريخ الحركة</label><input id="client-cash-date-${escapeHtml(client.id)}" name="occurredAt" type="datetime-local" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}" required></div><div class="field wide"><label for="client-cash-description-${escapeHtml(client.id)}">البيان / التفاصيل</label><input id="client-cash-description-${escapeHtml(client.id)}" name="description" maxlength="500" required></div><div class="form-actions"><button class="button button-primary" type="submit">تسجيل المصروف على الحساب</button></div></form>${financialEntries.length ? table(["النوع","الموديل / المرجع","التفاصيل","الأثر المالي","التاريخ والوقت"], financialEntries.map((entry) => `<tr><td>${escapeHtml(entry.type)}</td><td>${escapeHtml(entry.reference)}</td><td>${escapeHtml(entry.detail)}</td><td class="${entry.amount < 0 ? "financial-credit" : "financial-debit"}">${money(entry.amount)}</td><td>${formatDateTime(entry.date)}</td></tr>`)) : '<div class="empty-state">لا توجد حركات مالية مسجلة لهذا العميل حتى الآن.</div>'}`)}</section>
     <section class="client-detail-section">${panel("ملاحظات وتنبيهات خاصة بالعميل", `${clientNotes.length ? `<div class="client-note-list">${clientNotes.map((note) => `<article><p>${escapeHtml(note.note || "")}</p><time>${formatDateTime(note._createdAt || note.created_at)}</time></article>`).join("")}</div>` : '<div class="empty-state">لا توجد ملاحظات مسجلة.</div>'}<form class="client-note-form" data-client-note="${escapeHtml(client.id)}"><label for="client-note-${escapeHtml(client.id)}">إضافة ملاحظة أو تنبيه</label><textarea id="client-note-${escapeHtml(client.id)}" name="note" rows="3" required></textarea><button class="button button-secondary" type="submit">حفظ الملاحظة</button></form>`)}</section>
     <section class="client-detail-section"><header class="section-heading"><div><h2>الفترات المالية السابقة</h2><p>الأوامر والتسليمات محفوظة في الأرشيف ولا تُحذف عند التصفية.</p></div><button class="button button-primary" type="button" data-settle-client="${escapeHtml(client.id)}">تصفية الحساب وترحيل الرصيد</button></header>
       ${summary.settlements.length ? `<div class="settlement-history">${summary.settlements.map((entry) => `<article class="settlement-card"><div><strong>رصيد سابق مرحّل</strong><small>${formatDateTime(entry.date || entry._createdAt)}</small></div><div><span>رصيد افتتاحي</span><strong>${money(entry.openingBalance)}</strong></div><div><span>قيمة التسليمات</span><strong>${money(entry.deliveredTotal)}</strong></div><div><span>مصروفات وعهد</span><strong>${money(entry.clientExpensesTotal || 0)}</strong></div><div><span>خصومات التسوية</span><strong>${money(entry.accountAdjustmentsTotal || 0)}</strong></div><div><span>المدفوع</span><strong>${money(Number(entry.orderPaidTotal || 0) + Number(entry.paymentsTotal || 0))}</strong></div><div><span>رصيد الفترة الختامي</span><strong>${money(entry.balance)}</strong></div></article>`).join("")}</div>` : '<div class="empty-state">لم تتم تصفية حساب العميل سابقًا.</div>'}
       ${archivedOrders.length ? `<h3 class="history-subheading">الموديلات والطلبات المؤرشفة</h3><div class="order-cards">${archivedOrders.map((order) => orderCard(order, true)).join("")}</div>` : ""}
-    </section>`;
+    </section>
+    </div>`;
 }
 
 function pendingAccountRows(accounts, clients) {
@@ -2722,7 +2795,7 @@ function clientQuickDetailsModalView(client, data) {
     ).join("")}</div>
     <h3 class="modal-subheading">آخر الموديلات</h3>
     ${orders.length ? `<div class="compact-model-list">${orders.map((order) => `<button type="button" class="compact-model-item" data-open-model-id="${escapeHtml(order.id)}"><strong>${escapeHtml(order.name || order.modelNumber || "موديل بدون اسم")}</strong><span>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity)} قطعة · ${money(order.pricePerPiece)}</span>${statusTag(order.displayStatus || order.status)}</button>`).join("")}</div>` : '<p class="empty-state">لا توجد موديلات حالية.</p>'}
-    <div class="form-actions"><button class="button button-primary" type="button" data-quick-client-payment="${escapeHtml(client.id)}">إضافة دفعة</button><button class="button button-secondary" type="button" data-edit-customer="${escapeHtml(client.id)}">تعديل ملف العميل</button></div>`;
+    <div class="form-actions"><button class="button button-primary" type="button" data-open-client-profile="${escapeHtml(client.id)}">فتح الملف الكامل</button><button class="button button-secondary" type="button" data-quick-client-payment="${escapeHtml(client.id)}">إضافة دفعة</button><button class="button button-secondary" type="button" data-edit-customer="${escapeHtml(client.id)}">تعديل ملف العميل</button></div>`;
 }
 
 function printDocument(title, bodyMarkup) {
@@ -6181,6 +6254,9 @@ async function refreshDashboard(session, protectEdits = false) {
 
 async function persistFactoryOrder(order, changes = {}) {
   const updated = { ...order, ...changes };
+  const currentOrder = updated.id
+    ? dashboardData.models.find((item) => item.id === updated.id)
+    : null;
   const { data, error } = await supabaseClient.rpc("save_factory_order", {
     requested_order_id: updated.id || null,
     requested_customer_id: updated.customerId,
@@ -6188,7 +6264,7 @@ async function persistFactoryOrder(order, changes = {}) {
     requested_model_number: updated.modelNumber || "",
     requested_quantity: Number(updated.quantity),
     requested_original_quantity: Number(updated.originalQuantity ?? updated.quantity),
-    requested_status: updated.status,
+    requested_status: factoryOrderStatusForSave(currentOrder, updated.status),
     requested_fabric: updated.fabric || "",
     requested_line_name: updated.line || "",
     requested_colors: updated.colors || "",
@@ -6681,6 +6757,111 @@ function bindCuttingActions(session) {
 }
 
 function bindClientDetailActions(session) {
+  document.querySelectorAll("#client-details [data-client-profile-tab]").forEach((button) => {
+    button.addEventListener("click", () => {
+      activeClientProfileTab = button.dataset.clientProfileTab;
+      document.querySelectorAll("#client-details [data-client-profile-tab]").forEach((tab) => {
+        const selected = tab === button;
+        tab.classList.toggle("active", selected);
+        tab.setAttribute("aria-selected", String(selected));
+      });
+      document.querySelectorAll("#client-details [data-client-profile-panel]").forEach((panel) => {
+        panel.hidden = panel.dataset.clientProfilePanel !== activeClientProfileTab;
+      });
+    });
+  });
+  const filterStatement = () => {
+    const from = document.querySelector("#client-details [data-client-statement-from]")?.value || "";
+    const to = document.querySelector("#client-details [data-client-statement-to]")?.value || "";
+    const rows = [...document.querySelectorAll("#client-details [data-client-statement-row]")];
+    let visibleCount = 0;
+    rows.forEach((row) => {
+      const date = row.dataset.clientStatementRow;
+      const visible = (!from || (date && date >= from)) && (!to || (date && date <= to));
+      row.hidden = !visible;
+      if (visible) visibleCount += 1;
+    });
+    const count = document.querySelector("#client-details [data-client-statement-count]");
+    if (count) count.textContent = `${visibleCount} حركة`;
+  };
+  document.querySelectorAll("#client-details [data-client-statement-from], #client-details [data-client-statement-to]")
+    .forEach((input) => input.addEventListener("change", filterStatement));
+  document.querySelectorAll("#client-details [data-clear-client-statement-filter]").forEach((button) =>
+    button.addEventListener("click", () => {
+      document.querySelector("#client-details [data-client-statement-from]").value = "";
+      document.querySelector("#client-details [data-client-statement-to]").value = "";
+      filterStatement();
+    })
+  );
+  document.querySelectorAll("#client-details [data-edit-client-payment]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const payment = dashboardData.payments.find((entry) => entry._recordId === button.dataset.editClientPayment);
+      const modal = document.querySelector("#client-details [data-client-payment-modal]");
+      const form = modal?.querySelector("[data-client-payment-edit-form]");
+      if (!payment || !form || !modal) {
+        window.factoryUI.toast("تعذر العثور على الدفعة أو نموذج تعديلها.", "error");
+        return;
+      }
+      form.elements.recordId.value = payment._recordId;
+      form.elements.amount.value = payment.amount;
+      form.elements.date.value = String(payment.date || payment._createdAt || payment.created_at || "").slice(0, 10);
+      form.elements.method.value = payment.method || "نقدي";
+      if (![...form.elements.method.options].some((option) => option.value === form.elements.method.value)) {
+        form.elements.method.add(new Option(form.elements.method.value, form.elements.method.value));
+      }
+      form.elements.reference.value = payment.reference || payment.orderReference || "";
+      form.elements.notes.value = payment.notes || "";
+      modal.hidden = false;
+    });
+  });
+  document.querySelectorAll("#client-details [data-close-client-payment]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const modal = document.querySelector("#client-details [data-client-payment-modal]");
+      if (modal) modal.hidden = true;
+    });
+  });
+  document.querySelectorAll("#client-details [data-client-payment-modal]").forEach((modal) => {
+    modal.addEventListener("click", (event) => {
+      if (event.target === modal) modal.hidden = true;
+    });
+  });
+  document.querySelectorAll("#client-details [data-client-payment-edit-form]").forEach((form) => {
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const submit = form.querySelector('[type="submit"]');
+      const values = new FormData(form);
+      const amount = Number(values.get("amount"));
+      const date = String(values.get("date") || "");
+      if (!Number.isFinite(amount) || amount <= 0 || !date) {
+        window.factoryUI.toast("أدخل مبلغًا موجبًا وتاريخًا صالحًا للدفعة.", "error");
+        return;
+      }
+      submit.disabled = true;
+      let saved = false;
+      try {
+        const { error } = await supabaseClient.rpc("save_factory_payment", {
+          requested_record_id: String(values.get("recordId")),
+          requested_customer_id: selectedClientId,
+          requested_amount: amount,
+          requested_date: date,
+          requested_method: String(values.get("method") || "غير محدد"),
+          requested_reference: String(values.get("reference") || "").trim(),
+          requested_notes: String(values.get("notes") || "").trim()
+        });
+        if (error?.code === "PGRST202") throw new Error("دالة حفظ الدفعات غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+        if (error) throw error;
+        saved = true;
+        await refreshDashboard(session);
+        window.factoryUI.toast("تم تعديل الدفعة وإعادة احتساب حساب العميل.");
+      } catch (error) {
+        reportDashboardFailure(session, saved
+          ? "تم تعديل الدفعة، لكن تعذر تحديث كشف العميل"
+          : "تعذر تعديل الدفعة", error);
+      } finally {
+        submit.disabled = false;
+      }
+    });
+  });
   document.querySelectorAll("#client-details [data-quick-client-payment]").forEach((button) => {
     button.addEventListener("click", () => openClientPayment(button.dataset.quickClientPayment));
   });
@@ -7922,6 +8103,10 @@ function bindActions(session) {
     cashTransactionForm.elements.occurredAt.value = new Date(occurredAt.getTime() - occurredAt.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
     cashTransactionForm.querySelector('[type="submit"]').textContent = "حفظ تعديل الحركة";
     cashTransactionForm.querySelector("[data-cancel-cash-edit]").hidden = false;
+    if (button.closest("#client-details")) {
+      document.querySelector('[data-finance-tab="ledger"]')?.click();
+      activateDashboardView("finance");
+    }
     cashTransactionForm.scrollIntoView({ behavior: "smooth", block: "center" });
     cashTransactionForm.elements.category.focus({ preventScroll: true });
   }));
@@ -7954,6 +8139,16 @@ function bindActions(session) {
   document.querySelectorAll("#clients [data-quick-client-payment]").forEach((button) => {
     button.addEventListener("click", () => openClientPayment(button.dataset.quickClientPayment));
   });
+  document.querySelectorAll("#clients [data-open-client-adjustment]").forEach((button) => {
+    button.addEventListener("click", () => {
+      selectedClientId = button.dataset.openClientAdjustment;
+      activeClientProfileTab = "overview";
+      clientManagementTab = "profiles";
+      render(session, dashboardData, dashboardData.pendingAccounts || []);
+      activateDashboardView("client-details");
+      document.querySelector("#client-details [data-open-account-adjustment]")?.click();
+    });
+  });
   document.querySelectorAll("[data-client-tab]").forEach((button) => button.addEventListener("click", () => {
     clientManagementTab = button.dataset.clientTab;
     document.querySelectorAll("[data-client-tab]").forEach((tab) => {
@@ -7984,6 +8179,10 @@ function bindActions(session) {
     }
     if (canonicalFactoryOrderStatus(select.value) === canonicalFactoryOrderStatus(order.status)) {
       window.factoryUI.toast("الحالة المحددة هي الحالة الحالية بالفعل.");
+      return;
+    }
+    if (["في انتظار الخياطة", "جاري الخياطة", "تمت الخياطة"].includes(canonicalFactoryOrderStatus(select.value))) {
+      window.factoryUI.toast("لا تغيّر حالة الخياطة يدوياً؛ استخدم أزرار نقل الطلب وبدء الخياطة وإنهائها.", "error");
       return;
     }
     button.disabled = true;
@@ -8319,6 +8518,16 @@ function bindActions(session) {
         document.querySelector(`#clients [data-edit-customer="${CSS.escape(client.id)}"]`)?.click();
       });
       clientAccountModal.hidden = false;
+      return;
+    }
+    const openClientProfileButton = event.target.closest("[data-open-client-profile]");
+    if (openClientProfileButton) {
+      selectedClientId = openClientProfileButton.dataset.openClientProfile;
+      activeClientProfileTab = "overview";
+      clientManagementTab = "profiles";
+      clientAccountModal.hidden = true;
+      render(session, dashboardData, dashboardData.pendingAccounts || []);
+      activateDashboardView("client-details");
       return;
     }
   });
@@ -8980,7 +9189,7 @@ function bindActions(session) {
     }
     if (!await window.factoryUI.confirmAction({
       title: "حذف دفعة مالية",
-      message: `سيتم حذف دفعة ${money(payment.amount)} الخاصة بـ${payment.clientName || payment.client || "العميل"} نهائياً، وسيُعاد احتساب رصيده. لا يمكن حذف دفعات فترة تمت تصفيتها.`,
+      message: `سيتم استبعاد دفعة ${money(payment.amount)} الخاصة بـ${payment.clientName || payment.client || "العميل"} من حساب العميل وإعادة احتساب رصيده، مع إبقاء أثرها المسجل في الخزنة دون إنشاء حركة صرف عكسية. لا يمكن حذف دفعات فترة تمت تصفيتها.`,
       confirmLabel: "حذف الدفعة",
       danger: true
     })) return;
@@ -8992,7 +9201,7 @@ function bindActions(session) {
       if (error?.code === "PGRST202") throw new Error("دالة حذف الدفعة غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
       if (error) throw error;
       await refreshDashboard(session);
-      window.factoryUI.toast("تم حذف الدفعة وإعادة احتساب رصيد العميل.");
+      window.factoryUI.toast("تم استبعاد الدفعة من حساب العميل مع الحفاظ على رصيد الخزنة.");
     } catch (error) {
       button.disabled = false;
       reportDashboardFailure(session, "تعذر حذف الدفعة", error);

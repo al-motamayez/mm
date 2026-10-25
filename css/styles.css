@@ -319,6 +319,10 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .client-management-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 16px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
 .client-management-tab { min-height: 40px; padding: 8px 14px; border: 1px solid var(--line); border-radius: 8px; color: #34483f; background: #fff; font-weight: 600; }
 .client-management-tab.active { border-color: var(--green); color: #fff; background: var(--green); }
+.client-statement-filters { display: flex; align-items: end; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; }
+.client-statement-filters .field { min-width: 170px; margin: 0; }
+.client-statement-filters > span { padding: 10px 0; color: var(--muted); font-size: 13px; }
+[data-client-profile-panel][hidden] { display: none; }
 .client-account-details-compact { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr)); gap: 8px; }
 .client-account-details-compact > div { display: grid; gap: 4px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
 .client-account-details-compact span { color: var(--muted); font-size: 12px; }
