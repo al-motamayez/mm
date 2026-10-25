@@ -2272,10 +2272,10 @@ function clientAccountSummary(client, data) {
   const deliveredNetBalance = subtractMoney(grossDue, paidAfterPending);
   const balance = addMoney(deliveredNetBalance, calculatedPendingGoodsBalance);
   const hasUndeliveredGoods = orders.some((order) => !factoryOrderFullyDelivered(order));
-  const pendingGoodsBalance = hasUndeliveredGoods ? Math.max(0, balance) : 0;
-  const deliveredDue = hasUndeliveredGoods ? 0 : Math.max(0, balance);
+  const pendingGoodsBalance = calculatedPendingGoodsBalance;
+  const deliveredDue = Math.max(0, deliveredNetBalance);
   const due = balance;
-  const receivableBalance = hasUndeliveredGoods ? 0 : deliveredDue;
+  const receivableBalance = deliveredDue;
   const creditBalance = Math.max(0, -balance);
   return {
     clientName: client.name,
@@ -2376,19 +2376,17 @@ function clientAccountsOverview(data) {
   const totalGoods = sumMoney(summaries.map((summary) => summary.deliveredTotal));
   const totalExpected = sumMoney(summaries.map((summary) => summary.pendingGoodsBalance));
   const totalPaid = sumMoney(summaries.map((summary) => summary.paid));
-  const totalBalance = sumMoney(summaries
-    .filter((summary) => !summary.hasUndeliveredGoods)
-    .map((summary) => summary.receivableBalance - summary.creditBalance));
+  const totalBalance = sumMoney(summaries.map((summary) => summary.receivableBalance - summary.creditBalance));
   const unpricedCount = summaries.reduce((count, summary) =>
     count + summary.orders.filter((order) => order.pricePerPiece <= 0).length, 0);
   const accountBalances = summaries
-    .filter((summary) => !summary.hasUndeliveredGoods && (summary.receivableBalance > 0 || summary.creditBalance > 0))
+    .filter((summary) => summary.receivableBalance > 0 || summary.creditBalance > 0)
     .map((summary) => `<tr><td>${escapeHtml(summary.clientName || "عميل")}</td><td>${summary.receivableBalance > 0 ? "مدين / مستحق بعد التسليم" : "دائن / فائض للعميل"}</td><td>${money(summary.receivableBalance > 0 ? summary.receivableBalance : summary.creditBalance)}</td><td>${money(summary.pendingGoodsBalance)}</td></tr>`);
   return `<div class="clients-toolbar"><div><h2>حسابات العملاء</h2><p>متابعة الأرصدة والدفعات وقيمة البضاعة وحالات الموديلات لكل عميل.</p></div></div>
     <div class="stats-grid">${stat("قيمة البضاعة المسلّمة", money(totalGoods), "تشمل مصاريف التشغيل المحملة")}${stat("المتبقي من البضاعة المعلقة", money(totalExpected), "بعد تخصيص الدفعات لها")}${stat("إجمالي المدفوع", money(totalPaid), "دفعات العملاء والمدفوع على الطلب")}${stat("صافي الدين المستحق بعد التسليم", money(totalBalance), totalBalance < 0 ? "أرصدة دائنة للعملاء" : "لا يشمل قيمة البضاعة غير المسلّمة")}${stat("موديلات بلا سعر", unpricedCount, "تحتاج إلى استكمال التسعير")}</div>
     ${panel("ديون العملاء / الأرصدة الدائنة", accountBalances.length
       ? table(["العميل","تصنيف الرصيد","الرصيد الصافي","قيمة البضاعة غير المسلّمة"], accountBalances)
-      : '<div class="empty-state">لا توجد مديونيات مستحقة بعد التسليم أو أرصدة دائنة حالياً.</div>', "يُستبعد أي عميل لديه بضاعة غير مسلّمة من هذا القسم؛ يظهر رصيده الموجب حصرياً في بضاعة تحت التسليم.")}
+        : '<div class="empty-state">لا توجد مديونيات مستحقة بعد التسليم أو أرصدة دائنة حالياً.</div>', "تُعرض مديونية البضاعة المسلّمة منفصلة عن صافي قيمة البضاعة غير المسلّمة بعد الدفعات.")}
     ${clientAccountCards(data)}`;
 }
 
@@ -4240,8 +4238,8 @@ function clientView(data, session) {
   const deliveredNetBalance = subtractMoney(grossDue, paidAfterPending);
   const remaining = addMoney(deliveredNetBalance, calculatedPendingGoodsBalance);
   const hasUndeliveredGoods = currentOrders.some((order) => !factoryOrderFullyDelivered(order));
-  const pendingGoodsBalance = hasUndeliveredGoods ? Math.max(0, remaining) : 0;
-  const deliveredDue = hasUndeliveredGoods ? 0 : Math.max(0, remaining);
+  const pendingGoodsBalance = calculatedPendingGoodsBalance;
+  const deliveredDue = Math.max(0, deliveredNetBalance);
   const accountCreditBalance = Math.max(0, -remaining);
   const balanceState = deliveredDue > 0 ? "is-debit" : accountCreditBalance > 0 ? "is-credit" : "is-settled";
   const balanceCaption = deliveredDue > 0
