@@ -332,17 +332,17 @@ async function readDashboardData(session) {
     : Promise.resolve({ data: [], error: null });
   const cuttingStoriesPromise = session.role === "admin"
     ? supabaseClient.from("factory_cutting_stories")
-    .select("id, customer_id, customer_name, submitted_by_name, model_name, model_number, source_order_id, catalog_model_id, cutting_request_id, factory_model_code, size_data, color_ply_data, total_pieces, ply_count, fabric, fabric_details, fabric_id, fabric_quantity, bolt_count, fabric_unit, technical_notes, model_image_url, status, approved_order_id, approved_action, created_at, approved_at")
+    .select("id, customer_id, customer_name, submitted_by_name, model_name, model_number, source_order_id, catalog_model_id, cutting_request_id, factory_model_code, size_data, color_ply_data, total_pieces, ply_count, fabric, fabric_details, fabric_id, fabric_quantity, bolt_count, fabric_unit, technical_notes, model_image_url, status, approved_order_id, approved_action, archived_at, created_at, approved_at")
       .order("created_at", { ascending: false })
     : Promise.resolve({ data: [], error: null });
   const cuttingRequestsPromise = ["admin", "cutting"].includes(session.role)
     ? supabaseClient.from("factory_cutting_requests")
-      .select("id, source_order_id, catalog_model_id, customer_id, requested_by, status, completed_story_id, created_at, submitted_at")
+      .select("id, source_order_id, catalog_model_id, customer_id, requested_by, status, completed_story_id, archived_at, created_at, submitted_at")
       .order("created_at", { ascending: false })
     : Promise.resolve({ data: [], error: null });
   const modelCatalogPromise = ["admin", "cutting"].includes(session.role)
     ? supabaseClient.from("factory_model_catalog")
-      .select("id, customer_id, model_name, client_model_code, factory_model_code, model_image_url, created_at")
+      .select("id, customer_id, model_name, client_model_code, model_serial, factory_model_code, model_image_url, archived_at, created_at")
       .order("created_at", { ascending: false })
     : Promise.resolve({ data: [], error: null });
   const workforceRecords = session.role === "admin"
@@ -499,7 +499,7 @@ async function readDashboardData(session) {
   } else if (["cutting", "sewing"].includes(session.role)) {
     let ordersQuery = supabaseClient
       .from("orders")
-      .select("id, customer_id, model_name, model_number, factory_model_code, client_model_code, sender_name, colors, color_names, color_size_distribution, production_type, work_stages, sizes, original_total_pieces, total_pieces, model_image_url, model_image_url_2, priority, archived_at, status, created_at")
+      .select("id, customer_id, model_name, model_number, factory_model_code, client_model_code, sender_name, colors, color_names, color_size_distribution, production_type, work_stages, sizes, original_total_pieces, total_pieces, model_image_url, model_image_url_2, priority, archived_at, workflow_archived_at, status, created_at")
       .order("created_at", { ascending: false });
     ({ data: orders, error: ordersError } = await ordersQuery);
     if (ordersError?.code === "42703") {
@@ -641,6 +641,7 @@ async function readDashboardData(session) {
         .filter((delivery) => delivery.order_id === order.id)
         .sort((left, right) => new Date(left.delivered_at).getTime() - new Date(right.delivered_at).getTime()),
       archivedAt: order.archived_at || null,
+      workflowArchivedAt: order.workflow_archived_at || null,
       remainingPieces: Math.max(Number(order.total_pieces) - Number(order.delivered_pieces || 0), 0),
       quantityDifference: deliveredPieces - originalQuantity,
       pricePerPiece: Number(order.price_per_piece || 0),
@@ -686,6 +687,7 @@ async function readDashboardData(session) {
     .map((stage) => ({
       id: stage.id,
       order: stage.order_id,
+      workflowArchivedAt: ordersById.get(stage.order_id)?.workflow_archived_at || null,
       customerId: ordersById.get(stage.order_id)?.customer_id || "",
       client: clientsById.get(ordersById.get(stage.order_id)?.customer_id)?.name || "",
       model: ordersById.get(stage.order_id)?.model_name || ordersById.get(stage.order_id)?.model_number || "موديل غير محدد",
@@ -732,6 +734,7 @@ async function readDashboardData(session) {
       return {
         id: stage.id,
         order: stage.order_id,
+        workflowArchivedAt: order?.workflow_archived_at || null,
         line: stage.line_name || "—",
         model: order?.model_name || order?.model_number || "موديل غير محدد",
         modelNumber: order?.model_number || "",
@@ -2072,7 +2075,23 @@ function statDetailList(items, emptyMessage = "لا توجد تفاصيل مسج
 }
 
 function orderCanBeDeleted(item) {
-  return !item.archivedAt;
+  const unstartedStageStatuses = new Set(["", "معلق", "قيد الانتظار", "بانتظار"]);
+  return Boolean(item)
+    && !item.archivedAt
+    && !item.workflowArchivedAt
+    && item.status === "قيد الانتظار"
+    && Number(item.paidAmount || 0) === 0
+    && Number(item.operationalExpenses || 0) === 0
+    && Number(item.deliveredPieces || 0) === 0
+    && !(item.deliveryHistory || []).length
+    && !(item.expenseEntries || []).length
+    && Number(item.completedPieces || 0) === 0
+    && Number(item.cut || 0) === 0
+    && Number(item.cuttingPlys || item.layerCount || 0) === 0
+    && !item.fabricId
+    && !item.fabric
+    && !item.cutterName
+    && unstartedStageStatuses.has(item.cuttingStageStatus || "");
 }
 
 function orderCards(models, withActions = false) {
@@ -2089,7 +2108,7 @@ function orderCards(models, withActions = false) {
       <div class="production-compact-facts"><div><span>الألوان</span>${colorSummaryMarkup(item.colors, item.colorNames, item.colorPlyData)}</div><div><span>المقاسات</span>${sizeBadgesMarkup(item.sizes)}</div></div>
       ${withActions ? `<button class="row-action order-expense-trigger" type="button" data-add-model-expense="${escapeHtml(item.id)}">＋ إضافة مصروف خارجي</button>` : ""}
       <button class="row-action" type="button" data-open-model-id="${escapeHtml(item.id)}">التفاصيل</button>
-      ${withActions ? `<div class="order-card-actions">${canMakeSewingAvailable ? `<button class="button button-secondary" type="button" data-make-sewing-available="${escapeHtml(item.id)}">إدخال للخياطة</button>` : ""}${item.archivedAt ? "" : `<button class="row-action" type="button" data-edit-kind="models" data-index="${index}">تعديل</button>`}${item.customerId ? `${item.archivedAt || LOCKED_FACTORY_ORDER_STATUSES.includes(item.status) ? "" : `<button class="row-action" type="button" data-action="record-delivery" data-index="${index}"${item.remainingPieces > 0 ? "" : " disabled"}>تسجيل تسليم</button><button class="row-action order-close-action" type="button" data-action="complete-handover" data-index="${index}"${item.quantity ? "" : " disabled"}>تسوية التسليم وإغلاق الطلب</button>`}` : '<span class="order-delete-protected">عيّن العميل قبل تسجيل أي تسليم</span>'}${item.archivedAt || LOCKED_FACTORY_ORDER_STATUSES.includes(item.status) ? '<span class="status">مغلق / تم التسليم</span>' : ""}${orderCanBeDeleted(item) ? `<button class="row-action order-delete-action" type="button" data-action="delete-order" data-order-id="${escapeHtml(item.id)}">حذف الموديل</button>` : '<span class="order-delete-protected">محمي بسجل مالي / تسليم</span>'}</div>` : ""}
+      ${withActions ? `<div class="order-card-actions">${canMakeSewingAvailable ? `<button class="button button-secondary" type="button" data-make-sewing-available="${escapeHtml(item.id)}">إدخال للخياطة</button>` : ""}${item.archivedAt || item.workflowArchivedAt ? "" : `<button class="row-action" type="button" data-edit-kind="models" data-index="${index}">تعديل</button>`}${item.customerId ? `${item.archivedAt || item.workflowArchivedAt || LOCKED_FACTORY_ORDER_STATUSES.includes(item.status) ? "" : `<button class="row-action" type="button" data-action="record-delivery" data-index="${index}"${item.remainingPieces > 0 ? "" : " disabled"}>تسجيل تسليم</button><button class="row-action order-close-action" type="button" data-action="complete-handover" data-index="${index}"${item.quantity ? "" : " disabled"}>تسوية التسليم وإغلاق الطلب</button>`}` : '<span class="order-delete-protected">عيّن العميل قبل تسجيل أي تسليم</span>'}${item.workflowArchivedAt ? '<span class="status">مؤرشف تشغيلياً</span>' : ""}${item.archivedAt || LOCKED_FACTORY_ORDER_STATUSES.includes(item.status) ? '<span class="status">مغلق / تم التسليم</span>' : ""}${orderCanBeDeleted(item) ? `<button class="row-action order-delete-action" type="button" data-action="delete-order" data-order-id="${escapeHtml(item.id)}">حذف الموديل</button>` : !item.archivedAt && !item.workflowArchivedAt ? `<button class="row-action" type="button" data-archive-factory-order="${escapeHtml(item.id)}">إيقاف / أرشفة</button>` : ""}</div>` : ""}
     </article>`;
   }).join("")}</div>`;
 }
@@ -2381,7 +2400,7 @@ function cashLedgerView(data) {
 }
 
 function adminDashboardView(data) {
-  const activeOrders = data.models.filter((order) => !order.archivedAt);
+  const activeOrders = data.models.filter((order) => !order.archivedAt && !order.workflowArchivedAt);
   const drawerIncome = sumMoney([
     ...data.payments.map((payment) => payment.amount),
     ...(data.voidedPayments || []).map((payment) => payment.amount),
@@ -3100,7 +3119,7 @@ function workerProductionReviewView(data) {
 }
 
 function adminView(data, accounts) {
-  const activeOrders = data.models.filter((order) => !order.archivedAt);
+  const activeOrders = data.models.filter((order) => !order.archivedAt && !order.workflowArchivedAt);
   const totalUnits = activeOrders.reduce((sum, item) => sum + Number(item.quantity), 0);
   const paid = data.payments.reduce((sum, item) => sum + Number(item.amount), 0);
   const clientOptions = data.clients.map((client) =>
@@ -3267,21 +3286,27 @@ function cuttingView(data) {
 }
 
 function cuttingDashboardView(data) {
-  const active = data.cutting.filter((item) => ["قيد الانتظار", "قيد الفرش", "تم الفرش", "جاهز للقص"].includes(canonicalFactoryOrderStatus(item.orderStatus)));
+  const active = data.cutting.filter((item) => !item.workflowArchivedAt
+    && ["قيد الانتظار", "قيد الفرش", "تم الفرش", "جاهز للقص"].includes(canonicalFactoryOrderStatus(item.orderStatus)));
   const activeTotal = active.reduce((sum, item) => sum + Number(item.total), 0);
-  const waitingForSewing = factoryOrderPipelineGroups(data.models.filter((order) => !order.archivedAt))
+  const waitingForSewing = factoryOrderPipelineGroups(data.models.filter((order) => !order.archivedAt && !order.workflowArchivedAt))
     .find((group) => group.key === "waiting_sewing");
   return `<div class="stats-grid">${stat("طلبات الإدارة", active.length, "بانتظار استكمال القص")}${stat("العدد المطلوب لطلبات الإدارة", new Intl.NumberFormat("ar-EG-u-nu-latn").format(activeTotal), "قطعة")}${stat("في انتظار الخياطة", waitingForSewing?.orders.length || 0, "قصات مكتملة لم تبدأ خياطتها بعد")}${stat("أصناف القماش المتاحة", data.fabrics.length, "متابعة مباشرة للمخزون")}</div>${panel("ملخص العمل الحالي", `<div class="empty-state">استخدم «طلبات الإدارة» لمراجعة الأوامر وتسجيل بيانات الفرشة والقص، أو «قصة جديدة» لإنشاء قصة مباشرة.</div>`)}`;
 }
 
 function modelRegistryEntries(data) {
   const groups = new Map();
-  for (const model of data.models) {
+  const archivedCodes = new Set((data.modelCatalog || [])
+    .filter((catalogModel) => catalogModel.archived_at)
+    .map((catalogModel) => catalogModel.factory_model_code));
+  for (const model of data.models.filter((entry) =>
+    !entry.workflowArchivedAt && !archivedCodes.has(entry.factoryModelCode)
+  )) {
     const code = model.factoryModelCode || model.id;
     if (!groups.has(code)) groups.set(code, { code, orders: [], catalogModel: null });
     groups.get(code).orders.push(model);
   }
-  for (const catalogModel of data.modelCatalog || []) {
+  for (const catalogModel of (data.modelCatalog || []).filter((entry) => !entry.archived_at)) {
     const code = catalogModel.factory_model_code;
     if (!groups.has(code)) groups.set(code, { code, orders: [], catalogModel: null });
     groups.get(code).catalogModel = catalogModel;
@@ -3339,6 +3364,7 @@ function modelRegistryView(data, allowRepeat = false, detailsKind = "cutting", c
       ${canRequestCut
         ? `<button class="button button-secondary" type="button" data-request-cut="${escapeHtml(catalogModel?.id || orders[0]?.id || "")}" data-request-cut-kind="${catalogModel ? "catalog" : "order"}" ${catalogModel || orders.length ? "" : "disabled"}>طلب قصة جديدة</button>`
         : ""}
+      ${canRequestCut && catalogModel ? `<button class="row-action order-delete-action" type="button" data-delete-factory-model="${escapeHtml(catalogModel.id)}">حذف / أرشفة الموديل</button>` : ""}
       <a class="row-action" href="#cutting-history">سجل القصات</a>
     </div>
   </article>`).join("");
@@ -3347,19 +3373,29 @@ function modelRegistryView(data, allowRepeat = false, detailsKind = "cutting", c
     : '<div class="empty-state">لا توجد موديلات مسجلة حتى الآن.</div>'}`);
 }
 
-function cuttingHistoryView(data, allowRepeat = false, sewingView = false) {
+function cuttingHistoryView(data, allowRepeat = false, sewingView = false, canManageRecords = false) {
   const rows = [...data.cutting]
     .sort((left, right) => String(right.createdAt || right.order).localeCompare(String(left.createdAt || left.order)))
-    .map((cut) => `<tr>
+    .map((cut) => {
+      const order = data.models.find((entry) => entry.id === cut.order);
+      const managementAction = canManageRecords && order
+        ? order.workflowArchivedAt
+          ? '<span class="status">مؤرشف تشغيلياً</span>'
+          : orderCanBeDeleted(order)
+            ? `<button type="button" class="row-action order-delete-action" data-action="delete-order" data-order-id="${escapeHtml(order.id)}">حذف</button>`
+            : `<button type="button" class="row-action" data-archive-factory-order="${escapeHtml(order.id)}">إيقاف / أرشفة</button>`
+        : "";
+      return `<tr>
       <td><span class="register-model-cell">${modelImageMarkup(cut.modelImageUrl || cut.modelImageUrls, `صورة الموديل ${cut.model}` , "register-thumbnail") || '<span class="register-thumbnail-placeholder" aria-hidden="true">▣</span>'}<span>${escapeHtml(cut.model)}</span></span></td><td>${escapeHtml(cut.factoryModelCode || "—")}</td>
       <td>${escapeHtml(cut.clientModelCode || "—")}</td><td>${escapeHtml(cut.client || "—")}</td>
       ${sewingView ? "" : `<td>${escapeHtml(cut.fabric || "—")} · ${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(cut.fabricQuantity || 0)} ${escapeHtml(cut.fabricUnit || "")}</td><td>${cut.layerCount || 0}</td>`}
       <td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(cut.cut || cut.total || 0)}</td>
       <td>${escapeHtml(cut.status || cut.orderStatus || "—")}</td>
-      <td><div class="form-actions">${productionDetailsButton(sewingView ? "sewing-history" : "cutting", sewingView ? sewingDetailsProjection(cut) : cut)}${allowRepeat
+      <td><div class="form-actions">${productionDetailsButton(sewingView ? "sewing-history" : "cutting", sewingView ? sewingDetailsProjection(cut) : cut)}${managementAction}${allowRepeat
         ? `<button type="button" class="row-action" data-repeat-cut="${escapeHtml(cut.order)}" data-model-code="${escapeHtml(cut.factoryModelCode || "")}">تكرار القصة</button>`
         : ""}</div></td>
-    </tr>`);
+    </tr>`;
+    });
   return panel("سجل القصات المنفذة", rows.length
     ? table(sewingView
       ? ["الموديل","كود النظام","كود العميل","العميل","القطع","الحالة","الإجراء"]
@@ -3367,7 +3403,7 @@ function cuttingHistoryView(data, allowRepeat = false, sewingView = false) {
     : '<div class="empty-state">لا توجد قصات مسجلة بعد.</div>');
 }
 
-function dispatchedCuttingRequestsView(data) {
+function dispatchedCuttingRequestsView(data, canManageRecords = false) {
   const requests = [...(data.cuttingRequests || [])]
     .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
   const rows = requests.map((request) => {
@@ -3379,11 +3415,13 @@ function dispatchedCuttingRequestsView(data) {
     const client = data.clients.find((entry) => entry.id === request.customer_id)?.name
       || sourceOrder?.client
       || "—";
-    const statusLabel = {
+    const statusLabel = request.archived_at
+      ? "مؤرشف"
+      : ({
       pending: "بانتظار استلام مخزن القص",
       submitted: "تم إرسال القصة للمراجعة",
       cancelled: "ملغي"
-    }[request.status] || request.status || "غير معروف";
+    }[request.status] || request.status || "غير معروف");
     return `<tr>
       <td><span class="register-model-cell">${modelImageMarkup(modelImage, `صورة الموديل ${modelName}`, "register-thumbnail")}<span>${escapeHtml(modelName)}</span></span></td>
       <td>${escapeHtml(modelCode)}</td>
@@ -3391,10 +3429,11 @@ function dispatchedCuttingRequestsView(data) {
       <td>${formatDateTime(request.created_at)}</td>
       <td>${statusTag(statusLabel)}</td>
       <td>${request.submitted_at ? formatDateTime(request.submitted_at) : "—"}</td>
+      ${canManageRecords ? `<td><button class="row-action order-delete-action" type="button" data-delete-cutting-request="${escapeHtml(request.id)}"${request.archived_at ? " disabled" : ""}>${request.archived_at ? "محفوظ بالأرشيف" : "حذف / أرشفة"}</button></td>` : ""}
     </tr>`;
   });
   return panel("الموديلات المرسلة للقص", rows.length
-    ? table(["الموديل","كود النظام","العميل","تاريخ الطلب","حالة الطلب","تاريخ إرسال القصة"], rows)
+    ? table(["الموديل","كود النظام","العميل","تاريخ الطلب","حالة الطلب","تاريخ إرسال القصة", ...(canManageRecords ? ["الإجراء"] : [])], rows)
     : '<div class="empty-state">لا توجد موديلات مرسلة إلى مخزن القص حتى الآن.</div>');
 }
 
@@ -3409,8 +3448,8 @@ function factoryRegistersView(data, allowRepeat = false, detailsKind = "cutting"
       ${showDispatchedRequests ? `<button type="button" role="tab" aria-selected="${requestsSelected}" class="client-management-tab${requestsSelected ? " active" : ""}" data-register-tab="requests">الموديلات المرسلة للقص</button>` : ""}
     </div>
     <div data-register-panel="models"${activeRegisterTab === "models" ? "" : " hidden"}>${modelRegistryView(data, allowRepeat, detailsKind, canRequestCut)}</div>
-    <div data-register-panel="history"${historySelected ? "" : " hidden"}>${cuttingHistoryView(data, allowRepeat, sewingView)}</div>
-    ${showDispatchedRequests ? `<div data-register-panel="requests"${requestsSelected ? "" : " hidden"}>${dispatchedCuttingRequestsView(data)}</div>` : ""}
+    <div data-register-panel="history"${historySelected ? "" : " hidden"}>${cuttingHistoryView(data, allowRepeat, sewingView, canRequestCut)}</div>
+    ${showDispatchedRequests ? `<div data-register-panel="requests"${requestsSelected ? "" : " hidden"}>${dispatchedCuttingRequestsView(data, canRequestCut)}</div>` : ""}
   </section>`;
 }
 
@@ -3456,7 +3495,9 @@ function cuttingSubmissionFormMarkup(data) {
 }
 
 function cuttingRequestsView(data) {
-  const requests = data.cuttingRequests.filter((request) => request.status === "pending");
+  const requests = data.cuttingRequests
+    .filter((request) => request.status === "pending" && !request.archived_at)
+    .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
   const requestCards = requests.map((request) => {
     const catalogModel = data.modelCatalog.find((entry) => entry.id === request.catalog_model_id);
     const sourceOrder = data.models.find((entry) => entry.id === request.source_order_id);
@@ -3556,10 +3597,10 @@ function sewingOrderRows(orders, actionLabel = "", action = "", allowEdit = true
 }
 
 function sewingView(data) {
-  const available = data.sewing.filter((item) => item.stageStatus === "متاح للخياطة");
-  const inProgress = data.sewing.filter((item) => item.stageStatus === "قيد الخياطة");
-  const completed = data.sewing.filter((item) => item.stageStatus === "مكتمل");
-  const pipelineGroups = factoryOrderPipelineGroups(data.models.filter((order) => !order.archivedAt))
+  const available = data.sewing.filter((item) => !item.workflowArchivedAt && item.stageStatus === "متاح للخياطة");
+  const inProgress = data.sewing.filter((item) => !item.workflowArchivedAt && item.stageStatus === "قيد الخياطة");
+  const completed = data.sewing.filter((item) => !item.workflowArchivedAt && item.stageStatus === "مكتمل");
+  const pipelineGroups = factoryOrderPipelineGroups(data.models.filter((order) => !order.archivedAt && !order.workflowArchivedAt))
     .filter((group) => group.key !== "before_cutting" && (group.key !== "unclassified" || group.orders.length));
   return `<div class="stats-grid">${pipelineGroups.map((group) => stat(group.label, group.orders.length)).join("")}</div>
     ${panel("قصّات متاحة للبدء", sewingOrderRows(available, "بدء الخياطة", "start", false), "لا يبدأ العمل إلا بعد استلام المشرف للقصّة")}
@@ -3568,10 +3609,10 @@ function sewingView(data) {
 }
 
 function adminSewingView(data) {
-  const available = data.sewing.filter((item) => item.stageStatus === "متاح للخياطة");
-  const inProgress = data.sewing.filter((item) => item.stageStatus === "قيد الخياطة");
-  const completed = data.sewing.filter((item) => item.stageStatus === "مكتمل");
-  const pipelineGroups = factoryOrderPipelineGroups(data.models.filter((order) => !order.archivedAt))
+  const available = data.sewing.filter((item) => !item.workflowArchivedAt && item.stageStatus === "متاح للخياطة");
+  const inProgress = data.sewing.filter((item) => !item.workflowArchivedAt && item.stageStatus === "قيد الخياطة");
+  const completed = data.sewing.filter((item) => !item.workflowArchivedAt && item.stageStatus === "مكتمل");
+  const pipelineGroups = factoryOrderPipelineGroups(data.models.filter((order) => !order.archivedAt && !order.workflowArchivedAt))
     .filter((group) => group.key !== "before_cutting" && (group.key !== "unclassified" || group.orders.length));
   return `<div class="stats-grid">${pipelineGroups.map((group) => stat(group.label, group.orders.length)).join("")}</div>
     ${panel("قصّات متاحة للخياطة", sewingOrderRows(available, "بدء الخياطة", "start"))}
@@ -3591,10 +3632,13 @@ function adminCuttingTransferView(data) {
     || transferredStatuses.has(canonicalFactoryOrderStatus(order.status));
   const activeOrders = data.models.filter((order) =>
     !order.archivedAt
+    && !order.workflowArchivedAt
     && Boolean(order.cuttingStageStatus)
     && !hasEnteredSewing(order)
   );
   const transferredOrders = data.models.filter((order) =>
+    !order.workflowArchivedAt
+    &&
     hasEnteredSewing(order)
   );
   const orderCard = (order, transferred = false) => `<article class="cutting-admin-order-card production-compact-card">
@@ -3611,14 +3655,16 @@ function adminCuttingTransferView(data) {
     : '<div class="empty-state">لا توجد قصات محوّلة للخياطة في السجل بعد.</div>';
   const storyCards = (stories) => stories.length
     ? `<div class="cutting-story-list">${stories.map((story) => {
-      const statusLabel = story.status === "added_to_models"
+      const statusLabel = story.archived_at
+        ? "مؤرشفة"
+        : story.status === "added_to_models"
         ? "تم اعتمادها وإضافتها للموديلات"
         : story.status === "sent_to_sewing"
           ? "في انتظار الخياطة"
           : story.status === "rejected"
             ? "مرفوضة من الإدارة"
             : "بانتظار قرار الإدارة";
-      const actions = story.status === "pending"
+      const actions = story.status === "pending" && !story.archived_at
         ? `<div class="form-actions"><button class="button button-primary" type="button" data-action="approve-cutting-story-model" data-story-id="${escapeHtml(story.id)}">تأكيد وإضافة للموديلات</button><button class="button button-secondary" type="button" data-action="approve-cutting-story-sewing" data-story-id="${escapeHtml(story.id)}">تأكيد وإرسال للخياطة</button><button class="button button-danger" type="button" data-action="reject-cutting-story" data-story-id="${escapeHtml(story.id)}">رفض القصة</button></div>`
         : story.approved_order_id ? '<a class="row-action" href="#orders">الانتقال إلى الموديلات</a>' : "";
       return `<article class="cutting-story-card"><header class="cutting-story-heading">${modelImageMarkup(story.model_image_url)}<div><h3>${escapeHtml(story.model_name || story.model_number || "قصة بدون اسم")}</h3><p>كود الموديل بالنظام: ${escapeHtml(story.factory_model_code || "—")} · كود/رقم الموديل للعميل: ${escapeHtml(story.model_number || "—")} · العميل: ${escapeHtml(story.customer_name || "—")}</p><small>المشرف المسؤول: ${escapeHtml(story.submitted_by_name || "مشرف القص")}</small></div><span>${statusTag(statusLabel)}</span></header><div class="cutting-story-facts"><div><span>إجمالي القطع</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(story.total_pieces)} قطعة</strong></div><div><span>المقاسات</span><strong>${escapeHtml(sizeSummary(story.size_data) || "—")}</strong></div></div><div class="form-actions">${productionDetailsButton("story", story)}${actions}</div></article>`;
@@ -3634,11 +3680,11 @@ function adminCuttingTransferView(data) {
     </div>
     <div data-admin-cutting-panel="active"${activeTab ? "" : " hidden"}>
       ${panel("القصات النشطة", activeOrderCards, "تظهر القصة هنا حتى اكتمال القص أو تحويلها للخياطة.")}
-      ${panel("قصص القص المرسلة للمراجعة", storyCards(cuttingStories.filter((story) => story.status === "pending")), "راجع التفاصيل ثم اعتمد القصة للموديلات أو أرسلها مباشرة للخياطة.")}
+      ${panel("قصص القص المرسلة للمراجعة", storyCards(cuttingStories.filter((story) => story.status === "pending" && !story.archived_at)), "راجع التفاصيل ثم اعتمد القصة للموديلات أو أرسلها مباشرة للخياطة.")}
     </div>
     <div data-admin-cutting-panel="history"${historyTab ? "" : " hidden"}>
       ${panel("القصات المحوّلة للخياطة", transferredOrderCards, "تختفي القصة من القصات النشطة فور تحويلها، وتظهر هنا وفي شاشة الخياطة.")}
-      ${panel("سجل القصص المعتمدة أو المرفوضة", storyCards(cuttingStories.filter((story) => story.status !== "pending")))}
+      ${panel("سجل القصص المعتمدة أو المرفوضة / المؤرشفة", storyCards(cuttingStories.filter((story) => story.status !== "pending" || story.archived_at)))}
     </div>
     <div data-admin-cutting-panel="new"${newTab ? "" : " hidden"}>
       ${panel("إضافة قصة جديدة", cuttingSubmissionFormMarkup({ ...data, isAdmin: true }), "ستُحفظ القصة في سجل القص للمراجعة، ثم تعتمدها الإدارة لإضافتها للموديلات أو إرسالها للخياطة.")}
@@ -6814,6 +6860,95 @@ function bindCuttingActions(session) {
       reportDashboardFailure(session, "تعذر إرسال طلب القصة إلى مخزن القص", error);
     }
   }));
+  document.querySelectorAll("[data-delete-factory-model]").forEach((button) => button.addEventListener("click", async () => {
+    if (session.role !== "admin") return;
+    const model = dashboardData.modelCatalog.find((entry) => entry.id === button.dataset.deleteFactoryModel);
+    if (!model) {
+      window.factoryUI.toast("تعذر العثور على سجل الموديل.", "error");
+      return;
+    }
+    if (!await window.factoryUI.confirmAction({
+      title: "حذف / أرشفة الموديل",
+      message: `سيُحذف موديل ${model.model_name} نهائياً فقط إذا لم يرتبط بأي قصة أو أمر إنتاج أو سجل مالي. إذا وُجد تاريخ مرتبط فسيُؤرشف الموديل مع الحفاظ على كل السجلات.`,
+      confirmLabel: "متابعة"
+    })) return;
+    button.disabled = true;
+    try {
+      const { data: result, error } = await supabaseClient.rpc("admin_delete_factory_model_catalog", {
+        requested_model_id: model.id
+      });
+      if (error?.code === "PGRST202") throw new Error("دالة حذف/أرشفة الموديل غير موجودة. شغّل أحدث نسخة من supabase/schema.sql.");
+      if (error) throw error;
+      if (!["deleted", "archived"].includes(result)) throw new Error("أعاد الخادم نتيجة غير متوقعة لعملية الموديل.");
+      let imageCleanupFailed = false;
+      if (result === "deleted" && model.model_image_url) {
+        try {
+          await deleteOrderModelImage(model.model_image_url, model.id);
+        } catch (imageError) {
+          imageCleanupFailed = true;
+          console.warn("The catalog model was deleted, but its image could not be removed.", imageError);
+        }
+      }
+      await refreshDashboard(session);
+      window.factoryUI.toast(result === "deleted"
+        ? imageCleanupFailed ? "تم حذف الموديل، لكن تعذر حذف صورته من التخزين." : "تم حذف الموديل غير المرتبط بسجلات."
+        : "تمت أرشفة الموديل للحفاظ على سجلات الإنتاج والماليات.");
+    } catch (error) {
+      button.disabled = false;
+      reportDashboardFailure(session, "تعذر حذف / أرشفة الموديل", error);
+    }
+  }));
+  document.querySelectorAll("[data-delete-cutting-request]").forEach((button) => button.addEventListener("click", async () => {
+    if (session.role !== "admin") return;
+    const request = dashboardData.cuttingRequests.find((entry) => entry.id === button.dataset.deleteCuttingRequest);
+    if (!request) {
+      window.factoryUI.toast("تعذر العثور على طلب القص.", "error");
+      return;
+    }
+    if (request.archived_at) return;
+    if (!await window.factoryUI.confirmAction({
+      title: "حذف / أرشفة طلب القص",
+      message: "سيُحذف نهائياً فقط إذا كان ما زال بانتظار القص ولا توجد قصة مرتبطة به. بخلاف ذلك سيُؤرشف مع حفظ سجل الإنتاج.",
+      confirmLabel: "متابعة"
+    })) return;
+    button.disabled = true;
+    try {
+      const { data: result, error } = await supabaseClient.rpc("admin_delete_factory_cutting_request", {
+        requested_request_id: request.id
+      });
+      if (error?.code === "PGRST202") throw new Error("دالة حذف/أرشفة طلب القص غير موجودة. شغّل أحدث نسخة من supabase/schema.sql.");
+      if (error) throw error;
+      if (!["deleted", "archived"].includes(result)) throw new Error("أعاد الخادم نتيجة غير متوقعة لطلب القص.");
+      await refreshDashboard(session);
+      window.factoryUI.toast(result === "deleted" ? "تم حذف طلب القص غير المنفذ." : "تمت أرشفة الطلب مع الحفاظ على قصة الإنتاج المرتبطة.");
+    } catch (error) {
+      button.disabled = false;
+      reportDashboardFailure(session, "تعذر حذف / أرشفة طلب القص", error);
+    }
+  }));
+  document.querySelectorAll("[data-archive-factory-order]").forEach((button) => button.addEventListener("click", async () => {
+    if (session.role !== "admin") return;
+    const order = dashboardData.models.find((entry) => entry.id === button.dataset.archiveFactoryOrder);
+    if (!order || order.workflowArchivedAt) return;
+    if (!await window.factoryUI.confirmAction({
+      title: "إيقاف / أرشفة الموديل تشغيلياً",
+      message: "سيُوقف الموديل من قوائم التشغيل الجديدة مع الاحتفاظ بأوامره وحركاته المالية وسجلات إنتاجه دون تغيير الحسابات.",
+      confirmLabel: "إيقاف وأرشفة"
+    })) return;
+    button.disabled = true;
+    try {
+      const { error } = await supabaseClient.rpc("admin_archive_factory_order", {
+        requested_order_id: order.id
+      });
+      if (error?.code === "PGRST202") throw new Error("دالة أرشفة الموديل غير موجودة. شغّل أحدث نسخة من supabase/schema.sql.");
+      if (error) throw error;
+      await refreshDashboard(session);
+      window.factoryUI.toast("تم إيقاف الموديل وأرشفته تشغيلياً مع الحفاظ على سجلاته المالية والإنتاجية.");
+    } catch (error) {
+      button.disabled = false;
+      reportDashboardFailure(session, "تعذر أرشفة الموديل", error);
+    }
+  }));
   document.querySelectorAll("[data-open-cutting-request]").forEach((button) => button.addEventListener("click", () => {
     const request = dashboardData.cuttingRequests.find((entry) => entry.id === button.dataset.openCuttingRequest);
     const catalogModel = dashboardData.modelCatalog.find((entry) => entry.id === request?.catalog_model_id);
@@ -9613,7 +9748,7 @@ function bindActions(session) {
       }
       if (!await window.factoryUI.confirmAction({
         title: "حذف الموديل",
-        message: `سيتم حذف الموديل ${order.name || order.modelNumber || "المحدد"} وتسليماته ومصاريف تشغيله المرتبطة، وإزالة أثره من حساب العميل والخزينة وإعادة القماش المستخدم للمخزون. لا يمكن التراجع عن هذا الإجراء. لا يمكن حذف موديل مؤرشف ضمن تصفية مالية.`,
+        message: `سيُحذف ${order.name || order.modelNumber || "الموديل"} فقط إذا لم يبدأ قصه ولم يرتبط بأي سجل إنتاجي أو مالي. سيرفض النظام الحذف عند وجود أثر، ويمكن عندها استخدام «إيقاف / أرشفة» للحفاظ على الحسابات والتاريخ.`,
         confirmLabel: "حذف الموديل",
         danger: true
       })) return;
@@ -9626,8 +9761,19 @@ function bindActions(session) {
           throw new Error("دالة حذف الموديل غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
         }
         if (error) throw error;
+        let imageCleanupFailed = false;
+        for (const imageUrl of new Set([...(order.modelImageUrls || []), order.modelImageUrl, order.modelImageUrl2].filter(Boolean))) {
+          try {
+            await deleteOrderModelImage(imageUrl, order.id);
+          } catch (imageError) {
+            imageCleanupFailed = true;
+            console.warn("The model was deleted, but one of its images could not be removed.", imageError);
+          }
+        }
         await refreshDashboard(session);
-        window.factoryUI.toast("تم حذف الموديل.");
+        window.factoryUI.toast(imageCleanupFailed
+          ? "تم حذف الموديل، لكن تعذر حذف إحدى صوره من التخزين."
+          : "تم حذف الموديل.");
       } catch (error) {
         button.disabled = false;
         reportDashboardFailure(session, "تعذر حذف الموديل", error);
