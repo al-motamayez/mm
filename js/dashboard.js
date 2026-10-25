@@ -608,7 +608,9 @@ async function readDashboardData(session) {
       .reduce((maximum, stage) => Math.max(maximum, Number(stage.completed_quantity || 0)), 0);
     const originalQuantity = Number(order.original_total_pieces ?? order.total_pieces ?? 0);
     const deliveredPieces = Number(order.delivered_pieces || 0);
-    const storedStatus = order.status || "";
+    const storedStatus = factoryOrderDeliveredStatus(order.delivery_status)
+      ? "تم التسليم"
+      : order.status || "";
     const sewingStageStatus = sewingStage?.status || "";
     const effectiveStatus = effectiveFactoryOrderStatus({
       storedStatus,
@@ -657,7 +659,11 @@ async function readDashboardData(session) {
       quantityDifference: deliveredPieces - originalQuantity,
       pricePerPiece: Number(order.price_per_piece || 0),
       totalAmount: Number(order.total_amount || 0),
-      expectedAmount: LOCKED_FACTORY_ORDER_STATUSES.includes(canonicalFactoryOrderStatus(order.status))
+      expectedAmount: factoryOrderFullyDelivered({
+        ...order,
+        quantity: order.total_pieces,
+        deliveredPieces
+      })
         ? 0
         : Number(order.expected_total_amount)
           || Math.max(Number(order.total_pieces || 0) - deliveredPieces, 0) * Number(order.price_per_piece || 0),
@@ -669,6 +675,7 @@ async function readDashboardData(session) {
       status: effectiveStatus.status,
       cuttingStageStatus: cuttingStage?.status || "",
       sewingStageStatus,
+      deliveryStatus: order.delivery_status || "",
       storedStatus,
       displayStatus: effectiveStatus.status === "قيد الفرش" && Number(cuttingStage?.layer_count) > 0
         ? `قيد الفرش - تم فرش ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(cuttingStage.layer_count)} راقات`
@@ -930,16 +937,31 @@ function canonicalFactoryOrderStatus(status) {
     "تم التسليم والإغلاق": "تم التسليم",
     "تم الانتهاء": "تم التسليم"
   };
-  return aliases[status] || status || "قيد الانتظار";
+  const normalizedStatus = String(status || "").trim();
+  const englishAliases = {
+    delivered: "تم التسليم",
+    "fully delivered": "تم التسليم",
+    completed: "تم التسليم",
+    closed: "تم التسليم"
+  };
+  return aliases[normalizedStatus] || englishAliases[normalizedStatus.toLocaleLowerCase()] || normalizedStatus || "قيد الانتظار";
+}
+
+function factoryOrderDeliveredStatus(status) {
+  const normalizedStatus = String(status || "").trim().toLocaleLowerCase();
+  return ["delivered", "completed", "fully delivered", "closed"].includes(normalizedStatus)
+    || LOCKED_FACTORY_ORDER_STATUSES.includes(canonicalFactoryOrderStatus(status));
 }
 
 function factoryOrderFullyDelivered(order) {
-  if (LOCKED_FACTORY_ORDER_STATUSES.includes(canonicalFactoryOrderStatus(order.storedStatus || order.status))) {
+  if ([order.deliveryStatus, order.delivery_status, order.storedStatus, order.status].some(factoryOrderDeliveredStatus)) {
     return true;
   }
   const quantity = Number(order.quantity ?? order.total_pieces ?? 0);
   const deliveredPieces = Number(order.deliveredPieces ?? order.delivered_pieces ?? 0);
-  return quantity > 0 && deliveredPieces >= quantity;
+  const recordedDeliveryPieces = (order.deliveryHistory || order.deliveries || [])
+    .reduce((total, delivery) => total + Number(delivery.quantity || 0), 0);
+  return quantity > 0 && Math.max(deliveredPieces, recordedDeliveryPieces) >= quantity;
 }
 
 function effectiveFactoryOrderStatus(order) {
