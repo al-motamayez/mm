@@ -6391,6 +6391,7 @@ as $$
 declare
   matched_client public.factory_clients%rowtype;
   opening_balance numeric(14, 2) := 0;
+  opening_pending_balance numeric(14, 2) := 0;
   delivered_total numeric(14, 2) := 0;
   pending_total numeric(14, 2) := 0;
   client_expenses_total numeric(14, 2) := 0;
@@ -6398,6 +6399,8 @@ declare
   payments_total numeric(14, 2) := 0;
   account_adjustments_total numeric(14, 2) := 0;
   closing_balance numeric(14, 2);
+  delivered_balance numeric(14, 2);
+  pending_balance numeric(14, 2);
   settlement_time timestamptz;
 begin
   if not public.is_active_factory_admin() then
@@ -6421,26 +6424,42 @@ begin
     where factory_order.customer_id = matched_client.id
       and factory_order.archived_at is null
       and (
-        factory_order.status not in (
-          'جاهز للتسليم', 'تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق'
-        )
-        or
-        factory_order.total_pieces <= 0
-        or factory_order.delivered_pieces < factory_order.total_pieces
+        factory_order.status <> 'تم التسليم'
+        or factory_order.total_pieces <= 0
+        or coalesce((
+          select sum(delivery.quantity)::integer
+          from public.factory_deliveries as delivery
+          where delivery.order_id = factory_order.id
+        ), 0) < factory_order.total_pieces
       )
   ) then
     raise exception 'Client account settlement is blocked while goods remain undelivered.';
   end if;
   settlement_time := clock_timestamp();
 
-  select round(coalesce((payload ->> 'balance')::numeric, 0), 2)
-    into opening_balance
+  select round(coalesce(nullif(payload ->> 'balance', '')::numeric, 0), 2),
+         greatest(
+           0,
+           round(coalesce(
+             nullif(payload ->> 'pendingBalance', '')::numeric,
+             coalesce(nullif(payload ->> 'pendingTotal', '')::numeric, 0)
+               - least(
+                 coalesce(nullif(payload ->> 'pendingTotal', '')::numeric, 0),
+                 coalesce(nullif(payload ->> 'orderPaidTotal', '')::numeric, 0)
+                   + coalesce(nullif(payload ->> 'paymentsTotal', '')::numeric, 0)
+                   + coalesce(nullif(payload ->> 'accountAdjustmentsTotal', '')::numeric, 0)
+               ),
+             0
+           ), 2)
+         )
+    into opening_balance, opening_pending_balance
   from public.factory_records
   where collection = 'settlements'
     and payload ->> 'customerId' = matched_client.id::text
   order by created_at desc
   limit 1;
   opening_balance := coalesce(opening_balance, 0);
+  opening_pending_balance := coalesce(opening_pending_balance, 0);
 
   select round(coalesce(sum(total_amount), 0), 2),
          round(coalesce(sum(expected_total_amount), 0), 2),
@@ -6484,6 +6503,15 @@ begin
     opening_balance + delivered_total + pending_total + client_expenses_total - order_paid_total - payments_total - account_adjustments_total,
     2
   );
+  pending_balance := greatest(
+    0,
+    round(
+      opening_pending_balance
+        - least(opening_pending_balance, payments_total + account_adjustments_total),
+      2
+    )
+  );
+  delivered_balance := round(closing_balance - pending_balance, 2);
 
   update public.orders
   set archived_at = settlement_time
@@ -6504,6 +6532,8 @@ begin
       'orderPaidTotal', order_paid_total,
       'paymentsTotal', payments_total,
       'accountAdjustmentsTotal', account_adjustments_total,
+      'deliveredBalance', delivered_balance,
+      'pendingBalance', pending_balance,
       'balance', closing_balance,
       'date', settlement_time
     ),
