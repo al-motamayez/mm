@@ -933,6 +933,15 @@ function canonicalFactoryOrderStatus(status) {
   return aliases[status] || status || "قيد الانتظار";
 }
 
+function factoryOrderFullyDelivered(order) {
+  if (LOCKED_FACTORY_ORDER_STATUSES.includes(canonicalFactoryOrderStatus(order.storedStatus || order.status))) {
+    return true;
+  }
+  const quantity = Number(order.quantity ?? order.total_pieces ?? 0);
+  const deliveredPieces = Number(order.deliveredPieces ?? order.delivered_pieces ?? 0);
+  return quantity > 0 && deliveredPieces >= quantity;
+}
+
 function effectiveFactoryOrderStatus(order) {
   const sewingStageStatus = order.sewingStageStatus || "";
   if (["متاح للخياطة", "في انتظار الخياطة"].includes(sewingStageStatus)) {
@@ -2240,14 +2249,9 @@ function clientAccountSummary(client, data) {
   const paidAfterPending = Math.max(0, subtractMoney(paid, pendingPaid));
   const deliveredNetBalance = subtractMoney(grossDue, paidAfterPending);
   const balance = addMoney(deliveredNetBalance, calculatedPendingGoodsBalance);
-  const hasUndeliveredGoods = orders.some((order) =>
-    !LOCKED_FACTORY_ORDER_STATUSES.includes(canonicalFactoryOrderStatus(order.status))
-    && (order.quantity <= 0 || order.remainingPieces > 0 || order.expectedAmount > 0)
-  );
-  const pendingGoodsBalance = hasUndeliveredGoods
-    ? Math.max(0, balance)
-    : calculatedPendingGoodsBalance;
-  const deliveredDue = hasUndeliveredGoods ? 0 : Math.max(0, deliveredNetBalance);
+  const hasUndeliveredGoods = orders.some((order) => !factoryOrderFullyDelivered(order));
+  const pendingGoodsBalance = hasUndeliveredGoods ? Math.max(0, balance) : 0;
+  const deliveredDue = hasUndeliveredGoods ? 0 : Math.max(0, balance);
   const due = balance;
   const receivableBalance = hasUndeliveredGoods ? 0 : deliveredDue;
   const creditBalance = Math.max(0, -balance);
@@ -4213,14 +4217,9 @@ function clientView(data, session) {
   const paidAfterPending = Math.max(0, subtractMoney(totalPaid, pendingPaid));
   const deliveredNetBalance = subtractMoney(grossDue, paidAfterPending);
   const remaining = addMoney(deliveredNetBalance, calculatedPendingGoodsBalance);
-  const hasUndeliveredGoods = currentOrders.some((order) =>
-    !LOCKED_FACTORY_ORDER_STATUSES.includes(canonicalFactoryOrderStatus(order.status))
-    && (order.quantity <= 0 || order.remainingPieces > 0 || order.expectedAmount > 0)
-  );
-  const pendingGoodsBalance = hasUndeliveredGoods
-    ? Math.max(0, remaining)
-    : calculatedPendingGoodsBalance;
-  const deliveredDue = hasUndeliveredGoods ? 0 : Math.max(0, deliveredNetBalance);
+  const hasUndeliveredGoods = currentOrders.some((order) => !factoryOrderFullyDelivered(order));
+  const pendingGoodsBalance = hasUndeliveredGoods ? Math.max(0, remaining) : 0;
+  const deliveredDue = hasUndeliveredGoods ? 0 : Math.max(0, remaining);
   const accountCreditBalance = Math.max(0, -remaining);
   const balanceState = deliveredDue > 0 ? "is-debit" : accountCreditBalance > 0 ? "is-credit" : "is-settled";
   const balanceCaption = deliveredDue > 0
