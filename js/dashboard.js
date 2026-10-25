@@ -937,48 +937,42 @@ function canonicalFactoryOrderStatus(status) {
     "متاح للإمبلاج / التعبئة": "تمت الخياطة",
     "مكتمل": "تمت الخياطة",
     "تم التسليم بالكامل": "تم التسليم",
-    "تم التسليم والإغلاق": "تم التسليم",
-    "تم الانتهاء": "تم التسليم"
+    "تم التسليم والإغلاق": "تم التسليم"
   };
   const normalizedStatus = String(status || "").trim();
   const englishAliases = {
     delivered: "تم التسليم",
     "fully delivered": "تم التسليم",
-    completed: "تم التسليم",
-    closed: "تم التسليم"
+    "ready for delivery": "جاهز للتسليم",
+    "ready to deliver": "جاهز للتسليم"
   };
   return aliases[normalizedStatus] || englishAliases[normalizedStatus.toLocaleLowerCase()] || normalizedStatus || "قيد الانتظار";
 }
 
-function factoryOrderDeliveredStatus(status) {
-  const normalizedStatus = String(status || "").trim();
-  return ["delivered", "fully delivered"].includes(normalizedStatus.toLocaleLowerCase())
-    || ["تم التسليم", "تم التسليم بالكامل", "تم التسليم والإغلاق"].includes(normalizedStatus);
+function factoryOrderIsReceivable(order) {
+  const status = effectiveFactoryOrderStatus(order).status;
+  return ["جاهز للتسليم", "تم التسليم"].includes(canonicalFactoryOrderStatus(status));
 }
 
-function factoryOrderIsDelivered(order) {
-  const status = order.status || order.ledgerStatus || order.storedStatus || order.deliveryStatus || order.delivery_status;
-  if (!factoryOrderDeliveredStatus(status)) return false;
-  if (["متاح للخياطة", "في انتظار الخياطة", "جاري الخياطة", "قيد التنفيذ"]
-    .includes(canonicalFactoryOrderStatus(order.sewingStageStatus))) return false;
-
+function factoryOrderHasCompleteDelivery(order) {
   const totalPieces = Number(order.quantity ?? order.total_pieces ?? 0);
   const deliveries = order.deliveryHistory || order.deliveries || [];
   const deliveredPieces = deliveries.reduce(
     (total, delivery) => total + Number(delivery.quantity || 0),
     0
   );
-  return totalPieces > 0 && deliveries.length > 0 && deliveredPieces >= totalPieces;
+  return totalPieces > 0
+    && Math.max(deliveredPieces, Number(order.deliveredPieces ?? order.delivered_pieces ?? 0)) >= totalPieces;
 }
 
 function factoryOrderHasReachedDelivery(order) {
-  const status = canonicalFactoryOrderStatus(order.status || order.storedStatus || order.deliveryStatus || order.delivery_status);
+  const status = canonicalFactoryOrderStatus(effectiveFactoryOrderStatus(order).status);
   return ["جاهز للتسليم", "تم التسليم"].includes(status);
 }
 
 function factoryOrderLedgerAmounts(order) {
   const orderBalance = addMoney(order.totalAmount || 0, order.expectedAmount || 0);
-  return factoryOrderIsDelivered(order)
+  return factoryOrderIsReceivable(order)
     ? { deliveredAmount: orderBalance, pendingAmount: 0 }
     : { deliveredAmount: 0, pendingAmount: orderBalance };
 }
@@ -2379,7 +2373,7 @@ function calculateClientAccountLedger({
   const grossDue = addMoney(deliveredTotal, accountBalanceBeforePayments);
   const balance = subtractMoney(addMoney(deliveredNetBalance, pendingGoodsBalance), creditBalance);
   const hasUndeliveredGoods = openingPendingBalance > 0
-    || orders.some((order) => !factoryOrderIsDelivered(order));
+    || orders.some((order) => !factoryOrderHasCompleteDelivery(order));
   const deliveredDue = Math.max(0, deliveredNetBalance);
   const due = balance;
   const receivableBalance = deliveredDue;
@@ -2478,7 +2472,7 @@ function deliveredDebtBreakdown(summary) {
     .filter((order) => order.deliveredBalance > 0)
     .map((order) => ({
       label: `${summary.clientName || "عميل"} · ${order.name || order.modelNumber || "طلب بدون اسم"}`,
-      note: `${order.factoryModelCode ? `كود ${order.factoryModelCode} · ` : ""}حالة الطلب تم التسليم · بعد الدفعات`,
+      note: `${order.factoryModelCode ? `كود ${order.factoryModelCode} · ` : ""}الحالة ${canonicalFactoryOrderStatus(order.status)} · بعد الدفعات`,
       value: money(order.deliveredBalance)
     }));
   if (summary.accountBalance > 0) {
@@ -2493,14 +2487,14 @@ function deliveredDebtBreakdown(summary) {
 
 function clientOrderLedgerPanel(summary) {
   const rows = summary.orders.map((order) => {
-    const delivered = factoryOrderIsDelivered(order);
+    const delivered = factoryOrderIsReceivable(order);
     const outstanding = addMoney(order.deliveredBalance, order.pendingBalance);
-    return `<tr><td>${escapeHtml(order.name || order.modelNumber || "طلب بدون اسم")}</td><td>${escapeHtml(order.factoryModelCode || "—")}</td><td>${escapeHtml(order.displayStatus || order.status || "—")}</td><td>${delivered ? "مديونية بعد التسليم" : "بضاعة تحت التسليم"}</td><td>${money(addMoney(order.ledgerDeliveredAmount, order.ledgerPendingAmount))}</td><td>${money(order.ledgerPaidAmount)}</td><td>${money(outstanding)}</td></tr>`;
+    return `<tr><td>${escapeHtml(order.name || order.modelNumber || "طلب بدون اسم")}</td><td>${escapeHtml(order.factoryModelCode || "—")}</td><td>${escapeHtml(order.displayStatus || order.status || "—")}</td><td>${delivered ? "مستحق حسب حالة الطلب" : "بضاعة تحت التسليم"}</td><td>${money(addMoney(order.ledgerDeliveredAmount, order.ledgerPendingAmount))}</td><td>${money(order.ledgerPaidAmount)}</td><td>${money(outstanding)}</td></tr>`;
   }).join("");
   return panel("ملخص رصيد كل طلب حسب حالته", rows
     ? table(["الموديل","كود النظام","حالة الطلب","تصنيف الرصيد","قيمة الطلب","المدفوع المخصص","المتبقي"], rows)
     : '<div class="empty-state">لا توجد طلبات في الفترة المالية الحالية.</div>',
-  "لا يُدرج الطلب في المديونية إلا عند تسجيل حالته النهائية «تم التسليم»؛ بقية الحالات تظهر حصرياً ضمن بضاعة تحت التسليم.");
+  "تُصنّف الطلبات بحالة «جاهز للتسليم» أو «تم التسليم» كمستحقات؛ وتظهر جميع الحالات الأخرى حصرياً ضمن بضاعة تحت التسليم.");
 }
 
 function moneyCents(value) {
@@ -2541,7 +2535,7 @@ function clientAccountCards(data) {
     const modelMetric = (label, orders, id) => `<div class="model-preview"><span>${label}</span><button class="model-preview-trigger" type="button" aria-label="${orders.length} ${label}" aria-describedby="${id}"${orders.length === 1 ? ` data-open-model-id="${escapeHtml(orders[0].id)}"` : ""}>${orders.length}</button>${previewList(orders, id)}</div>`;
     return `<article class="client-account-card">
       <header><div><h3>${escapeHtml(client.name)}</h3><p>${escapeHtml(client.phone || "بدون هاتف")}${linkedUser ? ` · ${escapeHtml(linkedUser.username)}` : " · ملف عميل بلا حساب دخول"}</p></div>${statusTag(linkedUser?.status === "suspended" ? "متوقف" : "نشط")}</header>
-      <div class="client-balance-grid"><div><span>المتبقي الفعلي من البضاعة تحت التسليم بعد الدفعات</span><strong>${money(summary.pendingGoodsBalance)}</strong></div><div><span>مديونية مستحقة عن بضاعة تم تسليمها فقط</span><strong>${money(summary.deliveredDue)}</strong></div><div><span>المدفوع</span><strong>${money(summary.paid)}</strong></div><div><span>إجمالي رصيد الحساب المتوقع</span><strong>${money(summary.balance)}</strong><small>${summary.balance === 0 ? "تم السداد بالكامل" : summary.balance < 0 ? "رصيد دائن بعد احتساب البضاعة غير المستلمة" : summary.deliveredDue > 0 ? "المديونية الحالية تخص المسلّم فقط؛ المعلق معروض منفصلاً" : summary.hasUndeliveredGoods ? "لا توجد مديونية مستحقة؛ الرصيد يخص بضاعة لم تُسلّم" : "مديونية مستحقة بعد التسليم"}</small></div></div>
+      <div class="client-balance-grid"><div><span>المتبقي من البضاعة بحالات التشغيل قبل جاهز للتسليم</span><strong>${money(summary.pendingGoodsBalance)}</strong></div><div><span>المستحق للطلبات الجاهزة للتسليم أو المسلّمة</span><strong>${money(summary.deliveredDue)}</strong></div><div><span>المدفوع</span><strong>${money(summary.paid)}</strong></div><div><span>إجمالي رصيد الحساب المتوقع</span><strong>${money(summary.balance)}</strong><small>${summary.balance === 0 ? "تم السداد بالكامل" : summary.balance < 0 ? "رصيد دائن بعد احتساب البضاعة غير المستحقة" : summary.deliveredDue > 0 ? "المستحق حسب حالة الطلب؛ وبضاعة التشغيل معروضة منفصلة" : summary.hasUndeliveredGoods ? "لا يوجد مستحق حسب الحالة؛ الرصيد يخص بضاعة تحت التسليم" : "مستحق حسب حالة الطلب"}</small></div></div>
       ${unpricedOrders.length ? '<p class="client-unpriced-alert" role="status">يوجد موديلات لم تحدد أسعارها بعد</p>' : ""}
       <div class="client-activity-grid">
         ${pipelineGroups.map((group) => modelMetric(group.label, group.orders, `pipeline-${group.key}-${escapeHtml(client.id)}`)).join("")}
@@ -2564,12 +2558,12 @@ function clientAccountsOverview(data) {
     count + summary.orders.filter((order) => order.pricePerPiece <= 0).length, 0);
   const accountBalances = summaries
     .filter((summary) => summary.receivableBalance > 0 || summary.creditBalance > 0)
-    .map((summary) => `<tr><td>${escapeHtml(summary.clientName || "عميل")}</td><td>${summary.receivableBalance > 0 ? "مدين / مستحق بعد التسليم" : "دائن / فائض للعميل"}</td><td>${money(summary.receivableBalance > 0 ? summary.receivableBalance : summary.creditBalance)}</td><td>${money(summary.pendingGoodsBalance)}</td></tr>`);
+    .map((summary) => `<tr><td>${escapeHtml(summary.clientName || "عميل")}</td><td>${summary.receivableBalance > 0 ? "مستحق حسب حالة الطلب" : "دائن / فائض للعميل"}</td><td>${money(summary.receivableBalance > 0 ? summary.receivableBalance : summary.creditBalance)}</td><td>${money(summary.pendingGoodsBalance)}</td></tr>`);
   return `<div class="clients-toolbar"><div><h2>حسابات العملاء</h2><p>متابعة الأرصدة والدفعات وقيمة البضاعة وحالات الموديلات لكل عميل.</p></div></div>
-    <div class="stats-grid">${stat("قيمة البضاعة المسلّمة", money(totalGoods), "تشمل مصاريف التشغيل المحملة")}${stat("المتبقي من البضاعة المعلقة", money(totalExpected), "بعد تخصيص الدفعات لها")}${stat("إجمالي المدفوع", money(totalPaid), "دفعات العملاء والمدفوع على الطلب")}${stat("صافي الدين المستحق بعد التسليم", money(totalBalance), totalBalance < 0 ? "أرصدة دائنة للعملاء" : "لا يشمل قيمة البضاعة غير المسلّمة")}${stat("موديلات بلا سعر", unpricedCount, "تحتاج إلى استكمال التسعير")}</div>
+    <div class="stats-grid">${stat("قيمة الطلبات بحالة التسليم أو الجاهزية", money(totalGoods), "تشمل الطلبات الجاهزة للتسليم وتم التسليم")}${stat("المتبقي من البضاعة تحت التسليم", money(totalExpected), "طلبات جميع الحالات الأخرى بعد تخصيص الدفعات")}${stat("إجمالي المدفوع", money(totalPaid), "دفعات العملاء والمدفوع على الطلب")}${stat("صافي المستحق حسب حالة الطلب", money(totalBalance), totalBalance < 0 ? "أرصدة دائنة للعملاء" : "لا يشمل قيمة الطلبات بحالات التشغيل")}${stat("موديلات بلا سعر", unpricedCount, "تحتاج إلى استكمال التسعير")}</div>
     ${panel("ديون العملاء / الأرصدة الدائنة", accountBalances.length
       ? table(["العميل","تصنيف الرصيد","الرصيد الصافي","قيمة البضاعة غير المسلّمة"], accountBalances)
-        : '<div class="empty-state">لا توجد مديونيات مستحقة بعد التسليم أو أرصدة دائنة حالياً.</div>', "تُعرض مديونية البضاعة المسلّمة منفصلة عن صافي قيمة البضاعة غير المسلّمة بعد الدفعات.")}
+        : '<div class="empty-state">لا توجد أرصدة مستحقة حسب حالة الطلب أو أرصدة دائنة حالياً.</div>', "تُصنّف الطلبات الجاهزة للتسليم أو المسلّمة كمستحقات، وتبقى بقية الحالات في بضاعة تحت التسليم بعد الدفعات.")}
     ${clientAccountCards(data)}`;
 }
 
@@ -2699,10 +2693,12 @@ function adminDashboardView(data) {
     .filter((group) => group.key !== "unclassified" || group.orders.length);
   const pipelineStats = pipelineGroups.map((group) => {
     const details = group.orders.map((order) => {
-      const delivered = LOCKED_FACTORY_ORDER_STATUSES.includes(order.status);
-      const quantity = delivered ? order.deliveredPieces : order.remainingPieces ?? order.quantity;
-      const amount = delivered
-        ? order.totalAmount
+      const receivable = factoryOrderIsReceivable(order);
+      const quantity = LOCKED_FACTORY_ORDER_STATUSES.includes(order.status)
+        ? order.deliveredPieces
+        : order.remainingPieces ?? order.quantity;
+      const amount = receivable
+        ? addMoney(order.totalAmount, order.expectedAmount)
         : factoryOrderHasReachedDelivery(order)
           ? order.expectedAmount
           : addMoney(order.totalAmount, order.expectedAmount);
@@ -2711,7 +2707,7 @@ function adminDashboardView(data) {
     return stat(group.label, group.orders.length, "حسب مرحلة التشغيل الحالية",
       statDetailList(details, `لا توجد موديلات في مرحلة ${group.label}.`));
   }).join("");
-  return `<div class="stats-grid">${stat("النقدية في الدرج", money(drawerBalance), "", statDetailList(cashDetails))}${stat("مديونيات العملاء", money(customerReceivables), "مجموع الطلبات المسلّمة فقط بعد الدفعات", statDetailList(deliveredDebtDetails, "لا توجد مديونيات مستحقة على الطلبات المسلّمة."))}${stat("بضاعة تحت التسليم", money(upcomingReceivables), "مجموع الطلبات غير المسلّمة فقط بعد الدفعات", statDetailList(pendingGoodsDetails, "لا توجد بضاعة متبقية للتسليم."))}${pipelineStats}</div>
+  return `<div class="stats-grid">${stat("النقدية في الدرج", money(drawerBalance), "", statDetailList(cashDetails))}${stat("مستحقات العملاء", money(customerReceivables), "الطلبات الجاهزة للتسليم أو المسلّمة بعد الدفعات", statDetailList(deliveredDebtDetails, "لا توجد مستحقات حسب حالة الطلب."))}${stat("بضاعة تحت التسليم", money(upcomingReceivables), "جميع حالات التشغيل الأخرى بعد الدفعات", statDetailList(pendingGoodsDetails, "لا توجد بضاعة متبقية للتسليم."))}${pipelineStats}</div>
     ${panel("آخر الموديلات وحالتها", activeOrders.length
       ? table(["الموديل","العميل","العدد","سعر القطعة","الحالة"], activeOrders.slice(0, 12).map((order) => `<tr><td>${escapeHtml(order.name)}${order.modelNumber ? ` · ${escapeHtml(order.modelNumber)}` : ""}</td><td>${escapeHtml(order.client || "—")}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity)}</td><td>${money(order.pricePerPiece)}</td><td>${statusTag(order.displayStatus || order.status)}</td></tr>`))
       : '<div class="empty-state">لا توجد موديلات حالية.</div>')}`;
@@ -2939,7 +2935,7 @@ function clientDetailsView(client, data) {
       ? table(["اسم الموديل","كود/رقم العميل","العدد","الصورة","الحالة","تاريخ الطلب"], clientRequestRows(pendingClientModelRequests))
       : '<div class="empty-state">لا توجد طلبات قص بانتظار المراجعة.</div>', "هذه الطلبات منفصلة عن سجل الموديلات ولا تدخل التشغيل أو الحساب حتى إتمام القص فعلياً.")}
     ${reviewedClientModelRequests.length ? panel("طلبات القص السابقة", table(["اسم الموديل","كود/رقم العميل","العدد","الصورة","الحالة","تاريخ الطلب"], clientRequestRows(reviewedClientModelRequests))) : ""}
-    <div class="stats-grid client-finance-summary">${summary.latestSettlement ? stat("الرصيد المرحّل من آخر تصفية", money(summary.openingBalance), "قبل حركات الفترة الحالية") : ""}${stat("المتبقي من البضاعة غير المسلّمة", money(summary.pendingGoodsBalance), "بعد تخصيص الدفعات لها؛ لا يُعد ديناً قبل التسليم")}${stat("المستحق فعلياً بعد التسليم", money(summary.deliveredDue), "بعد تخصيص الدفعات أولاً للبضاعة المعلقة")}${stat("مصروفات وعهد العميل", money(summary.clientExpensesTotal))}${stat("خصومات التسوية", money(summary.accountAdjustmentsTotal), "خصومات غير نقدية")}${stat("إجمالي المدفوع", money(summary.paid))}${stat("الرصيد الإجمالي", money(summary.balance), summary.balance === 0 ? "تم السداد بالكامل" : summary.balance < 0 ? "رصيد دائن للعميل" : summary.deliveredDue > 0 ? "يوجد مبلغ مستحق بعد التسليم" : summary.hasUndeliveredGoods ? "يشمل بضاعة معلقة غير مستحقة بعد" : "مديونية مستحقة بعد التسليم")}</div>
+    <div class="stats-grid client-finance-summary">${summary.latestSettlement ? stat("الرصيد المرحّل من آخر تصفية", money(summary.openingBalance), "قبل حركات الفترة الحالية") : ""}${stat("المتبقي من البضاعة بحالات التشغيل الأخرى", money(summary.pendingGoodsBalance), "بعد تخصيص الدفعات؛ لا يدخل في المستحقات")}${stat("المستحق للطلبات الجاهزة أو المسلّمة", money(summary.deliveredDue), "حسب حالة الطلب وبعد تخصيص الدفعات")}${stat("مصروفات وعهد العميل", money(summary.clientExpensesTotal))}${stat("خصومات التسوية", money(summary.accountAdjustmentsTotal), "خصومات غير نقدية")}${stat("إجمالي المدفوع", money(summary.paid))}${stat("الرصيد الإجمالي", money(summary.balance), summary.balance === 0 ? "تم السداد بالكامل" : summary.balance < 0 ? "رصيد دائن للعميل" : summary.deliveredDue > 0 ? "يوجد مستحق حسب حالة الطلب" : summary.hasUndeliveredGoods ? "يشمل بضاعة بحالات تشغيل أخرى" : "لا يوجد مستحق حالياً")}</div>
     </div>
     <div data-client-profile-panel="statement"${activeClientProfileTab === "statement" ? "" : " hidden"}>
     <section class="client-detail-section">${panel("كشف الحساب والسجل المالي", `<p>يعرض ملخص رصيد كل طلب حسب حالته، ثم التسليمات والدفعات والمصروفات والخصومات والتسويات بترتيب زمني. تعديل أو حذف الدفعة الخاطئة يعيد احتساب حساب العميل دون إنشاء حركة صرف نقدية عكسية.</p>${orderLedgerSection}<form class="form-grid client-cash-form" data-client-cash-form="${escapeHtml(client.id)}"><div class="field"><label for="client-cash-category-${escapeHtml(client.id)}">بند المصروف / العهدة</label><input id="client-cash-category-${escapeHtml(client.id)}" name="category" maxlength="120" placeholder="مثل: سلفة، خيط، نقل" required></div><div class="field"><label for="client-cash-amount-${escapeHtml(client.id)}">المبلغ على حساب العميل (ج.م)</label><input id="client-cash-amount-${escapeHtml(client.id)}" name="amount" type="number" min="0.01" step="0.01" required></div><div class="field"><label for="client-cash-method-${escapeHtml(client.id)}">طريقة الصرف</label><input id="client-cash-method-${escapeHtml(client.id)}" name="method" value="نقدي" maxlength="80"></div><div class="field"><label for="client-cash-date-${escapeHtml(client.id)}">تاريخ الحركة</label><input id="client-cash-date-${escapeHtml(client.id)}" name="occurredAt" type="datetime-local" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}" required></div><div class="field wide"><label for="client-cash-description-${escapeHtml(client.id)}">البيان / التفاصيل</label><input id="client-cash-description-${escapeHtml(client.id)}" name="description" maxlength="500" required></div><div class="form-actions"><button class="button button-primary" type="submit">تسجيل المصروف على الحساب</button></div></form>${clientFinancialStatementMarkup(financialEntries)}`)}</section>
@@ -3116,10 +3112,10 @@ function clientQuickDetailsModalView(client, data) {
   const pipelineGroups = factoryOrderPipelineGroups(summary.orders)
     .filter((group) => group.key !== "unclassified" || group.orders.length);
   return `<header class="modal-view-heading"><div><small>ملف العميل</small><h2 id="client-account-modal-title">${escapeHtml(client.name)}</h2><p>${escapeHtml(client.brand_name || "—")} · رقم العميل ${escapeHtml(client.client_number || "—")}</p></div></header>
-    <div class="client-balance-primary"><span>${summary.deliveredDue > 0 ? "المديونية المستحقة بعد التسليم فقط" : summary.creditBalance > 0 ? "الرصيد الدائن" : "المديونية المستحقة بعد التسليم"}</span><strong>${money(summary.deliveredDue > 0 ? summary.deliveredDue : summary.creditBalance)}</strong><small>${summary.deliveredDue > 0 ? "لا تشمل قيمة أي بضاعة لم يستلمها العميل" : summary.creditBalance > 0 ? "بعد خصم الدفعات من البضاعة المعلقة أولاً" : summary.hasUndeliveredGoods ? "لا توجد مديونية مستحقة؛ المتبقي معروض في بضاعة تحت التسليم" : "لا توجد مديونية مستحقة حالياً"}</small></div>
+    <div class="client-balance-primary"><span>${summary.deliveredDue > 0 ? "المستحق حسب حالة الطلب" : summary.creditBalance > 0 ? "الرصيد الدائن" : "المستحق حسب حالة الطلب"}</span><strong>${money(summary.deliveredDue > 0 ? summary.deliveredDue : summary.creditBalance)}</strong><small>${summary.deliveredDue > 0 ? "يشمل الطلبات الجاهزة للتسليم أو المسلّمة فقط" : summary.creditBalance > 0 ? "بعد تخصيص الدفعات للبضاعة تحت التسليم أولاً" : summary.hasUndeliveredGoods ? "لا يوجد مستحق حسب الحالة؛ المتبقي معروض في بضاعة تحت التسليم" : "لا يوجد مستحق حسب حالة الطلب حالياً"}</small></div>
     <div class="compact-detail-grid">
       <div><span>المتبقي الفعلي من البضاعة تحت التسليم بعد الدفعات</span><strong>${money(summary.pendingGoodsBalance)}</strong></div>
-      <div><span>المديونية المستحقة بعد التسليم فقط</span><strong>${money(summary.deliveredDue)}</strong></div>
+      <div><span>المستحق للطلبات الجاهزة للتسليم أو المسلّمة</span><strong>${money(summary.deliveredDue)}</strong></div>
       <div><span>إجمالي رصيد الحساب المتوقع</span><strong>${money(summary.balance)}</strong></div>
       <div><span>خصومات التسوية</span><strong>${money(summary.accountAdjustmentsTotal)}</strong></div>
       <div><span>المدفوع</span><strong>${money(summary.paid)}</strong></div>
@@ -3196,7 +3192,7 @@ function printClientAccount(client, data) {
     const total = addMoney(order.totalAmount, order.expectedAmount);
     const ledgerOrder = activeOrderLedgers.get(order.id);
     const classification = ledgerOrder
-      ? factoryOrderIsDelivered(ledgerOrder) ? "مديونية بعد التسليم" : "بضاعة تحت التسليم"
+      ? factoryOrderIsReceivable(ledgerOrder) ? "مستحق حسب حالة الطلب" : "بضاعة تحت التسليم"
       : "مؤرشف / فترة سابقة";
     const allocatedPayments = ledgerOrder
       ? addMoney(ledgerOrder.ledgerPendingPaid, ledgerOrder.ledgerDeliveredPaid)
@@ -3212,7 +3208,7 @@ function printClientAccount(client, data) {
   const movementRows = movements.map((entry) =>
     `<tr><td>${escapeHtml(entry.type)}</td><td>${escapeHtml(entry.description || "—")}</td><td>${money(entry.amount)}</td><td>${formatDateTime(entry.date)}</td></tr>`
   ).join("");
-  const body = `<section class="print-section"><h2>كشف الحساب · ${escapeHtml(client.name)}</h2><p>البراند: ${escapeHtml(client.brand_name || "—")} · رقم العميل: ${escapeHtml(client.client_number || "—")}</p><div class="print-summary"><div><span>الرصيد السابق المرحّل</span><strong>${money(summary.openingBalance)}</strong></div><div><span>المستحق بعد التسليم والدفعات المخصصة</span><strong>${money(summary.deliveredDue)}</strong></div><div><span>المتبقي من البضاعة غير المسلّمة بعد الدفعات</span><strong>${money(summary.pendingGoodsBalance)}</strong></div><div><span>المصروفات والعهد الحالية</span><strong>${money(summary.clientExpensesTotal)}</strong></div><div><span>خصومات التسوية الحالية</span><strong>${money(summary.accountAdjustmentsTotal)}</strong></div><div><span>إجمالي المدفوع</span><strong>${money(summary.paid)}</strong></div><div><span>المديونية المستحقة بعد التسليم</span><strong>${money(summary.receivableBalance)}</strong></div><div><span>الرصيد الإجمالي للحساب</span><strong>${money(summary.balance)}</strong></div></div></section>
+  const body = `<section class="print-section"><h2>كشف الحساب · ${escapeHtml(client.name)}</h2><p>البراند: ${escapeHtml(client.brand_name || "—")} · رقم العميل: ${escapeHtml(client.client_number || "—")}</p><div class="print-summary"><div><span>الرصيد السابق المرحّل</span><strong>${money(summary.openingBalance)}</strong></div><div><span>المستحق للطلبات الجاهزة للتسليم أو المسلّمة</span><strong>${money(summary.deliveredDue)}</strong></div><div><span>المتبقي من البضاعة بحالات التشغيل الأخرى بعد الدفعات</span><strong>${money(summary.pendingGoodsBalance)}</strong></div><div><span>المصروفات والعهد الحالية</span><strong>${money(summary.clientExpensesTotal)}</strong></div><div><span>خصومات التسوية الحالية</span><strong>${money(summary.accountAdjustmentsTotal)}</strong></div><div><span>إجمالي المدفوع</span><strong>${money(summary.paid)}</strong></div><div><span>إجمالي المستحق حسب حالة الطلب</span><strong>${money(summary.receivableBalance)}</strong></div><div><span>الرصيد الإجمالي للحساب</span><strong>${money(summary.balance)}</strong></div></div></section>
     <section class="print-section"><h2>الموديلات والطلبيات</h2><table class="print-models-table"><thead><tr><th>الصورة</th><th>اسم الموديل وكود النظام</th><th>كود العميل</th><th>العدد</th><th>سعر القطعة</th><th>مصاريف التشغيل</th><th>الإجمالي</th><th>الحالة</th><th>تصنيف الرصيد</th><th>المدفوع المخصص</th><th>المتبقي</th></tr></thead><tbody>${modelRows || '<tr><td colspan="11">لا توجد موديلات مسجلة.</td></tr>'}</tbody></table></section>
     <section class="print-section"><h2>حركة الحساب</h2><table><thead><tr><th>نوع الحركة</th><th>البيان</th><th>الأثر المالي</th><th>التاريخ</th></tr></thead><tbody>${movementRows || '<tr><td colspan="4">لا توجد حركات مسجلة.</td></tr>'}</tbody></table></section>`;
   printDocument("كشف حساب العميل", body);
@@ -4529,7 +4525,7 @@ function clientView(data, session) {
       ? table(["اسم الموديل","كود/رقم الموديل للعميل","العدد","الصورة","الحالة","تاريخ الإرسال"], requestRows(pendingClientModelRequests))
       : '<div class="empty-state">لا توجد موديلات مطلوبة للقص بانتظار المراجعة.</div>', "هذه الطلبات منفصلة عن الموديلات والطلبيات؛ لا تدخل سجل الإنتاج أو حساب البضاعة حتى اعتمادها وقصها فعلياً.")}
     ${reviewedClientModelRequests.length ? panel("طلبات القص السابقة", table(["اسم الموديل","كود/رقم الموديل للعميل","العدد","الصورة","الحالة","تاريخ الإرسال"], requestRows(reviewedClientModelRequests))) : ""}</section>`;
-  return `<section id="dashboard" class="dashboard-section"><article class="client-balance-spotlight ${balanceState}" role="status" aria-live="polite"><span>${deliveredDue > 0 ? "المديونية المستحقة بعد التسليم فقط" : accountCreditBalance > 0 ? "الرصيد الدائن" : "المديونية المستحقة بعد التسليم"}</span><strong>${money(deliveredDue > 0 ? deliveredDue : accountCreditBalance)}</strong><small>${balanceCaption}</small></article><div class="stats-grid">${stat("موديلاتي الحالية", currentOrders.length, "ضمن الفترة الحالية")}${latestSettlement ? stat("الرصيد المرحّل من آخر تصفية", money(openingBalance), "قبل حركات الفترة الحالية") : ""}${stat("المتبقي الفعلي من البضاعة تحت التسليم", money(pendingGoodsBalance), "بعد خصم الدفعات المقدمة؛ لا يُعد مديونية قبل استلام البضاعة")}${stat("المديونية المستحقة بعد التسليم فقط", money(deliveredDue), "لا تشمل أي بضاعة لم يستلمها العميل")}${stat("مصروفات وعهد على الحساب", money(clientExpensesTotal))}${stat("إجمالي المدفوع", money(totalPaid))}${stat("إجمالي رصيد الحساب المتوقع (يشمل البضاعة تحت التسليم)", money(remaining), remaining === 0 ? "تم السداد بالكامل" : remaining < 0 ? "رصيد دائن بعد احتساب البضاعة المعلقة" : deliveredDue > 0 ? `المديونية بعد التسليم ${money(deliveredDue)}، والبضاعة تحت التسليم ${money(pendingGoodsBalance)}` : pendingGoodsBalance > 0 ? "لا توجد مديونية؛ الرصيد خاص ببضاعة غير مستلمة" : "مديونية مستحقة بعد التسليم")}</div></section><section id="orders" class="dashboard-section">${panel("موديلاتي والطلبيات الحالية", clientOrderCards(currentOrders))}${archivedOrders.length ? panel("الطلبات المؤرشفة", clientOrderCards(archivedOrders)) : ""}</section>${clientModelRequestSection}<section id="finished-goods" class="dashboard-section">${panel("المخزني · مخزون الإنتاج المستلم", table(["الموديل","الكمية","الألوان","الصورة","العامل","تاريخ الاستلام"], finishedGoodsRows))}</section>${fabricSection}<section id="finance" class="dashboard-section">${orderLedgerFinancial}${financialLedger}</section>`;
+  return `<section id="dashboard" class="dashboard-section"><article class="client-balance-spotlight ${balanceState}" role="status" aria-live="polite"><span>${deliveredDue > 0 ? "المستحق حسب حالة الطلب" : accountCreditBalance > 0 ? "الرصيد الدائن" : "المستحق حسب حالة الطلب"}</span><strong>${money(deliveredDue > 0 ? deliveredDue : accountCreditBalance)}</strong><small>${balanceCaption}</small></article><div class="stats-grid">${stat("موديلاتي الحالية", currentOrders.length, "ضمن الفترة الحالية")}${latestSettlement ? stat("الرصيد المرحّل من آخر تصفية", money(openingBalance), "قبل حركات الفترة الحالية") : ""}${stat("المتبقي من البضاعة بحالات التشغيل الأخرى", money(pendingGoodsBalance), "بعد الدفعات؛ جميع الحالات ما عدا الجاهز للتسليم وتم التسليم")}${stat("المستحق للطلبات الجاهزة أو المسلّمة", money(deliveredDue), "حسب حالة الطلب")}${stat("مصروفات وعهد على الحساب", money(clientExpensesTotal))}${stat("إجمالي المدفوع", money(totalPaid))}${stat("إجمالي رصيد الحساب المتوقع", money(remaining), remaining === 0 ? "تم السداد بالكامل" : remaining < 0 ? "رصيد دائن بعد احتساب البضاعة بحالات التشغيل الأخرى" : deliveredDue > 0 ? `المستحق حسب الحالة ${money(deliveredDue)}، والبضاعة بحالات التشغيل الأخرى ${money(pendingGoodsBalance)}` : pendingGoodsBalance > 0 ? "لا يوجد مستحق حسب الحالة؛ الرصيد خاص ببضاعة بحالات تشغيل أخرى" : "لا يوجد مستحق حسب حالة الطلب")}</div></section><section id="orders" class="dashboard-section">${panel("موديلاتي والطلبيات الحالية", clientOrderCards(currentOrders))}${archivedOrders.length ? panel("الطلبات المؤرشفة", clientOrderCards(archivedOrders)) : ""}</section>${clientModelRequestSection}<section id="finished-goods" class="dashboard-section">${panel("المخزني · مخزون الإنتاج المستلم", table(["الموديل","الكمية","الألوان","الصورة","العامل","تاريخ الاستلام"], finishedGoodsRows))}</section>${fabricSection}<section id="finance" class="dashboard-section">${orderLedgerFinancial}${financialLedger}</section>`;
 }
 
 function clientModelRequestsAdminView(data) {
