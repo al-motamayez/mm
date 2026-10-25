@@ -965,26 +965,39 @@ function factoryOrderFullyDelivered(order) {
   const deliveredPieces = Number(order.deliveredPieces ?? order.delivered_pieces ?? 0);
   const recordedDeliveryPieces = (order.deliveryHistory || order.deliveries || [])
     .reduce((total, delivery) => total + Number(delivery.quantity || 0), 0);
-  if (!factoryOrderHasReachedDelivery(order)) return false;
   if (quantity > 0) return Math.max(deliveredPieces, recordedDeliveryPieces) >= quantity;
   return [order.deliveryStatus, order.delivery_status, order.storedStatus, order.status]
     .some(factoryOrderDeliveredStatus);
 }
 
-function factoryOrderHasActualDelivery(order) {
+function factoryOrderDeliveredQuantity(order) {
   const deliveredPieces = Number(order.deliveredPieces ?? order.delivered_pieces ?? 0);
   const recordedDeliveryPieces = (order.deliveryHistory || order.deliveries || [])
     .reduce((total, delivery) => total + Number(delivery.quantity || 0), 0);
-  return Math.max(deliveredPieces, recordedDeliveryPieces) > 0;
+  return Math.max(deliveredPieces, recordedDeliveryPieces);
 }
 
 function factoryOrderLedgerAmounts(order) {
-  const totalAmount = Number(order.totalAmount || 0);
-  const expectedAmount = Number(order.expectedAmount || 0);
-  const hasActualDelivery = factoryOrderHasActualDelivery(order);
+  const totalPieces = Math.max(0, Number(order.quantity ?? order.total_pieces ?? 0));
+  const actualDeliveredPieces = factoryOrderDeliveredQuantity(order);
+  const deliveredPieces = totalPieces > 0 ? Math.min(totalPieces, actualDeliveredPieces) : actualDeliveredPieces;
+  if (totalPieces <= 0) {
+    const totalAmount = Number(order.totalAmount || 0);
+    const expectedAmount = Number(order.expectedAmount || 0);
+    return deliveredPieces > 0
+      ? { deliveredAmount: totalAmount, pendingAmount: expectedAmount }
+      : { deliveredAmount: 0, pendingAmount: addMoney(totalAmount, expectedAmount) };
+  }
+
+  const pricePerPiece = Number(order.pricePerPiece || 0);
+  const operationalExpenses = Number(order.operationalExpenses || 0);
+  const hasActualDelivery = deliveredPieces > 0;
   return {
-    deliveredAmount: hasActualDelivery ? totalAmount : 0,
-    pendingAmount: hasActualDelivery ? expectedAmount : addMoney(totalAmount, expectedAmount)
+    deliveredAmount: addMoney(deliveredPieces * pricePerPiece, hasActualDelivery ? operationalExpenses : 0),
+    pendingAmount: addMoney(
+      (totalPieces - deliveredPieces) * pricePerPiece,
+      hasActualDelivery ? 0 : operationalExpenses
+    )
   };
 }
 
@@ -2261,60 +2274,49 @@ function userRows(users, withActions = false) {
   });
 }
 
-function clientAccountSummary(client, data) {
-  const settlements = data.settlements
-    .filter((entry) => entry.customerId === client.id)
-    .sort((left, right) => new Date(right.date || right._createdAt).getTime() - new Date(left.date || left._createdAt).getTime());
-  const latestSettlement = settlements[0] || null;
+function calculateClientAccountLedger({
+  clientName,
+  orders,
+  archivedOrders,
+  settlements,
+  latestSettlement,
+  payments,
+  cashTransactions,
+  accountAdjustments
+}) {
   const openingBalance = roundMoney(latestSettlement?.balance || 0);
-  const orders = data.models.filter((order) => order.customerId === client.id && !order.archivedAt);
   const orderLedgerAmounts = orders.map(factoryOrderLedgerAmounts);
   const deliveredTotal = sumMoney(orderLedgerAmounts.map((amounts) => amounts.deliveredAmount));
   const expectedTotal = sumMoney(orderLedgerAmounts.map((amounts) => amounts.pendingAmount));
   const orderPaid = sumMoney(orders.map((order) => order.paidAmount));
-  const periodStart = client.account_period_started_at || latestSettlement?.date || null;
-  const payments = data.payments.filter((payment) =>
-    payment.customerId === client.id
-    && (!periodStart || new Date(payment._createdAt || payment.created_at).getTime() >= new Date(periodStart).getTime())
-  );
   const paymentsTotal = sumMoney(payments.map((payment) => payment.amount));
-  const clientExpenses = data.cashTransactions.filter((entry) =>
-    entry.customer_id === client.id
-    && entry.direction === "expense"
-    && (!periodStart || new Date(entry.occurred_at).getTime() >= new Date(periodStart).getTime())
-  );
+  const clientExpenses = cashTransactions.filter((entry) => entry.direction === "expense");
   const clientExpensesTotal = sumMoney(clientExpenses.map((entry) => entry.amount));
-  const accountAdjustments = data.accountAdjustments.filter((adjustment) =>
-    adjustment.customerId === client.id
-    && (!periodStart || new Date(adjustment._createdAt || adjustment.created_at).getTime() >= new Date(periodStart).getTime())
-  );
   const accountAdjustmentsTotal = sumMoney(accountAdjustments.map((adjustment) => adjustment.amount));
   const grossDue = subtractMoney(addMoney(addMoney(openingBalance, deliveredTotal), clientExpensesTotal), accountAdjustmentsTotal);
   const paid = addMoney(orderPaid, paymentsTotal);
   const pendingPaid = Math.min(Math.max(paid, 0), expectedTotal);
-  const calculatedPendingGoodsBalance = subtractMoney(expectedTotal, pendingPaid);
+  const pendingGoodsBalance = Math.max(0, subtractMoney(expectedTotal, pendingPaid));
   const paidAfterPending = Math.max(0, subtractMoney(paid, pendingPaid));
   const deliveredNetBalance = subtractMoney(grossDue, paidAfterPending);
-  const balance = addMoney(deliveredNetBalance, calculatedPendingGoodsBalance);
-  const hasUndeliveredGoods = orders.some((order) =>
-    !factoryOrderHasReachedDelivery(order) || !factoryOrderFullyDelivered(order)
-  );
-  const pendingGoodsBalance = calculatedPendingGoodsBalance;
+  const balance = addMoney(deliveredNetBalance, pendingGoodsBalance);
+  const hasUndeliveredGoods = orders.some((order) => !factoryOrderFullyDelivered(order));
   const deliveredDue = Math.max(0, deliveredNetBalance);
   const due = balance;
   const receivableBalance = deliveredDue;
   const creditBalance = Math.max(0, -balance);
   return {
-    clientName: client.name,
+    clientName,
     settlements,
     latestSettlement,
     openingBalance,
     orders,
-    archivedOrders: data.models.filter((order) => order.customerId === client.id && order.archivedAt),
+    archivedOrders,
     deliveredTotal,
     expectedTotal,
     requiredAfterDelivery: deliveredTotal,
     grossDue,
+    deliveredNetBalance,
     deliveredDue,
     orderPaid,
     payments,
@@ -2335,12 +2337,47 @@ function clientAccountSummary(client, data) {
   };
 }
 
+function clientAccountSummary(client, data) {
+  const settlements = data.settlements
+    .filter((entry) => entry.customerId === client.id)
+    .sort((left, right) => new Date(right.date || right._createdAt).getTime() - new Date(left.date || left._createdAt).getTime());
+  const latestSettlement = settlements[0] || null;
+  const orders = data.models.filter((order) => order.customerId === client.id && !order.archivedAt);
+  const archivedOrders = data.models.filter((order) => order.customerId === client.id && order.archivedAt);
+  const periodStart = client.account_period_started_at || latestSettlement?.date || latestSettlement?._createdAt || null;
+  const inCurrentPeriod = (date) =>
+    !periodStart || new Date(date).getTime() >= new Date(periodStart).getTime();
+  const payments = data.payments.filter((payment) =>
+    payment.customerId === client.id
+    && inCurrentPeriod(payment._createdAt || payment.created_at)
+  );
+  const cashTransactions = data.cashTransactions.filter((entry) =>
+    entry.customer_id === client.id
+    && entry.direction === "expense"
+    && inCurrentPeriod(entry.occurred_at)
+  );
+  const accountAdjustments = data.accountAdjustments.filter((adjustment) =>
+    adjustment.customerId === client.id
+    && inCurrentPeriod(adjustment._createdAt || adjustment.created_at)
+  );
+  return calculateClientAccountLedger({
+    clientName: client.name,
+    orders,
+    archivedOrders,
+    settlements,
+    latestSettlement,
+    payments,
+    cashTransactions,
+    accountAdjustments
+  });
+}
+
 function pendingGoodsBreakdown(summary) {
   return summary.pendingGoodsBalance > 0
     ? [{
       label: summary.clientName || "عميل",
       note: summary.hasUndeliveredGoods
-        ? `رصيد مستحق عند استلام البضاعة · ${summary.orders.filter((order) => !factoryOrderHasReachedDelivery(order) || !factoryOrderFullyDelivered(order)).length} طلب غير مسلّم`
+        ? `رصيد مستحق عند استلام البضاعة · ${summary.orders.filter((order) => !factoryOrderFullyDelivered(order)).length} طلب غير مسلّم`
         : "قيمة متبقية لبضاعة غير مسلّمة بعد خصم الدفعات المقدمة",
       value: money(summary.pendingGoodsBalance)
     }]
@@ -4232,7 +4269,6 @@ function clientView(data, session) {
     .filter((entry) => entry._ownerId === session.accountId)
     .sort((left, right) => new Date(right.date || right._createdAt).getTime() - new Date(left.date || left._createdAt).getTime());
   const latestSettlement = settlements[0] || null;
-  const openingBalance = roundMoney(latestSettlement?.balance || 0);
   const currentOrders = data.models.filter((item) => !item.archivedAt);
   const archivedOrders = data.models.filter((item) => item.archivedAt);
   const allClientPayments = data.payments.filter((item) =>
@@ -4245,36 +4281,34 @@ function clientView(data, session) {
     || new Date(item._createdAt || item.created_at || item.date).getTime()
       >= new Date(latestSettlement.date || latestSettlement._createdAt).getTime()
   );
-  const orderLedgerAmounts = currentOrders.map(factoryOrderLedgerAmounts);
-  const totalAmount = sumMoney(orderLedgerAmounts.map((amounts) => amounts.deliveredAmount));
-  const expectedTotal = sumMoney(orderLedgerAmounts.map((amounts) => amounts.pendingAmount));
   const periodStart = latestSettlement?.date || latestSettlement?._createdAt || null;
-  const accountAdjustments = data.accountAdjustments.filter((entry) =>
-    entry._ownerId === session.accountId
-    && (!periodStart || new Date(entry._createdAt || entry.created_at).getTime() >= new Date(periodStart).getTime())
+  const inCurrentPeriod = (date) => !periodStart || new Date(date).getTime() >= new Date(periodStart).getTime();
+  const allClientAccountAdjustments = data.accountAdjustments.filter((entry) => entry._ownerId === session.accountId);
+  const accountAdjustments = allClientAccountAdjustments.filter((entry) =>
+    inCurrentPeriod(entry._createdAt || entry.created_at)
   );
-  const accountAdjustmentsTotal = sumMoney(accountAdjustments.map((entry) => entry.amount));
-  const clientExpensesTotal = sumMoney(data.cashTransactions
-    .filter((entry) =>
-      entry.direction === "expense"
-      && (!latestSettlement || new Date(entry.occurred_at).getTime() >= new Date(latestSettlement.date || latestSettlement._createdAt).getTime())
-    )
-    .map((entry) => entry.amount));
-  const paymentsTotal = sumMoney(payments.map((item) => item.amount));
-  const orderPaid = sumMoney(currentOrders.map((item) => item.paidAmount));
-  const totalPaid = addMoney(paymentsTotal, orderPaid);
-  const grossDue = subtractMoney(addMoney(addMoney(openingBalance, totalAmount), clientExpensesTotal), accountAdjustmentsTotal);
-  const pendingPaid = Math.min(Math.max(totalPaid, 0), expectedTotal);
-  const calculatedPendingGoodsBalance = subtractMoney(expectedTotal, pendingPaid);
-  const paidAfterPending = Math.max(0, subtractMoney(totalPaid, pendingPaid));
-  const deliveredNetBalance = subtractMoney(grossDue, paidAfterPending);
-  const remaining = addMoney(deliveredNetBalance, calculatedPendingGoodsBalance);
-  const hasUndeliveredGoods = currentOrders.some((order) =>
-    !factoryOrderHasReachedDelivery(order) || !factoryOrderFullyDelivered(order)
+  const currentPeriodExpenses = data.cashTransactions.filter((entry) =>
+    entry.direction === "expense" && inCurrentPeriod(entry.occurred_at)
   );
-  const pendingGoodsBalance = calculatedPendingGoodsBalance;
-  const deliveredDue = Math.max(0, deliveredNetBalance);
-  const accountCreditBalance = Math.max(0, -remaining);
+  const ledger = calculateClientAccountLedger({
+    clientName: session.fullName,
+    orders: currentOrders,
+    archivedOrders,
+    settlements,
+    latestSettlement,
+    payments,
+    cashTransactions: currentPeriodExpenses,
+    accountAdjustments
+  });
+  const {
+    openingBalance,
+    clientExpensesTotal,
+    paid: totalPaid,
+    pendingGoodsBalance,
+    deliveredDue,
+    balance: remaining,
+    creditBalance: accountCreditBalance
+  } = ledger;
   const balanceState = deliveredDue > 0 ? "is-debit" : accountCreditBalance > 0 ? "is-credit" : "is-settled";
   const balanceCaption = deliveredDue > 0
     ? "مديونية عن بضاعة تم تسليمها فقط؛ قيمة البضاعة غير المسلّمة تظهر منفصلة"
@@ -4298,17 +4332,10 @@ function clientView(data, session) {
       amount: -Number(entry.amount || 0),
       date: entry._createdAt || entry.created_at || entry.date
     })),
-    ...summary.accountAdjustments.map((entry) => ({
+    ...allClientAccountAdjustments.map((entry) => ({
       type: "خصم تسوية حساب",
       reference: entry.reason || "خصم مسموح به",
       detail: entry.notes ? escapeHtml(entry.notes) : "خصم غير نقدي من رصيد الحساب",
-      amount: -Number(entry.amount || 0),
-      date: entry._createdAt || entry.created_at || entry.date
-    })),
-    ...accountAdjustments.map((entry) => ({
-      type: "خصم تسوية حساب",
-      reference: entry.reason || "خصم مسموح به",
-      detail: "خصم غير نقدي من رصيد الحساب",
       amount: -Number(entry.amount || 0),
       date: entry._createdAt || entry.created_at || entry.date
     })),

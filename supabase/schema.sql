@@ -7728,3 +7728,4 @@ alter table public.factory_client_model_requests replica identity full;
 alter table public.factory_cutting_stories replica identity full;
 
 notify pgrst, 'reload schema';
+        
