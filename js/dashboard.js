@@ -2236,17 +2236,20 @@ function clientAccountSummary(client, data) {
   const grossDue = subtractMoney(addMoney(addMoney(openingBalance, deliveredTotal), clientExpensesTotal), accountAdjustmentsTotal);
   const paid = addMoney(orderPaid, paymentsTotal);
   const pendingPaid = Math.min(Math.max(paid, 0), expectedTotal);
-  const pendingGoodsBalance = subtractMoney(expectedTotal, pendingPaid);
+  const calculatedPendingGoodsBalance = subtractMoney(expectedTotal, pendingPaid);
   const paidAfterPending = Math.max(0, subtractMoney(paid, pendingPaid));
   const deliveredNetBalance = subtractMoney(grossDue, paidAfterPending);
-  const deliveredDue = Math.max(0, deliveredNetBalance);
-  const balance = addMoney(deliveredNetBalance, pendingGoodsBalance);
-  const due = balance;
+  const balance = addMoney(deliveredNetBalance, calculatedPendingGoodsBalance);
   const hasUndeliveredGoods = orders.some((order) =>
     !LOCKED_FACTORY_ORDER_STATUSES.includes(canonicalFactoryOrderStatus(order.status))
     && (order.quantity <= 0 || order.remainingPieces > 0 || order.expectedAmount > 0)
   );
-  const receivableBalance = deliveredDue;
+  const pendingGoodsBalance = hasUndeliveredGoods
+    ? Math.max(0, balance)
+    : calculatedPendingGoodsBalance;
+  const deliveredDue = hasUndeliveredGoods ? 0 : Math.max(0, deliveredNetBalance);
+  const due = balance;
+  const receivableBalance = hasUndeliveredGoods ? 0 : deliveredDue;
   const creditBalance = Math.max(0, -balance);
   return {
     clientName: client.name,
@@ -2280,16 +2283,15 @@ function clientAccountSummary(client, data) {
 }
 
 function pendingGoodsBreakdown(summary) {
-  let paymentRemainder = Math.min(Math.max(summary.paid, 0), summary.expectedTotal);
-  return [...summary.orders]
-    .filter((order) => order.expectedAmount > 0)
-    .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime())
-    .map((order) => {
-      const amount = Math.max(0, subtractMoney(order.expectedAmount, paymentRemainder));
-      paymentRemainder = Math.max(0, subtractMoney(paymentRemainder, order.expectedAmount));
-      return { order, amount };
-    })
-    .filter((entry) => entry.amount > 0);
+  return summary.pendingGoodsBalance > 0
+    ? [{
+      label: summary.clientName || "عميل",
+      note: summary.hasUndeliveredGoods
+        ? `رصيد مستحق عند استلام البضاعة · ${summary.orders.filter((order) => !LOCKED_FACTORY_ORDER_STATUSES.includes(canonicalFactoryOrderStatus(order.status))).length} طلب غير مسلّم`
+        : "قيمة متبقية لبضاعة غير مسلّمة بعد خصم الدفعات المقدمة",
+      value: money(summary.pendingGoodsBalance)
+    }]
+    : [];
 }
 
 function moneyCents(value) {
@@ -2348,17 +2350,19 @@ function clientAccountsOverview(data) {
   const totalGoods = sumMoney(summaries.map((summary) => summary.deliveredTotal));
   const totalExpected = sumMoney(summaries.map((summary) => summary.pendingGoodsBalance));
   const totalPaid = sumMoney(summaries.map((summary) => summary.paid));
-  const totalBalance = sumMoney(summaries.map((summary) => summary.receivableBalance - summary.creditBalance));
+  const totalBalance = sumMoney(summaries
+    .filter((summary) => !summary.hasUndeliveredGoods)
+    .map((summary) => summary.receivableBalance - summary.creditBalance));
   const unpricedCount = summaries.reduce((count, summary) =>
     count + summary.orders.filter((order) => order.pricePerPiece <= 0).length, 0);
   const accountBalances = summaries
-    .filter((summary) => summary.receivableBalance > 0 || summary.creditBalance > 0)
+    .filter((summary) => !summary.hasUndeliveredGoods && (summary.receivableBalance > 0 || summary.creditBalance > 0))
     .map((summary) => `<tr><td>${escapeHtml(summary.clientName || "عميل")}</td><td>${summary.receivableBalance > 0 ? "مدين / مستحق بعد التسليم" : "دائن / فائض للعميل"}</td><td>${money(summary.receivableBalance > 0 ? summary.receivableBalance : summary.creditBalance)}</td><td>${money(summary.pendingGoodsBalance)}</td></tr>`);
   return `<div class="clients-toolbar"><div><h2>حسابات العملاء</h2><p>متابعة الأرصدة والدفعات وقيمة البضاعة وحالات الموديلات لكل عميل.</p></div></div>
     <div class="stats-grid">${stat("قيمة البضاعة المسلّمة", money(totalGoods), "تشمل مصاريف التشغيل المحملة")}${stat("المتبقي من البضاعة المعلقة", money(totalExpected), "بعد تخصيص الدفعات لها")}${stat("إجمالي المدفوع", money(totalPaid), "دفعات العملاء والمدفوع على الطلب")}${stat("صافي الدين المستحق بعد التسليم", money(totalBalance), totalBalance < 0 ? "أرصدة دائنة للعملاء" : "لا يشمل قيمة البضاعة غير المسلّمة")}${stat("موديلات بلا سعر", unpricedCount, "تحتاج إلى استكمال التسعير")}</div>
     ${panel("ديون العملاء / الأرصدة الدائنة", accountBalances.length
       ? table(["العميل","تصنيف الرصيد","الرصيد الصافي","قيمة البضاعة غير المسلّمة"], accountBalances)
-      : '<div class="empty-state">لا توجد مديونيات مستحقة بعد التسليم أو أرصدة دائنة حالياً.</div>', "تُخصم الدفعات أولاً من قيمة البضاعة غير المسلّمة. لا تُدرج هذه القيمة كمديونية حتى التسليم النهائي؛ ويظهر الدين فقط للمبالغ المستحقة بعد التسليم.")}
+      : '<div class="empty-state">لا توجد مديونيات مستحقة بعد التسليم أو أرصدة دائنة حالياً.</div>', "يُستبعد أي عميل لديه بضاعة غير مسلّمة من هذا القسم؛ يظهر رصيده الموجب حصرياً في بضاعة تحت التسليم.")}
     ${clientAccountCards(data)}`;
 }
 
@@ -2494,11 +2498,11 @@ function adminDashboardView(data) {
     return stat(group.label, group.orders.length, "حسب مرحلة التشغيل الحالية",
       statDetailList(details, `لا توجد موديلات في مرحلة ${group.label}.`));
   }).join("");
-  return `<div class="stats-grid">${stat("النقدية في الدرج", money(drawerBalance), "", statDetailList(cashDetails))}${stat("مديونيات العملاء", money(customerReceivables), "", statDetailList(clientDebts.map(({ client, amount }) => ({
+  return `<div class="stats-grid">${stat("النقدية في الدرج", money(drawerBalance), "", statDetailList(cashDetails))}${stat("مديونيات العملاء", money(customerReceivables), "يُستبعد العميل عند وجود أي بضاعة غير مسلّمة", statDetailList(clientDebts.map(({ client, amount }) => ({
     label: `${client.name || "عميل بدون اسم"}${client.brand_name ? ` · ${client.brand_name}` : ""}`,
     value: money(amount)
   })), "لا توجد مديونيات مستحقة على العملاء."))}${stat("بضاعة تحت التسليم", money(upcomingReceivables), "صافي القيمة بعد خصم الدفعات المقدمة", statDetailList(clientSummaries.flatMap((summary) =>
-    pendingGoodsBreakdown(summary).map(({ order, amount }) => orderDetail(order, order.remainingPieces ?? order.quantity, amount))
+    pendingGoodsBreakdown(summary)
   ), "لا توجد بضاعة متبقية للتسليم."))}${pipelineStats}</div>
     ${panel("آخر الموديلات وحالتها", activeOrders.length
       ? table(["الموديل","العميل","العدد","سعر القطعة","الحالة"], activeOrders.slice(0, 12).map((order) => `<tr><td>${escapeHtml(order.name)}${order.modelNumber ? ` · ${escapeHtml(order.modelNumber)}` : ""}</td><td>${escapeHtml(order.client || "—")}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity)}</td><td>${money(order.pricePerPiece)}</td><td>${statusTag(order.displayStatus || order.status)}</td></tr>`))
@@ -4205,15 +4209,18 @@ function clientView(data, session) {
   const totalPaid = addMoney(paymentsTotal, orderPaid);
   const grossDue = subtractMoney(addMoney(addMoney(openingBalance, totalAmount), clientExpensesTotal), accountAdjustmentsTotal);
   const pendingPaid = Math.min(Math.max(totalPaid, 0), expectedTotal);
-  const pendingGoodsBalance = subtractMoney(expectedTotal, pendingPaid);
+  const calculatedPendingGoodsBalance = subtractMoney(expectedTotal, pendingPaid);
   const paidAfterPending = Math.max(0, subtractMoney(totalPaid, pendingPaid));
   const deliveredNetBalance = subtractMoney(grossDue, paidAfterPending);
-  const deliveredDue = Math.max(0, deliveredNetBalance);
-  const remaining = addMoney(deliveredNetBalance, pendingGoodsBalance);
+  const remaining = addMoney(deliveredNetBalance, calculatedPendingGoodsBalance);
   const hasUndeliveredGoods = currentOrders.some((order) =>
     !LOCKED_FACTORY_ORDER_STATUSES.includes(canonicalFactoryOrderStatus(order.status))
     && (order.quantity <= 0 || order.remainingPieces > 0 || order.expectedAmount > 0)
   );
+  const pendingGoodsBalance = hasUndeliveredGoods
+    ? Math.max(0, remaining)
+    : calculatedPendingGoodsBalance;
+  const deliveredDue = hasUndeliveredGoods ? 0 : Math.max(0, deliveredNetBalance);
   const accountCreditBalance = Math.max(0, -remaining);
   const balanceState = deliveredDue > 0 ? "is-debit" : accountCreditBalance > 0 ? "is-credit" : "is-settled";
   const balanceCaption = deliveredDue > 0
