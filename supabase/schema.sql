@@ -2974,6 +2974,16 @@ alter table public.factory_cutting_requests
 create index if not exists factory_cutting_requests_status_created_idx
   on public.factory_cutting_requests (status, created_at desc);
 
+create table if not exists public.factory_cutting_request_reservations (
+  request_id uuid not null references public.factory_cutting_requests (id) on delete cascade,
+  fabric_id uuid not null references public.factory_fabrics (id) on delete restrict,
+  quantity numeric(14, 3) not null check (quantity > 0),
+  created_at timestamptz not null default now(),
+  primary key (request_id, fabric_id)
+);
+create index if not exists factory_cutting_request_reservations_fabric_idx
+  on public.factory_cutting_request_reservations (fabric_id);
+
 alter table public.factory_cutting_requests
   add column if not exists completed_story_id uuid references public.factory_cutting_stories (id) on delete set null,
   add column if not exists fabric_id uuid references public.factory_fabrics (id) on delete restrict,
@@ -2997,6 +3007,78 @@ from public.orders as factory_order
 where story.source_order_id = factory_order.id
   and factory_order.factory_model_code is not null;
 
+create or replace function public.replace_factory_cutting_request_reservations(
+  requested_request_id uuid,
+  requested_customer_id uuid,
+  requested_roll_details jsonb
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  selection record;
+  stock_item public.factory_fabrics%rowtype;
+  other_reserved numeric(14, 3);
+  first_fabric_id uuid;
+begin
+  if requested_request_id is null
+     or requested_customer_id is null
+     or jsonb_typeof(coalesce(requested_roll_details, '[]'::jsonb)) <> 'array'
+     or jsonb_array_length(coalesce(requested_roll_details, '[]'::jsonb)) > 100 then
+    raise exception 'Enter valid fabric reservation details.';
+  end if;
+
+  delete from public.factory_cutting_request_reservations
+  where request_id = requested_request_id;
+
+  for selection in
+    select (entry.value ->> 'fabric_id')::uuid as fabric_id,
+           sum((entry.value ->> 'quantity')::numeric) as quantity
+    from jsonb_array_elements(coalesce(requested_roll_details, '[]'::jsonb)) as entry(value)
+    where entry.value ? 'fabric_id'
+    group by (entry.value ->> 'fabric_id')::uuid
+    order by (entry.value ->> 'fabric_id')::uuid
+  loop
+    if selection.fabric_id is null
+       or selection.quantity is null
+       or selection.quantity <= 0
+       or selection.quantity > 99999999999.999 then
+      raise exception 'Choose a stock fabric and enter a positive quantity.';
+    end if;
+
+    select * into stock_item
+    from public.factory_fabrics
+    where id = selection.fabric_id
+    for update;
+    if not found
+       or stock_item.stock_scope <> 'incoming'
+       or stock_item.customer_id is distinct from requested_customer_id
+       or stock_item.unit not in ('متر', 'توب') then
+      raise exception 'A selected fabric is not available in this customer''s incoming stock.';
+    end if;
+    if stock_item.unit = 'توب' and selection.quantity <> trunc(selection.quantity) then
+      raise exception 'The reserved quantity for a fabric measured in توب must be a whole number.';
+    end if;
+
+    select coalesce(sum(quantity), 0)
+      into other_reserved
+    from public.factory_cutting_request_reservations
+    where fabric_id = selection.fabric_id;
+    if stock_item.quantity_available - other_reserved < selection.quantity then
+      raise exception 'The requested fabric quantity exceeds the unreserved stock.';
+    end if;
+
+    insert into public.factory_cutting_request_reservations (request_id, fabric_id, quantity)
+    values (requested_request_id, selection.fabric_id, selection.quantity);
+    first_fabric_id := coalesce(first_fabric_id, selection.fabric_id);
+  end loop;
+
+  return first_fabric_id;
+end;
+$$;
+
 drop function if exists public.admin_create_factory_cutting_request(uuid);
 create or replace function public.admin_create_factory_cutting_request(
   requested_source_order_id uuid,
@@ -3012,6 +3094,7 @@ as $$
 declare
   source_model public.orders%rowtype;
   request_id uuid;
+  canonical_fabric_id uuid;
 begin
   if not public.is_active_factory_admin() then
     raise exception 'Only active admins can create cutting requests.';
@@ -3034,20 +3117,16 @@ begin
   if not found then
     raise exception 'The registered model or its system code could not be found.';
   end if;
-  if requested_fabric_id is not null and not exists (
-    select 1 from public.factory_fabrics
-    where id = requested_fabric_id
-      and (customer_id is null or customer_id = source_model.customer_id)
-  ) then
-    raise exception 'The selected fabric does not belong to this customer.';
-  end if;
-
   insert into public.factory_cutting_requests (
     source_order_id, customer_id, requested_by, fabric_id, roll_details, operational_notes
   ) values (
-    source_model.id, source_model.customer_id, auth.uid(), requested_fabric_id,
+    source_model.id, source_model.customer_id, auth.uid(), null,
     coalesce(requested_roll_details, '[]'::jsonb), coalesce(trim(requested_operational_notes), '')
   ) returning id into request_id;
+  canonical_fabric_id := public.replace_factory_cutting_request_reservations(
+    request_id, source_model.customer_id, requested_roll_details
+  );
+  update public.factory_cutting_requests set fabric_id = canonical_fabric_id where id = request_id;
 
   return request_id;
 end;
@@ -3068,6 +3147,7 @@ as $$
 declare
   catalog_model public.factory_model_catalog%rowtype;
   request_id uuid;
+  canonical_fabric_id uuid;
 begin
   if not public.is_active_factory_admin() then
     raise exception 'Only active admins can request a new model cut.';
@@ -3086,20 +3166,16 @@ begin
   if not found then
     raise exception 'The catalog model no longer exists.';
   end if;
-  if requested_fabric_id is not null and not exists (
-    select 1 from public.factory_fabrics
-    where id = requested_fabric_id
-      and (customer_id is null or customer_id = catalog_model.customer_id)
-  ) then
-    raise exception 'The selected fabric does not belong to this customer.';
-  end if;
-
   insert into public.factory_cutting_requests (
     catalog_model_id, customer_id, requested_by, fabric_id, roll_details, operational_notes
   ) values (
-    catalog_model.id, catalog_model.customer_id, auth.uid(), requested_fabric_id,
+    catalog_model.id, catalog_model.customer_id, auth.uid(), null,
     coalesce(requested_roll_details, '[]'::jsonb), coalesce(trim(requested_operational_notes), '')
   ) returning id into request_id;
+  canonical_fabric_id := public.replace_factory_cutting_request_reservations(
+    request_id, catalog_model.customer_id, requested_roll_details
+  );
+  update public.factory_cutting_requests set fabric_id = canonical_fabric_id where id = request_id;
   return request_id;
 end;
 $$;
@@ -3118,6 +3194,7 @@ set search_path = public
 as $$
 declare
   cutting_request public.factory_cutting_requests%rowtype;
+  canonical_fabric_id uuid;
 begin
   if not public.is_active_factory_admin() then
     raise exception 'Only active admins can update cutting requests.';
@@ -3134,23 +3211,21 @@ begin
   from public.factory_cutting_requests
   where id = requested_request_id
     and archived_at is null
-    and status <> 'cancelled'
+    and status = 'pending'
   for update;
   if not found then
     raise exception 'The active cutting request no longer exists.';
   end if;
-  if requested_fabric_id is not null and not exists (
-    select 1 from public.factory_fabrics
-    where id = requested_fabric_id
-      and (customer_id is null or customer_id = cutting_request.customer_id)
-  ) then
-    raise exception 'The selected fabric does not belong to this customer.';
-  end if;
-
   update public.factory_cutting_requests
-  set fabric_id = requested_fabric_id,
+  set fabric_id = null,
       roll_details = coalesce(requested_roll_details, '[]'::jsonb),
       operational_notes = coalesce(trim(requested_operational_notes), '')
+  where id = cutting_request.id;
+  canonical_fabric_id := public.replace_factory_cutting_request_reservations(
+    cutting_request.id, cutting_request.customer_id, requested_roll_details
+  );
+  update public.factory_cutting_requests
+  set fabric_id = canonical_fabric_id
   where id = cutting_request.id;
 
   if nullif(trim(coalesce(requested_model_image_url, '')), '') is not null then
@@ -3263,6 +3338,11 @@ begin
   update public.factory_cutting_requests
   set archived_at = coalesce(archived_at, now())
   where catalog_model_id = catalog_model.id;
+  delete from public.factory_cutting_request_reservations
+  where request_id in (
+    select id from public.factory_cutting_requests
+    where catalog_model_id = catalog_model.id
+  );
   update public.factory_cutting_stories
   set archived_at = coalesce(archived_at, now())
   where catalog_model_id = catalog_model.id;
@@ -3308,6 +3388,10 @@ begin
   update public.factory_cutting_requests
   set archived_at = coalesce(archived_at, now())
   where id = cutting_request.id;
+  if cutting_request.status = 'pending' then
+    delete from public.factory_cutting_request_reservations
+    where request_id = cutting_request.id;
+  end if;
   return 'archived';
 end;
 $$;
@@ -3337,6 +3421,11 @@ begin
   update public.factory_cutting_requests
   set archived_at = coalesce(archived_at, now())
   where source_order_id = requested_order_id;
+  delete from public.factory_cutting_request_reservations
+  where request_id in (
+    select id from public.factory_cutting_requests
+    where source_order_id = requested_order_id
+  );
   if not found then
     perform 1 from public.orders where id = requested_order_id;
     if not found then
@@ -3556,6 +3645,7 @@ grant execute on function public.reset_factory_data() to authenticated;
 
 alter table public.factory_fabrics enable row level security;
 alter table public.factory_fabric_transactions enable row level security;
+alter table public.factory_cutting_request_reservations enable row level security;
 alter table public.factory_cutting_stories enable row level security;
 alter table public.factory_cutting_requests enable row level security;
 alter table public.factory_model_catalog enable row level security;
@@ -3567,6 +3657,13 @@ create policy "Admins read factory cutting stories"
 drop policy if exists "Admins and cutting supervisors read cutting requests" on public.factory_cutting_requests;
 create policy "Admins and cutting supervisors read cutting requests"
   on public.factory_cutting_requests for select to authenticated
+  using (
+    public.is_active_factory_admin()
+    or public.has_active_factory_role(array['cutting'])
+  );
+drop policy if exists "Admins and cutting supervisors read cutting request reservations" on public.factory_cutting_request_reservations;
+create policy "Admins and cutting supervisors read cutting request reservations"
+  on public.factory_cutting_request_reservations for select to authenticated
   using (
     public.is_active_factory_admin()
     or public.has_active_factory_role(array['cutting'])
@@ -4249,6 +4346,13 @@ begin
   ) then
     raise exception 'Fabric referenced by a production stage cannot be deleted; preserve its production history.';
   end if;
+  if exists (
+    select 1
+    from public.factory_cutting_request_reservations
+    where fabric_id = requested_fabric_id
+  ) then
+    raise exception 'Fabric reserved by an active cutting request cannot be deleted.';
+  end if;
 
   delete from public.factory_fabric_transactions
   where fabric_id = requested_fabric_id;
@@ -4277,6 +4381,7 @@ declare
   resolved_fabric public.factory_fabrics%rowtype;
   quantity_delta numeric(14, 3);
   order_customer_id uuid;
+  reserved_quantity numeric(14, 3);
 begin
   if requested_order_id is null
      or requested_quantity is null or requested_quantity <= 0
@@ -4342,6 +4447,13 @@ begin
   if prior_fabric_id = requested_fabric_id then
     quantity_delta := requested_quantity - prior_quantity;
     if quantity_delta > 0 then
+      select coalesce(sum(quantity), 0)
+        into reserved_quantity
+      from public.factory_cutting_request_reservations
+      where fabric_id = requested_fabric_id;
+      if resolved_fabric.quantity_available - reserved_quantity < quantity_delta then
+        raise exception 'Not enough unreserved fabric remains in stock for this withdrawal.';
+      end if;
       update public.factory_fabrics
       set quantity_available = quantity_available - quantity_delta,
           updated_at = now()
@@ -4367,6 +4479,13 @@ begin
     end if;
   else
     if prior_fabric_id is not null and prior_quantity > 0 then
+      select coalesce(sum(quantity), 0)
+        into reserved_quantity
+      from public.factory_cutting_request_reservations
+      where fabric_id = requested_fabric_id;
+      if resolved_fabric.quantity_available - reserved_quantity < requested_quantity then
+        raise exception 'Not enough unreserved fabric remains in stock for this withdrawal.';
+      end if;
       update public.factory_fabrics
       set quantity_available = quantity_available + prior_quantity,
           updated_at = now()
@@ -5061,6 +5180,12 @@ declare
   order_status text;
   colors text;
   color_names jsonb;
+  reservation record;
+  has_reservations boolean := false;
+  first_reserved_fabric_id uuid;
+  first_reserved_quantity numeric(14, 3);
+  first_reserved_unit text;
+  reserved_fabric_details text := '';
 begin
   if not public.is_active_factory_admin() then
     raise exception 'Only active admins can approve cutting stories.';
@@ -5113,7 +5238,12 @@ begin
       raise exception 'The registered catalog model has been archived and cannot be approved.';
     end if;
   end if;
-  if story.fabric_id is not null then
+  select exists (
+    select 1
+    from public.factory_cutting_request_reservations
+    where request_id = story.cutting_request_id
+  ) into has_reservations;
+  if story.fabric_id is not null and not has_reservations then
     perform 1 from public.factory_fabrics where id = story.fabric_id for update;
     if not found then
       raise exception 'The selected fabric stock item no longer exists.';
@@ -5154,20 +5284,68 @@ begin
     array['cutting', 'sewing', 'finishing']::text[]
   );
 
-  resolved_fabric_name := public.reconcile_factory_fabric_usage(
-    new_order_id, story.fabric_id, story.fabric_quantity, story.fabric
-  );
+  if has_reservations then
+    for reservation in
+      select r.fabric_id, r.quantity, f.name, f.color_name, f.unit, f.quantity_available
+      from public.factory_cutting_request_reservations as r
+      join public.factory_fabrics as f on f.id = r.fabric_id
+      where r.request_id = story.cutting_request_id
+      order by r.fabric_id
+      for update of f, r
+    loop
+      if reservation.quantity_available < reservation.quantity then
+        raise exception 'Reserved fabric stock is no longer sufficient for this cutting request.';
+      end if;
+      update public.factory_fabrics
+      set quantity_available = quantity_available - reservation.quantity,
+          updated_at = now()
+      where id = reservation.fabric_id;
+      insert into public.factory_fabric_transactions (
+        fabric_id, order_id, transaction_type, quantity, notes, actor_id
+      ) values (
+        reservation.fabric_id, new_order_id, 'withdrawal', reservation.quantity,
+        'استهلاك كمية محجوزة عند اعتماد قصة القص', auth.uid()
+      );
+      if first_reserved_fabric_id is null then
+        first_reserved_fabric_id := reservation.fabric_id;
+        first_reserved_quantity := reservation.quantity;
+        first_reserved_unit := reservation.unit;
+      end if;
+      reserved_fabric_details := concat_ws(
+        E'\n',
+        nullif(reserved_fabric_details, ''),
+        format('%s%s: %s %s',
+          reservation.name,
+          case when nullif(reservation.color_name, '') is null then '' else ' (' || reservation.color_name || ')' end,
+          reservation.quantity,
+          reservation.unit)
+      );
+    end loop;
+    delete from public.factory_cutting_request_reservations
+    where request_id = story.cutting_request_id;
+    resolved_fabric_name := reserved_fabric_details;
+  else
+    resolved_fabric_name := public.reconcile_factory_fabric_usage(
+      new_order_id, story.fabric_id, story.fabric_quantity, story.fabric
+    );
+  end if;
 
   update public.production_stages
   set target_quantity = story.total_pieces,
       completed_quantity = story.total_pieces,
       fabric = resolved_fabric_name,
-      fabric_details = story.fabric_details,
-      fabric_id = story.fabric_id,
-      external_fabric_source = case when story.fabric_id is null then story.fabric else '' end,
-      external_fabric_unit = case when story.fabric_id is null then story.fabric_unit else '' end,
-      fabric_quantity = story.fabric_quantity,
-      bolt_count = story.bolt_count,
+      fabric_details = case when has_reservations
+        then concat_ws(E'\n', nullif(trim(story.fabric_details), ''), reserved_fabric_details)
+        else story.fabric_details end,
+      fabric_id = case when has_reservations then first_reserved_fabric_id else story.fabric_id end,
+      external_fabric_source = case when has_reservations then ''
+        when story.fabric_id is null then story.fabric else '' end,
+      external_fabric_unit = case when has_reservations then ''
+        when story.fabric_id is null then story.fabric_unit else '' end,
+      fabric_quantity = case when has_reservations then first_reserved_quantity else story.fabric_quantity end,
+      bolt_count = case when has_reservations and first_reserved_unit = 'توب'
+        then first_reserved_quantity::integer
+        when has_reservations then 0 else story.bolt_count end,
       layer_count = story.ply_count,
       color_ply_data = story.color_ply_data,
       technical_notes = story.technical_notes,
@@ -6772,6 +6950,8 @@ grant select, insert, update on public.factory_records to authenticated;
 grant select on public.factory_deliveries to authenticated;
 grant select on public.factory_fabrics to authenticated;
 grant select on public.factory_fabric_transactions to authenticated;
+revoke all on public.factory_cutting_request_reservations from public, anon, authenticated;
+grant select on public.factory_cutting_request_reservations to authenticated;
 revoke all on public.factory_cutting_stories from public, anon, authenticated;
 grant select on public.factory_cutting_stories to authenticated;
 grant select on public.factory_cutting_requests to authenticated;
@@ -7263,6 +7443,7 @@ grant execute on function public.admin_update_factory_delivery_quantity(uuid, uu
 revoke all on function public.calculate_factory_cutting_breakdown(jsonb, jsonb) from public, anon, authenticated;
 revoke all on function public.admin_create_factory_cutting_request(uuid, uuid, jsonb, text) from public, anon, authenticated;
 grant execute on function public.admin_create_factory_cutting_request(uuid, uuid, jsonb, text) to authenticated;
+revoke all on function public.replace_factory_cutting_request_reservations(uuid, uuid, jsonb) from public, anon, authenticated;
 revoke all on function public.admin_create_factory_model_cutting_request(uuid, uuid, jsonb, text) from public, anon, authenticated;
 grant execute on function public.admin_create_factory_model_cutting_request(uuid, uuid, jsonb, text) to authenticated;
 revoke all on function public.admin_update_factory_cutting_request(uuid, uuid, jsonb, text, text) from public, anon, authenticated;

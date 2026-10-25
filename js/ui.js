@@ -134,6 +134,60 @@
           optionElement.textContent = option.label;
           control.append(optionElement);
         }
+      } else if (field.type === "fabric-rows") {
+        control = document.createElement("div");
+        control.className = "fabric-request-rows";
+        const renderRow = (initial = {}) => {
+          const row = document.createElement("div");
+          row.className = "fabric-request-row";
+          const select = document.createElement("select");
+          select.setAttribute("aria-label", "صنف القماش");
+          select.innerHTML = '<option value="">اختر اللون أو القماش</option>';
+          for (const option of field.options || []) {
+            const optionElement = document.createElement("option");
+            optionElement.value = option.value;
+            optionElement.textContent = option.label;
+            optionElement.dataset.available = String(option.available);
+            optionElement.dataset.unit = option.unit || "";
+            select.append(optionElement);
+          }
+          select.value = initial.fabric_id || "";
+          const quantity = document.createElement("input");
+          quantity.type = "number";
+          quantity.min = "0.001";
+          quantity.step = "0.001";
+          quantity.placeholder = "الكمية";
+          quantity.setAttribute("aria-label", "الكمية المطلوبة");
+          quantity.value = initial.quantity ?? "";
+          const hint = document.createElement("small");
+          hint.className = "fabric-request-stock-hint";
+          const remove = document.createElement("button");
+          remove.type = "button";
+          remove.className = "row-action";
+          remove.textContent = "إزالة";
+          remove.addEventListener("click", () => row.remove());
+          const refreshHint = () => {
+            const option = select.selectedOptions[0];
+            const available = Number(option?.dataset.available);
+            const unit = option?.dataset.unit || "";
+            quantity.step = unit === "توب" ? "1" : "0.001";
+            quantity.min = unit === "توب" ? "1" : "0.001";
+            hint.textContent = select.value
+              ? `المتاح للحجز: ${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(available)} ${unit}`
+              : "";
+          };
+          select.addEventListener("change", refreshHint);
+          row.append(select, quantity, hint, remove);
+          refreshHint();
+          control.append(row);
+        };
+        for (const row of field.value || []) renderRow(row);
+        const add = document.createElement("button");
+        add.type = "button";
+        add.className = "row-action fabric-request-add";
+        add.textContent = "+ إضافة لون / ثوب آخر";
+        add.addEventListener("click", () => renderRow());
+        control.append(add);
       } else if (field.type === "textarea") {
         control = document.createElement("textarea");
         control.rows = field.rows || 4;
@@ -150,7 +204,9 @@
       }
       control.name = field.name;
       control.required = Boolean(field.required);
-      control.value = field.type === "file" ? "" : String(field.value ?? "");
+      if (field.type !== "fabric-rows") {
+        control.value = field.type === "file" ? "" : String(field.value ?? "");
+      }
       if (field.maxLength !== undefined) control.maxLength = field.maxLength;
       if (field.placeholder) control.placeholder = field.placeholder;
       label.append(control);
@@ -210,6 +266,59 @@
           name,
           value instanceof File && !value.name ? null : value
         ]));
+        const fabricRows = [...form.querySelectorAll(".fabric-request-row")];
+        if (fabricRows.length) {
+          values.fabricLines = [];
+          const totals = new Map();
+          for (const row of fabricRows) {
+            const [select, quantity] = row.querySelectorAll("select, input");
+            if (!select.value && !quantity.value) continue;
+            if (!select.value || !quantity.value || Number(quantity.value) <= 0) {
+              select.setCustomValidity("اختر صنف القماش وأدخل كمية صحيحة.");
+              select.reportValidity();
+              select.setCustomValidity("");
+              return;
+            }
+            const selected = select.selectedOptions[0];
+            const amount = Number(quantity.value);
+            const available = Number(selected.dataset.available);
+            const unit = selected.dataset.unit || "";
+            if (amount > available || (unit === "توب" && !Number.isInteger(amount))) {
+              quantity.setCustomValidity(amount > available
+                ? "الكمية أكبر من الرصيد المتاح للحجز."
+                : "الكمية يجب أن تكون عدداً صحيحاً عند القياس بالتوب.");
+              quantity.reportValidity();
+              quantity.setCustomValidity("");
+              return;
+            }
+            values.fabricLines.push({
+              fabric_id: select.value,
+              quantity: amount
+            });
+            const existing = totals.get(select.value);
+            totals.set(select.value, {
+              quantity: (existing?.quantity || 0) + amount,
+              available,
+              unit
+            });
+          }
+          for (const [fabricId, total] of totals) {
+            if (total.quantity <= total.available
+              && (total.unit !== "توب" || Number.isInteger(total.quantity))) continue;
+            const row = fabricRows.find((entry) => entry.querySelector("select")?.value === fabricId);
+            const quantity = row?.querySelector("input");
+            if (quantity) {
+              quantity.setCustomValidity(total.quantity > total.available
+                ? "إجمالي الكمية لهذا الصنف أكبر من الرصيد المتاح للحجز."
+                : "إجمالي الكمية يجب أن يكون عدداً صحيحاً عند القياس بالتوب.");
+              quantity.reportValidity();
+              quantity.setCustomValidity("");
+            }
+            return;
+          }
+        } else {
+          values.fabricLines = [];
+        }
         finish(values);
       });
       dialog.addEventListener("keydown", (event) => {
