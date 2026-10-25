@@ -6421,6 +6421,10 @@ begin
     where factory_order.customer_id = matched_client.id
       and factory_order.archived_at is null
       and (
+        factory_order.status not in (
+          'جاهز للتسليم', 'تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق'
+        )
+        or
         factory_order.total_pieces <= 0
         or factory_order.delivered_pieces < factory_order.total_pieces
       )

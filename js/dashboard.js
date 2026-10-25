@@ -955,11 +955,17 @@ function factoryOrderDeliveredStatus(status) {
     || LOCKED_FACTORY_ORDER_STATUSES.includes(canonicalFactoryOrderStatus(status));
 }
 
+function factoryOrderHasReachedDelivery(order) {
+  const status = canonicalFactoryOrderStatus(order.status || order.storedStatus || order.deliveryStatus || order.delivery_status);
+  return ["جاهز للتسليم", "تم التسليم"].includes(status);
+}
+
 function factoryOrderFullyDelivered(order) {
   const quantity = Number(order.quantity ?? order.total_pieces ?? 0);
   const deliveredPieces = Number(order.deliveredPieces ?? order.delivered_pieces ?? 0);
   const recordedDeliveryPieces = (order.deliveryHistory || order.deliveries || [])
     .reduce((total, delivery) => total + Number(delivery.quantity || 0), 0);
+  if (!factoryOrderHasReachedDelivery(order)) return false;
   if (quantity > 0) return Math.max(deliveredPieces, recordedDeliveryPieces) >= quantity;
   return [order.deliveryStatus, order.delivery_status, order.storedStatus, order.status]
     .some(factoryOrderDeliveredStatus);
@@ -2245,8 +2251,13 @@ function clientAccountSummary(client, data) {
   const latestSettlement = settlements[0] || null;
   const openingBalance = roundMoney(latestSettlement?.balance || 0);
   const orders = data.models.filter((order) => order.customerId === client.id && !order.archivedAt);
-  const deliveredTotal = sumMoney(orders.map((order) => Number(order.totalAmount)));
-  const expectedTotal = sumMoney(orders.map((order) => order.expectedAmount));
+  const deliveryReadyOrders = orders.filter(factoryOrderHasReachedDelivery);
+  const preDeliveryOrders = orders.filter((order) => !factoryOrderHasReachedDelivery(order));
+  const deliveredTotal = sumMoney(deliveryReadyOrders.map((order) => Number(order.totalAmount)));
+  const expectedTotal = sumMoney([
+    ...deliveryReadyOrders.map((order) => order.expectedAmount),
+    ...preDeliveryOrders.map((order) => addMoney(order.totalAmount, order.expectedAmount))
+  ]);
   const orderPaid = sumMoney(orders.map((order) => order.paidAmount));
   const periodStart = client.account_period_started_at || latestSettlement?.date || null;
   const payments = data.payments.filter((payment) =>
@@ -2272,7 +2283,9 @@ function clientAccountSummary(client, data) {
   const paidAfterPending = Math.max(0, subtractMoney(paid, pendingPaid));
   const deliveredNetBalance = subtractMoney(grossDue, paidAfterPending);
   const balance = addMoney(deliveredNetBalance, calculatedPendingGoodsBalance);
-  const hasUndeliveredGoods = orders.some((order) => !factoryOrderFullyDelivered(order));
+  const hasUndeliveredGoods = orders.some((order) =>
+    !factoryOrderHasReachedDelivery(order) || !factoryOrderFullyDelivered(order)
+  );
   const pendingGoodsBalance = calculatedPendingGoodsBalance;
   const deliveredDue = Math.max(0, deliveredNetBalance);
   const due = balance;
@@ -2314,7 +2327,7 @@ function pendingGoodsBreakdown(summary) {
     ? [{
       label: summary.clientName || "عميل",
       note: summary.hasUndeliveredGoods
-        ? `رصيد مستحق عند استلام البضاعة · ${summary.orders.filter((order) => order.expectedAmount > 0 || !factoryOrderFullyDelivered(order)).length} طلب غير مسلّم`
+        ? `رصيد مستحق عند استلام البضاعة · ${summary.orders.filter((order) => !factoryOrderHasReachedDelivery(order) || !factoryOrderFullyDelivered(order)).length} طلب غير مسلّم`
         : "قيمة متبقية لبضاعة غير مسلّمة بعد خصم الدفعات المقدمة",
       value: money(summary.pendingGoodsBalance)
     }]
@@ -2517,7 +2530,11 @@ function adminDashboardView(data) {
     const details = group.orders.map((order) => {
       const delivered = LOCKED_FACTORY_ORDER_STATUSES.includes(order.status);
       const quantity = delivered ? order.deliveredPieces : order.remainingPieces ?? order.quantity;
-      const amount = delivered ? order.totalAmount : addMoney(order.totalAmount, order.expectedAmount);
+      const amount = delivered
+        ? order.totalAmount
+        : factoryOrderHasReachedDelivery(order)
+          ? order.expectedAmount
+          : addMoney(order.totalAmount, order.expectedAmount);
       return orderDetail(order, quantity, amount);
     });
     return stat(group.label, group.orders.length, "حسب مرحلة التشغيل الحالية",
@@ -4215,8 +4232,13 @@ function clientView(data, session) {
     || new Date(item._createdAt || item.created_at || item.date).getTime()
       >= new Date(latestSettlement.date || latestSettlement._createdAt).getTime()
   );
-  const totalAmount = sumMoney(currentOrders.map((item) => Number(item.totalAmount)));
-  const expectedTotal = sumMoney(currentOrders.map((item) => item.expectedAmount));
+  const deliveryReadyOrders = currentOrders.filter(factoryOrderHasReachedDelivery);
+  const preDeliveryOrders = currentOrders.filter((order) => !factoryOrderHasReachedDelivery(order));
+  const totalAmount = sumMoney(deliveryReadyOrders.map((item) => Number(item.totalAmount)));
+  const expectedTotal = sumMoney([
+    ...deliveryReadyOrders.map((item) => item.expectedAmount),
+    ...preDeliveryOrders.map((item) => addMoney(item.totalAmount, item.expectedAmount))
+  ]);
   const periodStart = latestSettlement?.date || latestSettlement?._createdAt || null;
   const accountAdjustments = data.accountAdjustments.filter((entry) =>
     entry._ownerId === session.accountId
@@ -4238,7 +4260,9 @@ function clientView(data, session) {
   const paidAfterPending = Math.max(0, subtractMoney(totalPaid, pendingPaid));
   const deliveredNetBalance = subtractMoney(grossDue, paidAfterPending);
   const remaining = addMoney(deliveredNetBalance, calculatedPendingGoodsBalance);
-  const hasUndeliveredGoods = currentOrders.some((order) => !factoryOrderFullyDelivered(order));
+  const hasUndeliveredGoods = currentOrders.some((order) =>
+    !factoryOrderHasReachedDelivery(order) || !factoryOrderFullyDelivered(order)
+  );
   const pendingGoodsBalance = calculatedPendingGoodsBalance;
   const deliveredDue = Math.max(0, deliveredNetBalance);
   const accountCreditBalance = Math.max(0, -remaining);
