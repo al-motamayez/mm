@@ -675,7 +675,7 @@ async function readDashboardData(session) {
       remainingAmount: Number(order.remaining_amount || 0),
       expectedDeliveryDate: order.expected_delivery_date || "",
       status: effectiveStatus.status,
-      ledgerStatus: order.status || order.delivery_status || "",
+      ledgerStatus: effectiveStatus.status,
       cuttingStageStatus: cuttingStage?.status || "",
       sewingStageStatus,
       deliveryStatus: order.delivery_status || "",
