@@ -337,7 +337,7 @@ async function readDashboardData(session) {
     : Promise.resolve({ data: [], error: null });
   const cuttingRequestsPromise = ["admin", "cutting"].includes(session.role)
     ? supabaseClient.from("factory_cutting_requests")
-      .select("id, source_order_id, catalog_model_id, customer_id, requested_by, status, completed_story_id, archived_at, created_at, submitted_at")
+      .select("id, source_order_id, catalog_model_id, customer_id, requested_by, status, completed_story_id, fabric_id, roll_details, operational_notes, archived_at, created_at, submitted_at")
       .order("created_at", { ascending: false })
     : Promise.resolve({ data: [], error: null });
   const modelCatalogPromise = ["admin", "cutting"].includes(session.role)
@@ -1774,13 +1774,34 @@ async function deleteFactoryModelImages() {
 }
 
 function modelImageMarkup(url, label = "صورة القطعة", imageClass = "") {
-  const imageUrls = Array.isArray(url) ? url.filter(Boolean) : url ? [url] : [];
+  const imageUrls = Array.isArray(url) ? url.filter(Boolean) : url ? [url] : [DEFAULT_MODEL_IMAGE_URL];
   if (!imageUrls.length) return "";
   const images = imageUrls.map((imageUrl, index) => {
     const imageLabel = imageUrls.length > 1 ? `${label} ${index + 1}` : label;
     return `<button class="model-image-trigger${imageClass ? ` ${escapeHtml(imageClass)}-trigger` : ""}" type="button" data-model-image-lightbox="${escapeHtml(imageUrl)}" data-image-alt="${escapeHtml(imageLabel)}" aria-label="تكبير ${escapeHtml(imageLabel)}"><img class="model-thumbnail${imageClass ? ` ${escapeHtml(imageClass)}` : ""}" src="${escapeHtml(imageUrl)}" alt="${escapeHtml(imageLabel)}" loading="lazy"></button>`;
   }).join("");
   return imageUrls.length > 1 ? `<span class="model-image-gallery">${images}</span>` : images;
+}
+
+function imagePickerMarkup(name, buttonLabel = "إضافة صورة", options = {}) {
+  const { required = false, capture = "", helpText = "" } = options;
+  return `<div class="image-picker-control"><input class="image-picker-input" type="file" name="${escapeHtml(name)}" accept="image/*"${capture ? ` capture="${escapeHtml(capture)}"` : ""}${required ? " required" : ""} data-image-picker><button class="button image-picker-button" type="button" data-image-picker-trigger aria-label="${escapeHtml(buttonLabel)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v11a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 17.5z"/><circle cx="9" cy="9" r="1.5"/><path d="m5 17 5-5 3 3 2-2 4 4"/></svg><span>${escapeHtml(buttonLabel)}</span></button><span class="image-picker-filename" data-image-picker-filename>لم يتم اختيار صورة</span>${helpText ? `<small>${escapeHtml(helpText)}</small>` : ""}</div>`;
+}
+
+function bindImagePickerControls() {
+  if (document.documentElement.dataset.imagePickerBound === "true") return;
+  document.documentElement.dataset.imagePickerBound = "true";
+  document.addEventListener("click", (event) => {
+    const trigger = event.target.closest("[data-image-picker-trigger]");
+    if (!trigger) return;
+    trigger.closest(".image-picker-control")?.querySelector("[data-image-picker]")?.click();
+  });
+  document.addEventListener("change", (event) => {
+    const input = event.target.closest("[data-image-picker]");
+    if (!input) return;
+    const filename = input.closest(".image-picker-control")?.querySelector("[data-image-picker-filename]");
+    if (filename) filename.textContent = input.files?.[0]?.name || "لم يتم اختيار صورة";
+  });
 }
 
 function formatDateTime(value) {
@@ -3165,7 +3186,7 @@ function adminView(data, accounts) {
           ${colorPickerMarkup("", "model-colors")}
           ${sizePickerMarkup("", "model-sizes", true, true)}
           <div class="model-allocation field"><label>توزيع العدد على الألوان والمقاسات</label><div data-model-allocation-grid><p class="muted">أدخل العدد الكلي واختر الألوان والمقاسات لعرض التوزيع.</p></div><input type="hidden" name="colorSizeDistribution" value='{"colors":[]}'></div>
-          <div class="field model-image-field"><span>صور الموديل (اختياري - صورتان كحد أقصى)</span><small>يمكن رفع أو تبديل كل صورة أو حذفها. الحد الأقصى لكل صورة 25 ميجابايت.</small><div class="model-image-slots" data-model-image-slots>${[1, 2].map((slot) => `<section class="model-image-slot" data-model-image-slot="${slot}"><strong>الصورة ${slot}</strong><input type="file" name="modelImage${slot}" accept="image/*" hidden><div data-model-image-preview="${slot}"></div><div class="form-actions"><button class="row-action" type="button" data-model-image-replace="${slot}">${slot === 1 ? "إضافة / تبديل الصورة" : "إضافة الصورة الثانية"}</button><button class="row-action order-delete-action" type="button" data-model-image-delete="${slot}" hidden>حذف الصورة</button></div></section>`).join("")}</div></div>
+          <div class="field model-image-field"><span>صور الموديل (اختياري - صورتان كحد أقصى)</span><small>يمكن رفع أو تبديل كل صورة أو حذفها. الحد الأقصى لكل صورة 25 ميجابايت.</small><div class="model-image-slots" data-model-image-slots>${[1, 2].map((slot) => `<section class="model-image-slot" data-model-image-slot="${slot}"><strong>الصورة ${slot}</strong><input type="file" name="modelImage${slot}" accept="image/*" hidden><div data-model-image-preview="${slot}"></div><div class="form-actions"><button class="row-action" type="button" data-model-image-replace="${slot}"><span aria-hidden="true">📷</span> ${slot === 1 ? "إضافة / تبديل الصورة" : "إضافة الصورة الثانية"}</button><button class="row-action order-delete-action" type="button" data-model-image-delete="${slot}" hidden>حذف الصورة</button></div></section>`).join("")}</div></div>
           <div class="field" data-expected-delivery-field><label for="model-expected-delivery">تاريخ التسليم المتوقع (اختياري)</label><input id="model-expected-delivery" name="expectedDeliveryDate" type="date"></div>
           <div class="field"><label for="model-status">حالة الطلب</label><select id="model-status" name="status">${FACTORY_ORDER_STATUSES.map((status) => `<option>${status}</option>`).join("")}</select><small data-workflow-status-hint hidden>حالة الإنتاج الحالية تُدار من خطوات التشغيل، وستبقى كما هي عند حفظ بيانات الموديل.</small></div>
           <div class="field" data-initial-delivery-field hidden><label for="model-delivered-pieces">العدد المسلّم</label><input id="model-delivered-pieces" name="deliveredPieces" type="text" inputmode="numeric" autocomplete="off"><small>يُسجل كدفعة تسليم تاريخية ويُحتسب ضمن حساب العميل.</small></div>
@@ -3274,7 +3295,7 @@ function cuttingView(data) {
       ${cuttingColorPlyMarkup(item.colorPlyData, item.colors, item.layerCount, `cutting-${item.order}`)}
       <p class="cutting-calculated-total">إجمالي الراقات: <strong data-cutting-plys>0</strong> · إجمالي قطع القصة الناتجة: <strong data-cutting-total>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.total)}</strong> قطعة</p>
       <div class="cutting-breakdown" data-cutting-breakdown></div>
-      <label class="field"><span>صورة الموديل (اختياري)</span><input type="file" name="modelImage" accept="image/*"><small>يمكن رفع صيغ الصور الشائعة حتى 25 ميجابايت.</small><div data-repeat-model-image></div></label>
+      <label class="field"><span>صورة الموديل (اختياري)</span>${imagePickerMarkup("modelImage", "إضافة صورة") }<small>يمكن رفع صيغ الصور الشائعة حتى 25 ميجابايت.</small><div data-repeat-model-image></div></label>
       <label class="field"><span>ملاحظات فنية للفرشة والقص</span><textarea name="technicalNotes" rows="3">${escapeHtml(item.technicalNotes || "")}</textarea></label>
       ${bedReady ? `<label class="field"><span>مين اللي قص القصة؟ (اختياري)</span><input name="cutterName" maxlength="120" value="${escapeHtml(item.cutterName || "")}" placeholder="اسم منفذ القص"></label>` : ""}
       <div class="form-actions">${bedReady ? "" : `<button type="button" class="button button-primary" data-ready-cutting="${escapeHtml(item.order)}">حفظ التفاصيل واعتمادها جاهزة للقص</button>`}<button type="submit" class="button button-primary" ${bedReady ? "" : "hidden"}>تأكيد انتهاء القص</button></div>
@@ -3349,10 +3370,12 @@ function modelRegistryView(data, allowRepeat = false, detailsKind = "cutting", c
     `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)}${client.brand_name ? ` · ${escapeHtml(client.brand_name)}` : ""}</option>`
   ).join("");
   const registrationForm = canRequestCut
-    ? `<form class="form-grid cutting-model-register-form" data-register-factory-model><label class="field"><span>العميل / البراند</span><select name="customerId" required><option value="">اختر العميل</option>${customerOptions}</select></label><label class="field"><span>اسم الموديل</span><input name="modelName" maxlength="160" required></label><label class="field"><span>كود/رقم الموديل للعميل (اختياري)</span><input name="clientModelCode" maxlength="100"></label><label class="field"><span>صورة الموديل (اختياري)</span><input name="modelImage" type="file" accept="image/*"><small>عند عدم رفع صورة، سيُستخدم شكل افتراضي للموديل.</small></label><div class="form-actions"><button class="button button-primary" type="submit">إضافة إلى سجل الموديلات</button></div></form>`
+    ? `<form class="form-grid cutting-model-register-form" data-register-factory-model><label class="field"><span>العميل / البراند</span><select name="customerId" required><option value="">اختر العميل</option>${customerOptions}</select></label><label class="field"><span>اسم الموديل</span><input name="modelName" maxlength="160" required></label><label class="field"><span>كود/رقم الموديل للعميل (اختياري)</span><input name="clientModelCode" maxlength="100"></label><label class="field"><span>صورة الموديل (اختياري)</span>${imagePickerMarkup("modelImage", "إضافة صورة")}<small>عند عدم رفع صورة، سيُستخدم شكل افتراضي للموديل.</small></label><div class="form-actions"><button class="button button-primary" type="submit">إضافة إلى سجل الموديلات</button></div></form>`
     : "";
   const cards = entries.map(({ code, model, orders, catalogModel }) => `<article class="cutting-story-card production-compact-card">
-    <header class="production-compact-heading">${modelImageMarkup(model.modelImageUrls || model.modelImageUrl)}<h3>${escapeHtml(model.name || "موديل بدون اسم")}</h3></header>
+    <header class="production-compact-heading">${canRequestCut
+      ? catalogModelImageControl(catalogModel || orders[0])
+      : modelImageMarkup(model.modelImageUrls || model.modelImageUrl)}<h3>${escapeHtml(model.name || "موديل بدون اسم")}</h3></header>
     <strong class="production-compact-total">${orders.length ? `${new Intl.NumberFormat("ar-EG-u-nu-latn").format(orders.reduce((sum, order) => sum + Number(order.quantity || 0), 0))} قطعة` : "بانتظار طلب القصة الأولى"}</strong>
     <p class="model-registry-code">كود الموديل بالنظام: ${escapeHtml(code)}${model.clientModelCode ? ` · كود العميل: ${escapeHtml(model.clientModelCode)}` : ""}</p>
     <div class="production-compact-facts"><div><span>الألوان</span>${colorSummaryMarkup(model.colors, model.colorNames, model.colorPlyData)}</div><div><span>المقاسات</span>${sizeBadgesMarkup(model.sizes)}</div></div>
@@ -3371,6 +3394,109 @@ function modelRegistryView(data, allowRepeat = false, detailsKind = "cutting", c
   return panel("سجل الموديلات", `${registrationForm}${cards
     ? `<div class="cutting-story-list">${cards}</div>`
     : '<div class="empty-state">لا توجد موديلات مسجلة حتى الآن.</div>'}`);
+}
+
+function catalogModelImageControl(model) {
+  if (!model) return modelImageMarkup("");
+  const modelId = model.id;
+  const modelName = model.model_name || model.name || "الموديل";
+  const imageUrl = model.model_image_url || model.modelImageUrl || "";
+  const hasImage = Boolean(imageUrl);
+  const image = hasImage
+    ? modelImageMarkup(imageUrl, `صورة الموديل ${modelName}`)
+    : `<button class="model-image-trigger catalog-image-placeholder" type="button" data-catalog-image-trigger="${escapeHtml(modelId)}" aria-label="إضافة صورة للموديل ${escapeHtml(modelName)}"><img class="model-thumbnail" src="${DEFAULT_MODEL_IMAGE_URL}" alt="صورة افتراضية للموديل ${escapeHtml(modelName)}"></button>`;
+  return `<span class="catalog-image-control">${image}<input type="file" accept="image/*" hidden data-catalog-image-input="${escapeHtml(modelId)}">${hasImage ? `<button class="row-action catalog-image-change" type="button" data-catalog-image-trigger="${escapeHtml(modelId)}"><span aria-hidden="true">📷</span> تبديل الصورة</button>` : ""}</span>`;
+}
+
+function cuttingRequestRollDetails(request) {
+  return Array.isArray(request?.roll_details) ? request.roll_details : [];
+}
+
+function requestRollLines(rolls) {
+  return rolls.map((roll) => `${roll.roll_number || ""} | ${roll.color_name || ""}`.trim()).join("\n");
+}
+
+async function cuttingRequestDetailsDialog(customerId, request = null, currentImageUrl = "") {
+  const rolls = cuttingRequestRollDetails(request);
+  const fabrics = dashboardData.fabrics.filter((fabric) =>
+    !fabric.customer_id || fabric.customer_id === customerId
+  );
+  const options = [
+    { value: "", label: "بدون تحديد خامة" },
+    ...fabrics.map((fabric) => ({
+      value: fabric.id,
+      label: `${fabric.name}${fabric.color_name ? ` · ${fabric.color_name}` : ""}${fabric.unit ? ` · ${fabric.unit}` : ""}`
+    }))
+  ];
+  const result = await window.factoryUI.formDialog({
+    title: request ? "تعديل طلب القص المرسل" : "بيانات طلب القصة الجديدة",
+    submitLabel: request ? "حفظ التعديلات" : "إرسال طلب القص",
+    fields: [
+      {
+        name: "fabricId",
+        label: "الخامة (اختياري)",
+        type: "select",
+        value: request?.fabric_id || "",
+        options
+      },
+      {
+        name: "rollCount",
+        label: "عدد الأتواب (اختياري)",
+        type: "number",
+        min: 0,
+        max: 100,
+        step: 1,
+        value: rolls.length || ""
+      },
+      {
+        name: "rollColors",
+        label: "رقم التوب واللون",
+        type: "textarea",
+        rows: 4,
+        value: requestRollLines(rolls),
+        placeholder: "سطر لكل توب، مثال:\n1 | كحلي\n2 | أسود",
+        helpText: "أدخل سطراً لكل توب بالصيغة: رقم التوب | اسم اللون. يمكن تركه فارغاً."
+      },
+      {
+        name: "operationalNotes",
+        label: "ملاحظات تشغيلية (اختياري)",
+        type: "textarea",
+        rows: 3,
+        maxLength: 2000,
+        value: request?.operational_notes || ""
+      },
+      ...(request ? [{
+        name: "modelImage",
+        label: `صورة الموديل${currentImageUrl ? " · اتركها دون اختيار للاحتفاظ بالصورة الحالية" : ""}`,
+        type: "file",
+        accept: "image/*",
+        helpText: "اختيار صورة جديدة يبدّل الصورة الحالية للموديل."
+      }] : [])
+    ]
+  });
+  if (!result) return null;
+  const rawCount = result.rollCount.trim();
+  const count = rawCount ? Number(rawCount) : 0;
+  const lines = result.rollColors.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if ((rawCount && (!Number.isInteger(count) || count < 0 || count > 100)) || lines.length > 100 || (count > 0 && lines.length > count)) {
+    window.factoryUI.toast("تحقق من عدد الأتواب؛ يجب ألا يزيد عن 100 وألا يقل عن عدد الأسطر المدخلة.", "error");
+    return null;
+  }
+  const rollTotal = count || lines.length;
+  const rollDetails = Array.from({ length: rollTotal }, (_, index) => {
+    const parts = (lines[index] || "").split("|").map((part) => part.trim());
+    const explicitNumber = parts.length > 1 && /^\d+$/.test(parts[0]);
+    return {
+      roll_number: explicitNumber ? Number(parts[0]) : index + 1,
+      color_name: parts.length > 1 ? parts.slice(1).join(" | ").slice(0, 80) : (parts[0] || "").slice(0, 80)
+    };
+  });
+  return {
+    fabricId: result.fabricId || null,
+    rollDetails,
+    operationalNotes: result.operationalNotes.trim(),
+    modelImage: result.modelImage instanceof File ? result.modelImage : null
+  };
 }
 
 function cuttingHistoryView(data, allowRepeat = false, sewingView = false, canManageRecords = false) {
@@ -3411,10 +3537,15 @@ function dispatchedCuttingRequestsView(data, canManageRecords = false) {
     const sourceOrder = data.models.find((entry) => entry.id === request.source_order_id);
     const modelName = catalogModel?.model_name || sourceOrder?.name || "موديل غير متاح";
     const modelCode = catalogModel?.factory_model_code || sourceOrder?.factoryModelCode || "—";
-    const modelImage = catalogModel?.model_image_url || sourceOrder?.modelImageUrl || DEFAULT_MODEL_IMAGE_URL;
+    const modelImage = catalogModel?.model_image_url || sourceOrder?.modelImageUrl || "";
     const client = data.clients.find((entry) => entry.id === request.customer_id)?.name
       || sourceOrder?.client
       || "—";
+    const fabricName = data.fabrics.find((entry) => entry.id === request.fabric_id)?.name || "—";
+    const rollDetails = Array.isArray(request.roll_details) ? request.roll_details : [];
+    const rollSummary = rollDetails.length
+      ? rollDetails.map((roll) => `توب ${roll.roll_number || "—"}${roll.color_name ? ` · ${roll.color_name}` : ""}`).join("، ")
+      : "—";
     const statusLabel = request.archived_at
       ? "مؤرشف"
       : ({
@@ -3423,17 +3554,24 @@ function dispatchedCuttingRequestsView(data, canManageRecords = false) {
       cancelled: "ملغي"
     }[request.status] || request.status || "غير معروف");
     return `<tr>
-      <td><span class="register-model-cell">${modelImageMarkup(modelImage, `صورة الموديل ${modelName}`, "register-thumbnail")}<span>${escapeHtml(modelName)}</span></span></td>
+      <td><span class="register-model-cell">${modelImage
+        ? modelImageMarkup(modelImage, `صورة الموديل ${modelName}`, "register-thumbnail")
+        : canManageRecords && !request.archived_at && request.status !== "cancelled"
+          ? `<button class="model-image-trigger register-thumbnail-trigger catalog-image-placeholder" type="button" data-edit-cutting-request="${escapeHtml(request.id)}" aria-label="إضافة صورة للموديل ${escapeHtml(modelName)}"><img class="model-thumbnail register-thumbnail" src="${DEFAULT_MODEL_IMAGE_URL}" alt="صورة افتراضية للموديل ${escapeHtml(modelName)}"></button>`
+          : modelImageMarkup(DEFAULT_MODEL_IMAGE_URL, `صورة الموديل ${modelName}`, "register-thumbnail")}<span>${escapeHtml(modelName)}</span></span></td>
       <td>${escapeHtml(modelCode)}</td>
       <td>${escapeHtml(client)}</td>
+      <td>${escapeHtml(fabricName)}</td>
+      <td>${escapeHtml(rollSummary)}</td>
+      <td>${escapeHtml(request.operational_notes || "—")}</td>
       <td>${formatDateTime(request.created_at)}</td>
       <td>${statusTag(statusLabel)}</td>
       <td>${request.submitted_at ? formatDateTime(request.submitted_at) : "—"}</td>
-      ${canManageRecords ? `<td><button class="row-action order-delete-action" type="button" data-delete-cutting-request="${escapeHtml(request.id)}"${request.archived_at ? " disabled" : ""}>${request.archived_at ? "محفوظ بالأرشيف" : "حذف / أرشفة"}</button></td>` : ""}
+      ${canManageRecords ? `<td><div class="form-actions"><button class="row-action" type="button" data-edit-cutting-request="${escapeHtml(request.id)}"${request.archived_at || request.status === "cancelled" ? " disabled" : ""}>تعديل</button><button class="row-action order-delete-action" type="button" data-delete-cutting-request="${escapeHtml(request.id)}"${request.archived_at ? " disabled" : ""}>${request.archived_at ? "محفوظ بالأرشيف" : "حذف / أرشفة"}</button></div></td>` : ""}
     </tr>`;
   });
   return panel("الموديلات المرسلة للقص", rows.length
-    ? table(["الموديل","كود النظام","العميل","تاريخ الطلب","حالة الطلب","تاريخ إرسال القصة", ...(canManageRecords ? ["الإجراء"] : [])], rows)
+    ? table(["الموديل","كود النظام","العميل","الخامة","الأتواب والألوان","ملاحظات تشغيلية","تاريخ الطلب","حالة الطلب","تاريخ إرسال القصة", ...(canManageRecords ? ["الإجراء"] : [])], rows)
     : '<div class="empty-state">لا توجد موديلات مرسلة إلى مخزن القص حتى الآن.</div>');
 }
 
@@ -3488,7 +3626,7 @@ function cuttingSubmissionFormMarkup(data) {
       ${cuttingColorPlyMarkup(null, "", 0, "new-cutting")}
       <p class="cutting-calculated-total">إجمالي الراقات: <strong data-cutting-plys>0</strong> · إجمالي قطع القصة: <strong data-cutting-total>0</strong> قطعة</p>
       <div class="cutting-breakdown" data-cutting-breakdown></div>
-      <label class="field"><span>صورة الموديل (اختياري)</span><input type="file" name="modelImage" accept="image/*"><small>يمكن رفع صيغ الصور الشائعة حتى 25 ميجابايت.</small></label>
+      <label class="field"><span>صورة الموديل (اختياري)</span>${imagePickerMarkup("modelImage", "إضافة صورة")}<small>يمكن رفع صيغ الصور الشائعة حتى 25 ميجابايت.</small></label>
       <label class="field"><span>ملاحظات فنية للفرشة والقص</span><textarea name="technicalNotes" rows="3"></textarea></label>
       <div class="form-actions"><button type="submit" class="button button-primary">${data.isAdmin ? "حفظ القصة" : "إرسال القصة للإدارة"}</button></div>
     </form>`;
@@ -3510,9 +3648,12 @@ function cuttingRequestsView(data) {
         client: data.clients.find((client) => client.id === catalogModel.customer_id)?.name || ""
       }
       : sourceOrder;
+    const fabricName = data.fabrics.find((fabric) => fabric.id === request.fabric_id)?.name || "";
+    const rolls = cuttingRequestRollDetails(request);
     return `<article class="cutting-story-card production-compact-card">
       <header class="production-compact-heading">${modelImageMarkup(model?.modelImageUrls || model?.modelImageUrl)}<h3>${escapeHtml(model?.name || "موديل غير متاح")}</h3>${statusTag("بانتظار استلام القص")}</header>
       <div class="production-compact-facts"><div><span>كود الموديل بالنظام</span><strong>${escapeHtml(model?.factoryModelCode || "—")}</strong></div><div><span>العميل</span><strong>${escapeHtml(model?.client || "—")}</strong></div></div>
+      ${fabricName || rolls.length || request.operational_notes ? `<div class="cutting-request-details">${fabricName ? `<p><strong>الخامة:</strong> ${escapeHtml(fabricName)}</p>` : ""}${rolls.length ? `<p><strong>الأتواب والألوان:</strong> ${escapeHtml(rolls.map((roll) => `توب ${roll.roll_number || "—"}${roll.color_name ? ` · ${roll.color_name}` : ""}`).join("، "))}</p>` : ""}${request.operational_notes ? `<p><strong>ملاحظات تشغيلية:</strong> ${escapeHtml(request.operational_notes)}</p>` : ""}</div>` : ""}
       <div class="form-actions"><button class="button button-primary" type="button" data-open-cutting-request="${escapeHtml(request.id)}"${model ? "" : " disabled"}>استلام وبدء بيانات القصة</button></div>
     </article>`;
   }).join("");
@@ -3868,7 +4009,7 @@ function workerProductionSubmissionForm(parentSubmission = null) {
     ${sizePickerMarkup(initialSizeData, `${prefix}-sizes`, false)}
     <div class="field worker-production-allocation"><label>الأعداد المسلّمة لكل لون ومقاس</label><small>أدخل عدد القطع في كل خانة؛ يُجمع الإجمالي تلقائياً من تفاصيل التوزيع.</small><div data-worker-production-allocation><p class="muted">اختر لوناً ومقاساً واحداً على الأقل لإدخال عدد كل لون ومقاس.</p></div></div>
     <label class="field"><span>مجموع الأعداد المفصلة (محسوب تلقائياً)</span><input name="quantity" type="number" min="1" step="1" value="0" readonly></label>
-    <label class="field wide"><span>صورة الموديل (رفع صورة أو التقاط بالكاميرا)</span><input name="modelImage" type="file" accept="image/*" capture="environment" required><small>إجباري · يمكن رفع صيغ الصور الشائعة حتى 25 ميجابايت.</small></label>
+    <label class="field wide"><span>صورة الموديل (رفع صورة أو التقاط بالكاميرا)</span>${imagePickerMarkup("modelImage", "رفع أو التقاط صورة", { capture: "environment", required: true, helpText: "إجباري · يمكن رفع صيغ الصور الشائعة حتى 25 ميجابايت." })}</label>
     <div class="form-actions"><button class="button button-primary" type="submit">${parentSubmission ? "إرسال التسليم التابع للإدارة" : "إرسال للإدارة للمراجعة"}</button></div>
   </form>`;
 }
@@ -4106,7 +4247,7 @@ function clientView(data, session) {
     <label class="field"><span>اسم الموديل (اختياري)</span><input name="modelName" maxlength="160"></label>
     <label class="field"><span>كود/رقم الموديل للعميل (اختياري)</span><input name="modelNumber" maxlength="100"></label>
     <label class="field"><span>الأعداد (اختياري)</span><input name="quantity" type="number" step="1" inputmode="numeric"></label>
-    <label class="field"><span>صورة الموديل (اختياري)</span><input name="modelImage" type="file" accept="image/*"><small>يمكنك الإرسال دون صورة. الحد الأقصى للصورة 25 ميجابايت.</small><span data-client-model-image-preview></span></label>
+    <label class="field"><span>صورة الموديل (اختياري)</span>${imagePickerMarkup("modelImage", "إضافة صورة")}<small>يمكنك الإرسال دون صورة. الحد الأقصى للصورة 25 ميجابايت.</small><span data-client-model-image-preview></span></label>
     <label class="field"><span>ملاحظات (اختياري)</span><textarea name="notes" rows="3" maxlength="2000"></textarea></label>
     <div class="form-actions"><button class="button button-primary" type="submit">إرسال للإدارة</button></div>
   </form>`, "كل الحقول اختيارية؛ الطلب منفصل عن أوامر الإنتاج والمخزون والحسابات حتى مراجعته من الإدارة.")}
@@ -5986,6 +6127,7 @@ function developerFooterMarkup() {
 }
 
 function render(session, data, accounts) {
+  bindImagePickerControls();
   data.pendingAccounts = accounts;
   initializeRealtimeNotifications(session);
   document.querySelectorAll("body > #order-modal").forEach((modal) => modal.remove());
@@ -6845,19 +6987,109 @@ function bindCuttingActions(session) {
     button.disabled = true;
     try {
       const catalogRequest = button.dataset.requestCutKind === "catalog";
+      const model = catalogRequest
+        ? dashboardData.modelCatalog.find((entry) => entry.id === button.dataset.requestCut)
+        : dashboardData.models.find((entry) => entry.id === button.dataset.requestCut);
+      if (!model) throw new Error("تعذر العثور على الموديل المحدد.");
+      const details = await cuttingRequestDetailsDialog(model.customer_id || model.customerId);
+      if (!details) {
+        button.disabled = false;
+        return;
+      }
       const { error } = await supabaseClient.rpc(
         catalogRequest ? "admin_create_factory_model_cutting_request" : "admin_create_factory_cutting_request",
-        catalogRequest
-          ? { requested_catalog_model_id: button.dataset.requestCut }
-          : { requested_source_order_id: button.dataset.requestCut }
+        {
+          ...(catalogRequest
+            ? { requested_catalog_model_id: button.dataset.requestCut }
+            : { requested_source_order_id: button.dataset.requestCut }),
+          requested_fabric_id: details.fabricId,
+          requested_roll_details: details.rollDetails,
+          requested_operational_notes: details.operationalNotes
+        }
       );
-      if (error?.code === "PGRST202") throw new Error("دالة طلب القصة الجديدة غير موجودة. شغّل أحدث نسخة من supabase/schema.sql في SQL Editor.");
+      if (error?.code === "PGRST202") throw new Error("دالة طلب القص بالتفاصيل غير موجودة. شغّل أحدث نسخة من supabase/schema.sql في SQL Editor.");
       if (error) throw error;
       await refreshDashboard(session);
       window.factoryUI.toast("تم إرسال طلب القصة إلى مخزن القص مع بيانات الموديل وكوده الثابت.");
     } catch (error) {
       button.disabled = false;
       reportDashboardFailure(session, "تعذر إرسال طلب القصة إلى مخزن القص", error);
+    }
+  }));
+  document.querySelectorAll("[data-edit-cutting-request]").forEach((button) => button.addEventListener("click", async () => {
+    if (session.role !== "admin") return;
+    const request = dashboardData.cuttingRequests.find((entry) => entry.id === button.dataset.editCuttingRequest);
+    if (!request || request.archived_at || request.status === "cancelled") {
+      window.factoryUI.toast("طلب القص غير متاح للتعديل.", "error");
+      return;
+    }
+    const catalogModel = dashboardData.modelCatalog.find((entry) => entry.id === request.catalog_model_id);
+    const sourceModel = dashboardData.models.find((entry) => entry.id === request.source_order_id);
+    const imageOwnerId = catalogModel?.id || sourceModel?.id;
+    if (!imageOwnerId) {
+      window.factoryUI.toast("تعذر العثور على الموديل المرتبط بالطلب.", "error");
+      return;
+    }
+    button.disabled = true;
+    try {
+      const currentImageUrl = catalogModel?.model_image_url || sourceModel?.modelImageUrl || "";
+      const details = await cuttingRequestDetailsDialog(request.customer_id, request, currentImageUrl);
+      if (!details) {
+        button.disabled = false;
+        return;
+      }
+      const modelImageUrl = details.modelImage
+        ? await uploadModelImage(imageOwnerId, details.modelImage)
+        : "";
+      const { error } = await supabaseClient.rpc("admin_update_factory_cutting_request", {
+        requested_request_id: request.id,
+        requested_fabric_id: details.fabricId,
+        requested_roll_details: details.rollDetails,
+        requested_operational_notes: details.operationalNotes,
+        requested_model_image_url: modelImageUrl
+      });
+      if (error?.code === "PGRST202") throw new Error("دالة تعديل طلب القص غير موجودة. شغّل أحدث نسخة من supabase/schema.sql.");
+      if (error) throw error;
+      await refreshDashboard(session);
+      window.factoryUI.toast("تم حفظ تعديلات طلب القص.");
+    } catch (error) {
+      button.disabled = false;
+      reportDashboardFailure(session, "تعذر تعديل طلب القص", error);
+    }
+  }));
+  document.querySelectorAll("[data-catalog-image-trigger]").forEach((button) => button.addEventListener("click", () => {
+    [...document.querySelectorAll("[data-catalog-image-input]")]
+      .find((input) => input.dataset.catalogImageInput === button.dataset.catalogImageTrigger)
+      ?.click();
+  }));
+  document.querySelectorAll("[data-catalog-image-input]").forEach((input) => input.addEventListener("change", async () => {
+    if (session.role !== "admin" || !input.files?.[0]) return;
+    const model = dashboardData.modelCatalog.find((entry) => entry.id === input.dataset.catalogImageInput)
+      || dashboardData.models.find((entry) => entry.id === input.dataset.catalogImageInput);
+    if (!model) {
+      window.factoryUI.toast("تعذر العثور على الموديل لإضافة الصورة.", "error");
+      return;
+    }
+    const file = input.files[0];
+    const trigger = [...document.querySelectorAll("[data-catalog-image-trigger]")]
+      .find((entry) => entry.dataset.catalogImageTrigger === model.id)
+      || input.closest(".catalog-image-control")?.querySelector(".catalog-image-change");
+    if (trigger) trigger.disabled = true;
+    try {
+      const imageUrl = await uploadModelImage(model.id, file);
+      const { error } = await supabaseClient.rpc("admin_update_factory_model_image", {
+        requested_model_id: model.id,
+        requested_model_image_url: imageUrl
+      });
+      if (error?.code === "PGRST202") throw new Error("دالة تحديث صورة الموديل غير موجودة. شغّل أحدث نسخة من supabase/schema.sql.");
+      if (error) throw error;
+      await refreshDashboard(session);
+      window.factoryUI.toast("تم حفظ صورة الموديل.");
+    } catch (error) {
+      if (trigger) trigger.disabled = false;
+      reportDashboardFailure(session, "تعذر حفظ صورة الموديل", error);
+    } finally {
+      input.value = "";
     }
   }));
   document.querySelectorAll("[data-delete-factory-model]").forEach((button) => button.addEventListener("click", async () => {
@@ -6961,6 +7193,19 @@ function bindCuttingActions(session) {
     form.elements.repeatModelId.value = `${catalogModel ? "catalog" : "order"}:${sourceModel.id}`;
     form.elements.repeatModelId.dispatchEvent(new Event("change", { bubbles: true }));
     form.elements.cuttingRequestId.value = request.id;
+    if (request.fabric_id && form.elements.fabricId) {
+      form.elements.fabricId.value = request.fabric_id;
+      form.elements.fabricId.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    const requestRolls = cuttingRequestRollDetails(request);
+    if (form.elements.boltCount && requestRolls.length) form.elements.boltCount.value = String(requestRolls.length);
+    const requestNotes = [
+      request.operational_notes,
+      requestRolls.length
+        ? `أتواب الطلب: ${requestRolls.map((roll) => `توب ${roll.roll_number || "—"}${roll.color_name ? ` (${roll.color_name})` : ""}`).join("، ")}`
+        : ""
+    ].filter(Boolean).join("\n");
+    if (requestNotes && form.elements.technicalNotes) form.elements.technicalNotes.value = requestNotes;
     form.scrollIntoView({ behavior: "smooth", block: "start" });
     window.location.hash = "#new-cutting";
   }));

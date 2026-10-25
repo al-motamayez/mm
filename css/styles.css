@@ -392,6 +392,17 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .register-thumbnail-placeholder { display: grid; width: 42px; height: 42px; flex: 0 0 42px; place-items: center; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); background: #f5f7f4; }
 .model-thumbnail { display: block; width: 68px; height: 68px; border: 1px solid var(--line); border-radius: 9px; background: #f5f7f4; object-fit: contain; }
 .model-image-field { grid-column: 1 / -1; }
+.image-picker-control { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 7px; }
+.image-picker-control .image-picker-input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; clip-path: inset(50%); }
+.image-picker-button { display: inline-flex; align-items: center; gap: 8px; min-height: 40px; }
+.image-picker-button svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
+.image-picker-filename { color: var(--muted); font-size: .86rem; overflow-wrap: anywhere; }
+.catalog-image-control { display: grid; justify-items: center; gap: 5px; }
+.catalog-image-placeholder { position: relative; cursor: pointer; }
+.catalog-image-placeholder::after { position: absolute; inset: auto 3px 3px; padding: 3px 5px; border-radius: 5px; color: #fff; background: #173d31d9; content: "إضافة صورة"; font-size: .68rem; }
+.catalog-image-change { padding: 3px 7px; }
+.cutting-request-details { margin-top: 10px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 9px; background: #fbfcfa; }
+.cutting-request-details p { margin: 4px 0; }
 .model-image-field [data-model-image-preview] { margin-top: 8px; }
 .model-image-preview { display: block; width: min(100%, 280px); max-height: 280px; margin: 10px 0; border: 1px solid var(--line); border-radius: 9px; background: #f5f7f4; object-fit: contain; }
 .model-image-field [data-model-image-preview] .model-image-trigger { width: min(100%, 280px); height: auto; aspect-ratio: 1; }
@@ -874,6 +885,11 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .confirm-title { margin: 0; color: #1c302d; font-size: 20px; }
 .confirm-message { margin: 12px 0 24px; color: #68756f; font-size: 14px; line-height: 1.9; }
 .confirm-actions { display: flex; justify-content: flex-start; gap: 10px; }
+.form-dialog { width: min(600px, 100%); max-height: min(90vh, 820px); overflow-y: auto; }
+.form-dialog-fields { display: grid; gap: 12px; }
+.form-dialog-fields .field { display: grid; gap: 6px; }
+.form-dialog-fields input:not([type="file"]), .form-dialog-fields select, .form-dialog-fields textarea { width: 100%; min-height: 42px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); background: #fff; font: inherit; }
+.form-dialog-fields textarea { resize: vertical; }
 .confirm-cancel { border: 1px solid #e0e7e2; color: #52615a; background: #fff; }
 .confirm-danger { color: #fff; background: #ad4139; }
 .confirm-danger:hover { background: #92362f; }

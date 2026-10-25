@@ -2959,6 +2959,9 @@ create table if not exists public.factory_cutting_requests (
   requested_by uuid references auth.users (id) on delete set null,
   status text not null default 'pending' check (status in ('pending', 'submitted', 'cancelled')),
   completed_story_id uuid references public.factory_cutting_stories (id) on delete set null,
+  fabric_id uuid references public.factory_fabrics (id) on delete restrict,
+  roll_details jsonb not null default '[]'::jsonb check (jsonb_typeof(roll_details) = 'array'),
+  operational_notes text not null default '',
   created_at timestamptz not null default now(),
   submitted_at timestamptz
 );
@@ -2972,7 +2975,10 @@ create index if not exists factory_cutting_requests_status_created_idx
   on public.factory_cutting_requests (status, created_at desc);
 
 alter table public.factory_cutting_requests
-  add column if not exists completed_story_id uuid references public.factory_cutting_stories (id) on delete set null;
+  add column if not exists completed_story_id uuid references public.factory_cutting_stories (id) on delete set null,
+  add column if not exists fabric_id uuid references public.factory_fabrics (id) on delete restrict,
+  add column if not exists roll_details jsonb not null default '[]'::jsonb,
+  add column if not exists operational_notes text not null default '';
 alter table public.factory_cutting_stories
   add column if not exists cutting_request_id uuid references public.factory_cutting_requests (id) on delete set null,
   add column if not exists catalog_model_id uuid references public.factory_model_catalog (id) on delete set null,
@@ -2991,8 +2997,12 @@ from public.orders as factory_order
 where story.source_order_id = factory_order.id
   and factory_order.factory_model_code is not null;
 
+drop function if exists public.admin_create_factory_cutting_request(uuid);
 create or replace function public.admin_create_factory_cutting_request(
-  requested_source_order_id uuid
+  requested_source_order_id uuid,
+  requested_fabric_id uuid,
+  requested_roll_details jsonb,
+  requested_operational_notes text
 )
 returns uuid
 language plpgsql
@@ -3006,8 +3016,11 @@ begin
   if not public.is_active_factory_admin() then
     raise exception 'Only active admins can create cutting requests.';
   end if;
-  if requested_source_order_id is null then
-    raise exception 'Choose a registered model for the cutting request.';
+  if requested_source_order_id is null
+     or jsonb_typeof(coalesce(requested_roll_details, '[]'::jsonb)) <> 'array'
+     or jsonb_array_length(coalesce(requested_roll_details, '[]'::jsonb)) > 100
+     or length(coalesce(requested_operational_notes, '')) > 2000 then
+    raise exception 'Enter valid optional cutting request details.';
   end if;
 
   select * into source_model
@@ -3021,19 +3034,31 @@ begin
   if not found then
     raise exception 'The registered model or its system code could not be found.';
   end if;
+  if requested_fabric_id is not null and not exists (
+    select 1 from public.factory_fabrics
+    where id = requested_fabric_id
+      and (customer_id is null or customer_id = source_model.customer_id)
+  ) then
+    raise exception 'The selected fabric does not belong to this customer.';
+  end if;
 
   insert into public.factory_cutting_requests (
-    source_order_id, customer_id, requested_by
+    source_order_id, customer_id, requested_by, fabric_id, roll_details, operational_notes
   ) values (
-    source_model.id, source_model.customer_id, auth.uid()
+    source_model.id, source_model.customer_id, auth.uid(), requested_fabric_id,
+    coalesce(requested_roll_details, '[]'::jsonb), coalesce(trim(requested_operational_notes), '')
   ) returning id into request_id;
 
   return request_id;
 end;
 $$;
 
+drop function if exists public.admin_create_factory_model_cutting_request(uuid);
 create or replace function public.admin_create_factory_model_cutting_request(
-  requested_catalog_model_id uuid
+  requested_catalog_model_id uuid,
+  requested_fabric_id uuid,
+  requested_roll_details jsonb,
+  requested_operational_notes text
 )
 returns uuid
 language plpgsql
@@ -3047,8 +3072,11 @@ begin
   if not public.is_active_factory_admin() then
     raise exception 'Only active admins can request a new model cut.';
   end if;
-  if requested_catalog_model_id is null then
-    raise exception 'Choose a registered catalog model.';
+  if requested_catalog_model_id is null
+     or jsonb_typeof(coalesce(requested_roll_details, '[]'::jsonb)) <> 'array'
+     or jsonb_array_length(coalesce(requested_roll_details, '[]'::jsonb)) > 100
+     or length(coalesce(requested_operational_notes, '')) > 2000 then
+    raise exception 'Enter valid optional cutting request details.';
   end if;
   select * into catalog_model
   from public.factory_model_catalog
@@ -3058,13 +3086,125 @@ begin
   if not found then
     raise exception 'The catalog model no longer exists.';
   end if;
+  if requested_fabric_id is not null and not exists (
+    select 1 from public.factory_fabrics
+    where id = requested_fabric_id
+      and (customer_id is null or customer_id = catalog_model.customer_id)
+  ) then
+    raise exception 'The selected fabric does not belong to this customer.';
+  end if;
 
   insert into public.factory_cutting_requests (
-    catalog_model_id, customer_id, requested_by
+    catalog_model_id, customer_id, requested_by, fabric_id, roll_details, operational_notes
   ) values (
-    catalog_model.id, catalog_model.customer_id, auth.uid()
+    catalog_model.id, catalog_model.customer_id, auth.uid(), requested_fabric_id,
+    coalesce(requested_roll_details, '[]'::jsonb), coalesce(trim(requested_operational_notes), '')
   ) returning id into request_id;
   return request_id;
+end;
+$$;
+
+create or replace function public.admin_update_factory_cutting_request(
+  requested_request_id uuid,
+  requested_fabric_id uuid,
+  requested_roll_details jsonb,
+  requested_operational_notes text,
+  requested_model_image_url text
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  cutting_request public.factory_cutting_requests%rowtype;
+begin
+  if not public.is_active_factory_admin() then
+    raise exception 'Only active admins can update cutting requests.';
+  end if;
+  if requested_request_id is null
+     or jsonb_typeof(coalesce(requested_roll_details, '[]'::jsonb)) <> 'array'
+     or jsonb_array_length(coalesce(requested_roll_details, '[]'::jsonb)) > 100
+     or length(coalesce(requested_operational_notes, '')) > 2000
+     or length(coalesce(requested_model_image_url, '')) > 2000 then
+    raise exception 'Enter valid cutting request details.';
+  end if;
+
+  select * into cutting_request
+  from public.factory_cutting_requests
+  where id = requested_request_id
+    and archived_at is null
+    and status <> 'cancelled'
+  for update;
+  if not found then
+    raise exception 'The active cutting request no longer exists.';
+  end if;
+  if requested_fabric_id is not null and not exists (
+    select 1 from public.factory_fabrics
+    where id = requested_fabric_id
+      and (customer_id is null or customer_id = cutting_request.customer_id)
+  ) then
+    raise exception 'The selected fabric does not belong to this customer.';
+  end if;
+
+  update public.factory_cutting_requests
+  set fabric_id = requested_fabric_id,
+      roll_details = coalesce(requested_roll_details, '[]'::jsonb),
+      operational_notes = coalesce(trim(requested_operational_notes), '')
+  where id = cutting_request.id;
+
+  if nullif(trim(coalesce(requested_model_image_url, '')), '') is not null then
+    if cutting_request.catalog_model_id is not null then
+      update public.factory_model_catalog
+      set model_image_url = trim(requested_model_image_url)
+      where id = cutting_request.catalog_model_id;
+    else
+      update public.orders
+      set model_image_url = trim(requested_model_image_url)
+      where id = cutting_request.source_order_id;
+    end if;
+  end if;
+end;
+$$;
+
+create or replace function public.admin_update_factory_model_image(
+  requested_model_id uuid,
+  requested_model_image_url text
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  model_updated boolean := false;
+begin
+  if not public.is_active_factory_admin() then
+    raise exception 'Only active admins can update model images.';
+  end if;
+  if requested_model_id is null
+     or length(trim(coalesce(requested_model_image_url, ''))) not between 1 and 2000 then
+    raise exception 'A valid model and image URL are required.';
+  end if;
+
+  update public.factory_model_catalog
+  set model_image_url = trim(requested_model_image_url)
+  where id = requested_model_id
+    and archived_at is null;
+  model_updated := found;
+  if not model_updated then
+    update public.orders
+    set model_image_url = trim(requested_model_image_url)
+    where id = requested_model_id
+      and factory_model_catalog_id is null
+      and parent_order_id is null
+      and archived_at is null
+      and workflow_archived_at is null;
+    model_updated := found;
+  end if;
+  if not model_updated then
+    raise exception 'The active catalog model no longer exists.';
+  end if;
 end;
 $$;
 
@@ -7121,10 +7261,14 @@ grant execute on function public.complete_factory_handover(uuid, integer, text) 
 revoke all on function public.admin_update_factory_delivery_quantity(uuid, uuid, integer) from public, anon, authenticated;
 grant execute on function public.admin_update_factory_delivery_quantity(uuid, uuid, integer) to authenticated;
 revoke all on function public.calculate_factory_cutting_breakdown(jsonb, jsonb) from public, anon, authenticated;
-revoke all on function public.admin_create_factory_cutting_request(uuid) from public, anon, authenticated;
-grant execute on function public.admin_create_factory_cutting_request(uuid) to authenticated;
-revoke all on function public.admin_create_factory_model_cutting_request(uuid) from public, anon, authenticated;
-grant execute on function public.admin_create_factory_model_cutting_request(uuid) to authenticated;
+revoke all on function public.admin_create_factory_cutting_request(uuid, uuid, jsonb, text) from public, anon, authenticated;
+grant execute on function public.admin_create_factory_cutting_request(uuid, uuid, jsonb, text) to authenticated;
+revoke all on function public.admin_create_factory_model_cutting_request(uuid, uuid, jsonb, text) from public, anon, authenticated;
+grant execute on function public.admin_create_factory_model_cutting_request(uuid, uuid, jsonb, text) to authenticated;
+revoke all on function public.admin_update_factory_cutting_request(uuid, uuid, jsonb, text, text) from public, anon, authenticated;
+grant execute on function public.admin_update_factory_cutting_request(uuid, uuid, jsonb, text, text) to authenticated;
+revoke all on function public.admin_update_factory_model_image(uuid, text) from public, anon, authenticated;
+grant execute on function public.admin_update_factory_model_image(uuid, text) to authenticated;
 revoke all on function public.admin_create_factory_model(uuid, uuid, text, text, text) from public, anon, authenticated;
 grant execute on function public.admin_create_factory_model(uuid, uuid, text, text, text) to authenticated;
 revoke all on function public.next_factory_model_serial(uuid) from public, anon, authenticated;

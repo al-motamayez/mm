@@ -98,11 +98,135 @@
     });
   }
 
+  function formDialog(options = {}) {
+    if (activeDialog) activeDialog.finish(null);
+    const {
+      title = "تعديل البيانات",
+      fields = [],
+      submitLabel = "حفظ",
+      cancelLabel = "إلغاء"
+    } = options;
+    const backdrop = document.createElement("div");
+    backdrop.className = "confirm-backdrop";
+    backdrop.style.zIndex = String(1400 + document.querySelectorAll(".confirm-backdrop").length);
+    const dialog = document.createElement("section");
+    dialog.className = "confirm-dialog form-dialog";
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-modal", "true");
+    const heading = document.createElement("h2");
+    heading.className = "confirm-title";
+    heading.textContent = title;
+    dialog.append(heading);
+    const form = document.createElement("form");
+    form.className = "form-dialog-fields";
+    for (const field of fields) {
+      const label = document.createElement("label");
+      label.className = "field";
+      const caption = document.createElement("span");
+      caption.textContent = field.label;
+      label.append(caption);
+      let control;
+      if (field.type === "select") {
+        control = document.createElement("select");
+        for (const option of field.options || []) {
+          const optionElement = document.createElement("option");
+          optionElement.value = option.value;
+          optionElement.textContent = option.label;
+          control.append(optionElement);
+        }
+      } else if (field.type === "textarea") {
+        control = document.createElement("textarea");
+        control.rows = field.rows || 4;
+      } else {
+        control = document.createElement("input");
+        control.type = field.type || "text";
+        if (field.type === "file") {
+          control.accept = field.accept || "image/*";
+          control.hidden = true;
+        }
+        if (field.min !== undefined) control.min = String(field.min);
+        if (field.max !== undefined) control.max = String(field.max);
+        if (field.step !== undefined) control.step = String(field.step);
+      }
+      control.name = field.name;
+      control.required = Boolean(field.required);
+      control.value = field.type === "file" ? "" : String(field.value ?? "");
+      if (field.maxLength !== undefined) control.maxLength = field.maxLength;
+      if (field.placeholder) control.placeholder = field.placeholder;
+      label.append(control);
+      if (field.type === "file") {
+        const picker = document.createElement("button");
+        picker.type = "button";
+        picker.className = "button image-picker-button";
+        picker.textContent = "📷 اختيار أو تبديل الصورة";
+        const filename = document.createElement("small");
+        filename.textContent = "لم يتم اختيار صورة جديدة";
+        picker.addEventListener("click", () => control.click());
+        control.addEventListener("change", () => {
+          filename.textContent = control.files?.[0]?.name || "لم يتم اختيار صورة جديدة";
+        });
+        label.append(picker, filename);
+      }
+      if (field.helpText) {
+        const help = document.createElement("small");
+        help.textContent = field.helpText;
+        label.append(help);
+      }
+      form.append(label);
+    }
+    const actions = document.createElement("div");
+    actions.className = "form-actions";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "row-action";
+    cancel.textContent = cancelLabel;
+    const submit = document.createElement("button");
+    submit.type = "submit";
+    submit.className = "button button-primary";
+    submit.textContent = submitLabel;
+    actions.append(submit, cancel);
+    form.append(actions);
+    dialog.append(form);
+    backdrop.append(dialog);
+    document.body.append(backdrop);
+
+    return new Promise((resolve) => {
+      const previousFocus = document.activeElement;
+      const finish = (result) => {
+        if (activeDialog?.backdrop === backdrop) activeDialog = null;
+        backdrop.remove();
+        if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus();
+        resolve(result);
+      };
+      activeDialog = { backdrop, finish };
+      cancel.addEventListener("click", () => finish(null));
+      backdrop.addEventListener("click", (event) => {
+        if (event.target === backdrop) finish(null);
+      });
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        if (!form.reportValidity()) return;
+        const values = Object.fromEntries([...new FormData(form).entries()].map(([name, value]) => [
+          name,
+          value instanceof File && !value.name ? null : value
+        ]));
+        finish(values);
+      });
+      dialog.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          finish(null);
+        }
+      });
+      (form.elements[0] || submit).focus();
+    });
+  }
+
   window.addEventListener("unhandledrejection", (event) => {
     const error = event.reason;
     console.error("An unhandled application operation failed.", error);
     toast("تعذر إتمام العملية الآن. حاول مرة أخرى لاحقًا.", "error");
   });
 
-  window.factoryUI = { toast, confirmAction };
+  window.factoryUI = { toast, confirmAction, formDialog };
 })();
