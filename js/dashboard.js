@@ -957,9 +957,18 @@ function factoryOrderDeliveredStatus(status) {
 }
 
 function factoryOrderIsDelivered(order) {
-  return factoryOrderDeliveredStatus(
-    order.ledgerStatus || order.status || order.storedStatus || order.deliveryStatus || order.delivery_status
+  const status = order.status || order.ledgerStatus || order.storedStatus || order.deliveryStatus || order.delivery_status;
+  if (!factoryOrderDeliveredStatus(status)) return false;
+  if (["متاح للخياطة", "في انتظار الخياطة", "قيد الخياطة", "قيد التنفيذ"]
+    .includes(canonicalFactoryOrderStatus(order.sewingStageStatus))) return false;
+
+  const totalPieces = Number(order.quantity ?? order.total_pieces ?? 0);
+  const deliveries = order.deliveryHistory || order.deliveries || [];
+  const deliveredPieces = deliveries.reduce(
+    (total, delivery) => total + Number(delivery.quantity || 0),
+    0
   );
+  return totalPieces > 0 && deliveries.length > 0 && deliveredPieces >= totalPieces;
 }
 
 function factoryOrderHasReachedDelivery(order) {
