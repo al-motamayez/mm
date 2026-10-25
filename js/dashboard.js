@@ -657,9 +657,10 @@ async function readDashboardData(session) {
       quantityDifference: deliveredPieces - originalQuantity,
       pricePerPiece: Number(order.price_per_piece || 0),
       totalAmount: Number(order.total_amount || 0),
-      expectedAmount: ["تم التسليم", "تم التسليم بالكامل", "تم التسليم والإغلاق"].includes(order.status)
+      expectedAmount: LOCKED_FACTORY_ORDER_STATUSES.includes(canonicalFactoryOrderStatus(order.status))
         ? 0
-        : Number(order.expected_total_amount ?? (Math.max(Number(order.total_pieces || 0) - Number(order.delivered_pieces || 0), 0) * Number(order.price_per_piece || 0))),
+        : Number(order.expected_total_amount)
+          || Math.max(Number(order.total_pieces || 0) - deliveredPieces, 0) * Number(order.price_per_piece || 0),
       operationalExpenses: Number(order.operational_expenses || 0),
       expenseEntries: data.orderExpenses.filter((expense) => expense.order_id === order.id),
       paidAmount: Number(order.paid_amount || 0),
@@ -996,6 +997,7 @@ function factoryOrderPipelineGroups(orders) {
   ];
   const groupsByKey = new Map(groups.map((group) => [group.key, group]));
   for (const order of orders) {
+    if (LOCKED_FACTORY_ORDER_STATUSES.includes(canonicalFactoryOrderStatus(order.storedStatus || order.status))) continue;
     groupsByKey.get(factoryOrderPipelineCategory(order)).orders.push(order);
   }
   return groups;
@@ -2244,7 +2246,7 @@ function clientAccountSummary(client, data) {
     !LOCKED_FACTORY_ORDER_STATUSES.includes(canonicalFactoryOrderStatus(order.status))
     && (order.quantity <= 0 || order.remainingPieces > 0 || order.expectedAmount > 0)
   );
-  const receivableBalance = hasUndeliveredGoods ? 0 : deliveredDue;
+  const receivableBalance = deliveredDue;
   const creditBalance = Math.max(0, -balance);
   return {
     clientName: client.name,
@@ -2315,7 +2317,7 @@ function clientAccountCards(data) {
     const modelMetric = (label, orders, id) => `<div class="model-preview"><span>${label}</span><button class="model-preview-trigger" type="button" aria-label="${orders.length} ${label}" aria-describedby="${id}"${orders.length === 1 ? ` data-open-model-id="${escapeHtml(orders[0].id)}"` : ""}>${orders.length}</button>${previewList(orders, id)}</div>`;
     return `<article class="client-account-card">
       <header><div><h3>${escapeHtml(client.name)}</h3><p>${escapeHtml(client.phone || "بدون هاتف")}${linkedUser ? ` · ${escapeHtml(linkedUser.username)}` : " · ملف عميل بلا حساب دخول"}</p></div>${statusTag(linkedUser?.status === "suspended" ? "متوقف" : "نشط")}</header>
-      <div class="client-balance-grid"><div><span>قيمة البضاعة غير المسلّمة بعد احتساب الدفعات</span><strong>${money(summary.pendingGoodsBalance)}</strong></div><div><span>المطلوب فعلياً بعد التسليم</span><strong>${money(summary.deliveredDue)}</strong></div><div><span>المدفوع</span><strong>${money(summary.paid)}</strong></div><div><span>الرصيد الإجمالي</span><strong>${money(summary.balance)}</strong><small>${summary.balance === 0 ? "تم السداد بالكامل" : summary.balance < 0 ? "رصيد دائن للعميل" : summary.hasUndeliveredGoods ? "يشمل بضاعة معلقة غير مستحقة حتى التسليم" : "مديونية مستحقة على العميل"}</small></div></div>
+      <div class="client-balance-grid"><div><span>قيمة البضاعة غير المسلّمة بعد احتساب الدفعات</span><strong>${money(summary.pendingGoodsBalance)}</strong></div><div><span>المطلوب فعلياً بعد التسليم</span><strong>${money(summary.deliveredDue)}</strong></div><div><span>المدفوع</span><strong>${money(summary.paid)}</strong></div><div><span>الرصيد الإجمالي</span><strong>${money(summary.balance)}</strong><small>${summary.balance === 0 ? "تم السداد بالكامل" : summary.balance < 0 ? "رصيد دائن للعميل" : summary.deliveredDue > 0 ? "يوجد مبلغ مستحق بعد التسليم" : summary.hasUndeliveredGoods ? "يشمل بضاعة معلقة غير مستحقة حتى التسليم" : "مديونية مستحقة على العميل"}</small></div></div>
       ${unpricedOrders.length ? '<p class="client-unpriced-alert" role="status">يوجد موديلات لم تحدد أسعارها بعد</p>' : ""}
       <div class="client-activity-grid">
         ${pipelineGroups.map((group) => modelMetric(group.label, group.orders, `pipeline-${group.key}-${escapeHtml(client.id)}`)).join("")}
@@ -2701,7 +2703,7 @@ function clientDetailsView(client, data) {
     <div data-client-profile-panel="overview"${activeClientProfileTab === "overview" ? "" : " hidden"}>
     ${accountLinkSection}
     ${clientFabricBalanceSection}
-    <div class="stats-grid client-finance-summary">${summary.latestSettlement ? stat("الرصيد المرحّل من آخر تصفية", money(summary.openingBalance), "قبل حركات الفترة الحالية") : ""}${stat("المتبقي من البضاعة غير المسلّمة", money(summary.pendingGoodsBalance), "بعد تخصيص الدفعات لها؛ لا يُعد ديناً قبل التسليم")}${stat("المستحق فعلياً بعد التسليم", money(summary.deliveredDue), "بعد تخصيص الدفعات أولاً للبضاعة المعلقة")}${stat("مصروفات وعهد العميل", money(summary.clientExpensesTotal))}${stat("خصومات التسوية", money(summary.accountAdjustmentsTotal), "خصومات غير نقدية")}${stat("إجمالي المدفوع", money(summary.paid))}${stat("الرصيد الإجمالي", money(summary.balance), summary.balance === 0 ? "تم السداد بالكامل" : summary.balance < 0 ? "رصيد دائن للعميل" : summary.hasUndeliveredGoods ? "يشمل بضاعة معلقة غير مستحقة بعد" : "مديونية مستحقة بعد التسليم")}</div>
+    <div class="stats-grid client-finance-summary">${summary.latestSettlement ? stat("الرصيد المرحّل من آخر تصفية", money(summary.openingBalance), "قبل حركات الفترة الحالية") : ""}${stat("المتبقي من البضاعة غير المسلّمة", money(summary.pendingGoodsBalance), "بعد تخصيص الدفعات لها؛ لا يُعد ديناً قبل التسليم")}${stat("المستحق فعلياً بعد التسليم", money(summary.deliveredDue), "بعد تخصيص الدفعات أولاً للبضاعة المعلقة")}${stat("مصروفات وعهد العميل", money(summary.clientExpensesTotal))}${stat("خصومات التسوية", money(summary.accountAdjustmentsTotal), "خصومات غير نقدية")}${stat("إجمالي المدفوع", money(summary.paid))}${stat("الرصيد الإجمالي", money(summary.balance), summary.balance === 0 ? "تم السداد بالكامل" : summary.balance < 0 ? "رصيد دائن للعميل" : summary.deliveredDue > 0 ? "يوجد مبلغ مستحق بعد التسليم" : summary.hasUndeliveredGoods ? "يشمل بضاعة معلقة غير مستحقة بعد" : "مديونية مستحقة بعد التسليم")}</div>
     </div>
     <div data-client-profile-panel="statement"${activeClientProfileTab === "statement" ? "" : " hidden"}>
     <section class="client-detail-section">${panel("كشف الحساب والسجل المالي", `<p>يعرض التسليمات والدفعات والمصروفات والخصومات والتسويات بترتيب زمني. تعديل أو حذف الدفعة الخاطئة يعيد احتساب حساب العميل دون إنشاء حركة صرف نقدية عكسية.</p><form class="form-grid client-cash-form" data-client-cash-form="${escapeHtml(client.id)}"><div class="field"><label for="client-cash-category-${escapeHtml(client.id)}">بند المصروف / العهدة</label><input id="client-cash-category-${escapeHtml(client.id)}" name="category" maxlength="120" placeholder="مثل: سلفة، خيط، نقل" required></div><div class="field"><label for="client-cash-amount-${escapeHtml(client.id)}">المبلغ على حساب العميل (ج.م)</label><input id="client-cash-amount-${escapeHtml(client.id)}" name="amount" type="number" min="0.01" step="0.01" required></div><div class="field"><label for="client-cash-method-${escapeHtml(client.id)}">طريقة الصرف</label><input id="client-cash-method-${escapeHtml(client.id)}" name="method" value="نقدي" maxlength="80"></div><div class="field"><label for="client-cash-date-${escapeHtml(client.id)}">تاريخ الحركة</label><input id="client-cash-date-${escapeHtml(client.id)}" name="occurredAt" type="datetime-local" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}" required></div><div class="field wide"><label for="client-cash-description-${escapeHtml(client.id)}">البيان / التفاصيل</label><input id="client-cash-description-${escapeHtml(client.id)}" name="description" maxlength="500" required></div><div class="form-actions"><button class="button button-primary" type="submit">تسجيل المصروف على الحساب</button></div></form>${clientFinancialStatementMarkup(financialEntries)}`)}</section>
@@ -2878,7 +2880,7 @@ function clientQuickDetailsModalView(client, data) {
   const pipelineGroups = factoryOrderPipelineGroups(summary.orders)
     .filter((group) => group.key !== "unclassified" || group.orders.length);
   return `<header class="modal-view-heading"><div><small>ملف العميل</small><h2 id="client-account-modal-title">${escapeHtml(client.name)}</h2><p>${escapeHtml(client.brand_name || "—")} · رقم العميل ${escapeHtml(client.client_number || "—")}</p></div></header>
-    <div class="client-balance-primary"><span>الرصيد الإجمالي للحساب</span><strong>${money(summary.balance)}</strong><small>${summary.balance < 0 ? "رصيد دائن للعميل" : summary.balance === 0 ? "تم السداد بالكامل" : summary.hasUndeliveredGoods ? "يشمل بضاعة معلقة لا تُعد مديونية حتى التسليم" : "مديونية مستحقة بعد التسليم"}</small></div>
+    <div class="client-balance-primary"><span>الرصيد الإجمالي للحساب</span><strong>${money(summary.balance)}</strong><small>${summary.balance < 0 ? "رصيد دائن للعميل" : summary.balance === 0 ? "تم السداد بالكامل" : summary.deliveredDue > 0 ? "يوجد مبلغ مستحق بعد التسليم" : summary.hasUndeliveredGoods ? "يشمل بضاعة معلقة لا تُعد مديونية حتى التسليم" : "مديونية مستحقة بعد التسليم"}</small></div>
     <div class="compact-detail-grid">
       <div><span>المتبقي من البضاعة غير المسلّمة بعد الدفعات</span><strong>${money(summary.pendingGoodsBalance)}</strong></div>
       <div><span>المستحق فعلياً بعد التسليم والدفعات المخصصة له</span><strong>${money(summary.deliveredDue)}</strong></div>
@@ -4188,7 +4190,9 @@ function clientView(data, session) {
   const due = remaining;
   const balanceState = due > 0 ? "is-debit" : due < 0 ? "is-credit" : "is-settled";
   const balanceCaption = due > 0
-    ? hasUndeliveredGoods ? "يشمل بضاعة معلقة لا تستحق إلا بعد التسليم" : "مبلغ مستحق بعد التسليم"
+    ? deliveredDue > 0 && hasUndeliveredGoods
+      ? "يشمل مديونية مستحقة بعد التسليم وبضاعة معلقة لا تستحق إلا بعد التسليم"
+      : hasUndeliveredGoods ? "يشمل بضاعة معلقة لا تستحق إلا بعد التسليم" : "مبلغ مستحق بعد التسليم"
     : due < 0
       ? "رصيد دائن متبقٍ لصالحك"
       : "الحساب متوازن ولا يوجد مبلغ مستحق";
