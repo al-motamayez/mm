@@ -181,10 +181,7 @@ alter table public.factory_model_catalog
 create index if not exists factory_model_catalog_customer_created_idx
   on public.factory_model_catalog (customer_id, created_at desc);
 
-create table if not exists public.factory_model_code_counters (
-  customer_id uuid primary key references public.factory_clients (id) on delete cascade,
-  last_serial bigint not null check (last_serial >= 0)
-);
+create sequence if not exists public.factory_model_serial_seq;
 
 create or replace function public.next_factory_model_serial(requested_customer_id uuid)
 returns bigint
@@ -199,17 +196,7 @@ begin
     raise exception 'A customer is required to generate a model code.';
   end if;
 
-  insert into public.factory_model_code_counters (customer_id, last_serial)
-  values (
-    requested_customer_id,
-    greatest(
-      coalesce((select max(model_serial) from public.orders where customer_id = requested_customer_id), 0),
-      coalesce((select max(model_serial) from public.factory_model_catalog where customer_id = requested_customer_id), 0)
-    ) + 1
-  )
-  on conflict (customer_id) do update
-    set last_serial = public.factory_model_code_counters.last_serial + 1
-  returning last_serial into allocated_serial;
+  allocated_serial := nextval('public.factory_model_serial_seq');
 
   return allocated_serial;
 end;
@@ -841,26 +828,6 @@ set client_model_code = trim(model_number)
 where length(trim(coalesce(client_model_code, ''))) = 0
   and length(trim(coalesce(model_number, ''))) > 0;
 
-create sequence if not exists public.factory_model_serial_seq;
-with numbered_orders as (
-  select id,
-         row_number() over (order by created_at, id)
-           + coalesce((select max(model_serial) from public.orders), 0) as sequence_value
-  from public.orders
-  where model_serial is null
-    and factory_model_catalog_id is null
-)
-update public.orders as factory_order
-set model_serial = numbered_orders.sequence_value
-from numbered_orders
-where factory_order.id = numbered_orders.id;
-
-select setval(
-  'public.factory_model_serial_seq',
-  greatest(coalesce((select max(model_serial) from public.orders), 1), 1),
-  (select max(model_serial) is not null from public.orders)
-);
-
 drop table if exists pg_temp.factory_model_code_migration;
 create temporary table factory_model_code_migration as
 with model_sources as (
@@ -869,15 +836,13 @@ with model_sources as (
   union all
   select 'order'::text as source_kind, id as source_id, customer_id, created_at
   from public.orders
-  where customer_id is not null
-    and factory_model_catalog_id is null
+  where factory_model_catalog_id is null
     and parent_order_id is null
 ),
 numbered_sources as (
   select source_kind,
          source_id,
          row_number() over (
-           partition by customer_id
            order by created_at, source_kind, source_id
          ) as model_serial
   from model_sources
@@ -905,8 +870,9 @@ where child_order.parent_order_id = parent_order.id
 
 alter table public.factory_model_catalog
   alter column model_serial set not null;
-create unique index if not exists factory_model_catalog_customer_serial_idx
-  on public.factory_model_catalog (customer_id, model_serial);
+drop index if exists public.factory_model_catalog_customer_serial_idx;
+create unique index if not exists factory_model_catalog_model_serial_idx
+  on public.factory_model_catalog (model_serial);
 
 update public.orders as factory_order
 set factory_model_code = concat(client.code_letter, '-', factory_order.model_serial)
@@ -930,22 +896,37 @@ where factory_order.factory_model_catalog_id = catalog_model.id;
 
 drop table pg_temp.factory_model_code_migration;
 
-insert into public.factory_model_code_counters (customer_id, last_serial)
-select customer.id,
-       greatest(
-         coalesce((select max(factory_order.model_serial)
-                   from public.orders as factory_order
-                   where factory_order.customer_id = customer.id), 0),
-         coalesce((select max(catalog_model.model_serial)
-                   from public.factory_model_catalog as catalog_model
-                   where catalog_model.customer_id = customer.id), 0)
-       )
-from public.factory_clients as customer
-on conflict (customer_id) do update
-  set last_serial = greatest(
-    public.factory_model_code_counters.last_serial,
-    excluded.last_serial
+create unique index if not exists orders_root_model_serial_idx
+  on public.orders (model_serial)
+  where model_serial is not null
+    and factory_model_catalog_id is null
+    and parent_order_id is null;
+
+do $$
+declare
+  highest_serial bigint;
+  previous_customer_counter bigint := 0;
+begin
+  if to_regclass('public.factory_model_code_counters') is not null then
+    execute 'select coalesce(max(last_serial), 0) from public.factory_model_code_counters'
+      into previous_customer_counter;
+  end if;
+
+  select greatest(
+    coalesce((select max(model_serial) from public.orders
+              where factory_model_catalog_id is null and parent_order_id is null), 0),
+    coalesce((select max(model_serial) from public.factory_model_catalog), 0),
+    previous_customer_counter
+  )
+  into highest_serial;
+
+  perform setval(
+    'public.factory_model_serial_seq',
+    greatest(highest_serial, 1),
+    highest_serial > 0
   );
+end;
+$$;
 
 drop index if exists public.orders_model_serial_idx;
 drop index if exists public.orders_factory_model_code_idx;
@@ -998,11 +979,9 @@ begin
         if not found then
           raise exception 'The selected factory customer does not exist.';
         end if;
-        if new.model_serial is null then
-          new.model_serial := public.next_factory_model_serial(new.customer_id);
-        end if;
+        new.model_serial := public.next_factory_model_serial(new.customer_id);
         new.factory_model_code := concat(customer_letter, '-', new.model_serial);
-      elsif new.model_serial is null then
+      else
         new.model_serial := nextval('public.factory_model_serial_seq');
       end if;
     end if;
