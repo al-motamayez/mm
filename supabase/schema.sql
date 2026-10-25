@@ -163,6 +163,65 @@ create table if not exists public.factory_clients (
   updated_at timestamptz not null default now()
 );
 
+create sequence if not exists public.factory_model_catalog_code_seq;
+create table if not exists public.factory_model_catalog (
+  id uuid primary key default gen_random_uuid(),
+  customer_id uuid not null references public.factory_clients (id) on delete restrict,
+  model_name text not null check (length(trim(model_name)) between 1 and 160),
+  client_model_code text not null default '',
+  factory_model_code text not null unique,
+  model_image_url text not null default '',
+  created_by uuid references auth.users (id) on delete set null,
+  created_at timestamptz not null default now()
+);
+create index if not exists factory_model_catalog_customer_created_idx
+  on public.factory_model_catalog (customer_id, created_at desc);
+
+create or replace function public.admin_create_factory_model(
+  requested_model_id uuid,
+  requested_customer_id uuid,
+  requested_model_name text,
+  requested_client_model_code text,
+  requested_model_image_url text
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  created_model_id uuid;
+  model_code text;
+begin
+  if not public.is_active_factory_admin() then
+    raise exception 'Only active admins can register factory models.';
+  end if;
+  if requested_model_id is null
+     or requested_customer_id is null
+     or length(trim(coalesce(requested_model_name, ''))) not between 1 and 160
+     or length(trim(coalesce(requested_client_model_code, ''))) > 100
+     or length(trim(coalesce(requested_model_image_url, ''))) not between 1 and 2000 then
+    raise exception 'A valid client, model name, and image are required to register a model.';
+  end if;
+  perform 1 from public.factory_clients
+  where id = requested_customer_id
+  for key share;
+  if not found then
+    raise exception 'The selected factory client does not exist.';
+  end if;
+
+  model_code := 'MOD-' || nextval('public.factory_model_catalog_code_seq')::text;
+  insert into public.factory_model_catalog (
+    id, customer_id, model_name, client_model_code, factory_model_code, model_image_url, created_by
+  ) values (
+    requested_model_id, requested_customer_id, trim(requested_model_name), trim(coalesce(requested_client_model_code, '')),
+    model_code, trim(coalesce(requested_model_image_url, '')), auth.uid()
+  ) returning id into created_model_id;
+
+  return created_model_id;
+end;
+$$;
+
 create table if not exists public.factory_client_model_requests (
   id uuid primary key default gen_random_uuid(),
   client_id uuid not null references public.factory_clients (id) on delete cascade,
@@ -691,6 +750,7 @@ alter table public.orders
   add column if not exists model_number text not null default '',
   add column if not exists model_serial bigint,
   add column if not exists factory_model_code text,
+  add column if not exists factory_model_catalog_id uuid references public.factory_model_catalog (id) on delete set null,
   add column if not exists parent_order_id uuid references public.orders (id) on delete set null,
   add column if not exists client_model_code text not null default '',
   add column if not exists sender_name text,
@@ -726,6 +786,7 @@ with numbered_orders as (
            + coalesce((select max(model_serial) from public.orders), 0) as sequence_value
   from public.orders
   where model_serial is null
+    and factory_model_catalog_id is null
 )
 update public.orders as factory_order
 set model_serial = numbered_orders.sequence_value
@@ -760,17 +821,31 @@ as $$
 declare
   customer_letter text;
   parent_model public.orders%rowtype;
+  catalog_model public.factory_model_catalog%rowtype;
 begin
   if tg_op = 'INSERT' then
-    if new.parent_order_id is not null then
+    if new.factory_model_catalog_id is not null then
+      select * into catalog_model
+      from public.factory_model_catalog
+      where id = new.factory_model_catalog_id
+      for key share;
+      if not found or catalog_model.customer_id is distinct from new.customer_id then
+        raise exception 'The registered catalog model does not match the selected client.';
+      end if;
+      new.model_serial := null;
+      new.factory_model_code := catalog_model.factory_model_code;
+    elsif new.parent_order_id is not null then
       select * into parent_model
       from public.orders
       where id = new.parent_order_id
       for key share;
-      if not found or parent_model.model_serial is null or parent_model.factory_model_code is null then
+      if not found
+         or (parent_model.model_serial is null and parent_model.factory_model_catalog_id is null)
+         or parent_model.factory_model_code is null then
         raise exception 'The source model for this cutting replication no longer exists.';
       end if;
       new.model_serial := parent_model.model_serial;
+      new.factory_model_catalog_id := parent_model.factory_model_catalog_id;
       new.factory_model_code := parent_model.factory_model_code;
       new.parent_order_id := coalesce(parent_model.parent_order_id, parent_model.id);
     else
@@ -795,7 +870,7 @@ $$;
 
 drop trigger if exists assign_factory_model_serial on public.orders;
 create trigger assign_factory_model_serial
-  before insert or update of customer_id, model_serial, client_model_code on public.orders
+  before insert or update of customer_id, model_serial, client_model_code, factory_model_catalog_id on public.orders
   for each row execute procedure public.assign_factory_model_serial();
 
 alter table public.orders
@@ -2747,6 +2822,107 @@ alter table public.factory_cutting_stories
   drop constraint if exists factory_cutting_stories_status_check,
   add constraint factory_cutting_stories_status_check
     check (status in ('pending', 'added_to_models', 'sent_to_sewing', 'rejected'));
+
+create table if not exists public.factory_cutting_requests (
+  id uuid primary key default gen_random_uuid(),
+  source_order_id uuid references public.orders (id) on delete restrict,
+  catalog_model_id uuid references public.factory_model_catalog (id) on delete restrict,
+  customer_id uuid not null references public.factory_clients (id) on delete restrict,
+  requested_by uuid references auth.users (id) on delete set null,
+  status text not null default 'pending' check (status in ('pending', 'submitted', 'cancelled')),
+  completed_story_id uuid references public.factory_cutting_stories (id) on delete set null,
+  created_at timestamptz not null default now(),
+  submitted_at timestamptz
+);
+alter table public.factory_cutting_requests
+  alter column source_order_id drop not null,
+  add column if not exists catalog_model_id uuid references public.factory_model_catalog (id) on delete restrict,
+  drop constraint if exists factory_cutting_requests_model_source_check,
+  add constraint factory_cutting_requests_model_source_check
+    check ((source_order_id is null) <> (catalog_model_id is null));
+create index if not exists factory_cutting_requests_status_created_idx
+  on public.factory_cutting_requests (status, created_at desc);
+
+alter table public.factory_cutting_requests
+  add column if not exists completed_story_id uuid references public.factory_cutting_stories (id) on delete set null;
+alter table public.factory_cutting_stories
+  add column if not exists cutting_request_id uuid references public.factory_cutting_requests (id) on delete set null,
+  add column if not exists catalog_model_id uuid references public.factory_model_catalog (id) on delete set null;
+
+create or replace function public.admin_create_factory_cutting_request(
+  requested_source_order_id uuid
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  source_model public.orders%rowtype;
+  request_id uuid;
+begin
+  if not public.is_active_factory_admin() then
+    raise exception 'Only active admins can create cutting requests.';
+  end if;
+  if requested_source_order_id is null then
+    raise exception 'Choose a registered model for the cutting request.';
+  end if;
+
+  select * into source_model
+  from public.orders
+  where id = requested_source_order_id
+    and customer_id is not null
+    and nullif(trim(factory_model_code), '') is not null
+  for key share;
+  if not found then
+    raise exception 'The registered model or its system code could not be found.';
+  end if;
+
+  insert into public.factory_cutting_requests (
+    source_order_id, customer_id, requested_by
+  ) values (
+    source_model.id, source_model.customer_id, auth.uid()
+  ) returning id into request_id;
+
+  return request_id;
+end;
+$$;
+
+create or replace function public.admin_create_factory_model_cutting_request(
+  requested_catalog_model_id uuid
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  catalog_model public.factory_model_catalog%rowtype;
+  request_id uuid;
+begin
+  if not public.is_active_factory_admin() then
+    raise exception 'Only active admins can request a new model cut.';
+  end if;
+  if requested_catalog_model_id is null then
+    raise exception 'Choose a registered catalog model.';
+  end if;
+  select * into catalog_model
+  from public.factory_model_catalog
+  where id = requested_catalog_model_id
+  for key share;
+  if not found then
+    raise exception 'The catalog model no longer exists.';
+  end if;
+
+  insert into public.factory_cutting_requests (
+    catalog_model_id, customer_id, requested_by
+  ) values (
+    catalog_model.id, catalog_model.customer_id, auth.uid()
+  ) returning id into request_id;
+  return request_id;
+end;
+$$;
+
 create index if not exists factory_cutting_stories_status_created_idx
   on public.factory_cutting_stories (status, created_at desc);
 
@@ -2936,8 +3112,11 @@ begin
   delete from public.factory_deliveries where id is not null;
   delete from public.factory_cash_transactions where id is not null;
   delete from public.factory_records where id is not null;
+  delete from public.factory_cutting_requests where id is not null;
+  delete from public.factory_cutting_stories where id is not null;
   delete from public.production_stages where id is not null;
   delete from public.orders where id is not null;
+  delete from public.factory_model_catalog where id is not null;
   delete from public.factory_fabrics where id is not null;
   delete from public.factory_clients where id is not null;
   delete from public.factory_live_signals where id is not null;
@@ -2955,14 +3134,32 @@ grant execute on function public.reset_factory_data() to authenticated;
 alter table public.factory_fabrics enable row level security;
 alter table public.factory_fabric_transactions enable row level security;
 alter table public.factory_cutting_stories enable row level security;
+alter table public.factory_cutting_requests enable row level security;
+alter table public.factory_model_catalog enable row level security;
 
 drop policy if exists "Admins read factory cutting stories" on public.factory_cutting_stories;
 create policy "Admins read factory cutting stories"
   on public.factory_cutting_stories for select to authenticated
   using (public.is_active_factory_admin());
+drop policy if exists "Admins and cutting supervisors read cutting requests" on public.factory_cutting_requests;
+create policy "Admins and cutting supervisors read cutting requests"
+  on public.factory_cutting_requests for select to authenticated
+  using (
+    public.is_active_factory_admin()
+    or public.has_active_factory_role(array['cutting'])
+  );
+drop policy if exists "Admins and cutting supervisors read model catalog" on public.factory_model_catalog;
+create policy "Admins and cutting supervisors read model catalog"
+  on public.factory_model_catalog for select to authenticated
+  using (
+    public.is_active_factory_admin()
+    or public.has_active_factory_role(array['cutting'])
+  );
 alter table public.factory_live_signals enable row level security;
 alter table public.factory_auth_events enable row level security;
 revoke all on public.factory_fabrics, public.factory_fabric_transactions from public, anon, authenticated;
+revoke all on public.factory_cutting_requests from public, anon, authenticated;
+revoke all on public.factory_model_catalog from public, anon, authenticated;
 revoke all on public.factory_live_signals from public, anon, authenticated;
 revoke all on public.factory_auth_events from public, anon, authenticated;
 
@@ -4187,6 +4384,8 @@ drop function if exists public.submit_factory_cutting(uuid, uuid, text, text, js
 drop function if exists public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, integer, text, uuid, numeric, text);
 drop function if exists public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, text, integer, text, uuid, numeric, text);
 drop function if exists public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, text, integer, text, uuid, numeric, text, uuid);
+drop function if exists public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, text, integer, text, uuid, numeric, text, uuid, uuid);
+drop function if exists public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, text, integer, text, uuid, numeric, text, uuid, uuid, uuid);
 drop function if exists public.read_factory_cutting_clients();
 create function public.read_factory_cutting_clients()
 returns table (id uuid, name text, brand_name text)
@@ -4222,7 +4421,9 @@ create function public.submit_factory_cutting(
   requested_fabric_id uuid,
   requested_fabric_quantity numeric,
   requested_external_fabric_unit text,
-  requested_source_order_id uuid
+  requested_source_order_id uuid,
+  requested_cutting_request_id uuid,
+  requested_catalog_model_id uuid
 )
 returns integer
 language plpgsql
@@ -4232,6 +4433,8 @@ as $$
 declare
   matched_customer public.factory_clients%rowtype;
   source_model public.orders%rowtype;
+  catalog_model public.factory_model_catalog%rowtype;
+  cutting_request public.factory_cutting_requests%rowtype;
   selected_fabric public.factory_fabrics%rowtype;
   submitted_by_name text;
   normalized_sizes jsonb;
@@ -4319,6 +4522,32 @@ begin
       raise exception 'The source model could not be found for the selected client.';
     end if;
   end if;
+  if requested_catalog_model_id is not null then
+    select * into catalog_model
+    from public.factory_model_catalog
+    where id = requested_catalog_model_id
+      and customer_id = matched_customer.id
+    for update;
+    if not found then
+      raise exception 'The catalog model could not be found for the selected client.';
+    end if;
+  end if;
+  if requested_source_order_id is not null and requested_catalog_model_id is not null then
+    raise exception 'A cutting story can reference either a catalog model or an existing order, not both.';
+  end if;
+  if requested_cutting_request_id is not null then
+    select * into cutting_request
+    from public.factory_cutting_requests
+    where id = requested_cutting_request_id
+      and status = 'pending'
+      and source_order_id is not distinct from requested_source_order_id
+      and catalog_model_id is not distinct from requested_catalog_model_id
+      and customer_id = matched_customer.id
+    for update;
+    if not found then
+      raise exception 'The cutting request is no longer pending or does not match this model.';
+    end if;
+  end if;
 
   select coalesce(nullif(trim(name), ''), username)
     into submitted_by_name
@@ -4340,25 +4569,46 @@ begin
 
   insert into public.factory_cutting_stories (
     id, customer_id, customer_name, submitted_by, submitted_by_name,
-    model_name, model_number, source_order_id, factory_model_code, size_data, color_ply_data, total_pieces, ply_count,
-    fabric, fabric_details, fabric_id, fabric_quantity, bolt_count, fabric_unit,
+    model_name, model_number, source_order_id, catalog_model_id, factory_model_code, size_data, color_ply_data, total_pieces, ply_count,
+    fabric, fabric_details, fabric_id, fabric_quantity, bolt_count, fabric_unit, cutting_request_id,
     technical_notes, model_image_url
   )
   values (
     requested_order_id, matched_customer.id, matched_customer.name, auth.uid(), submitted_by_name,
-    case when requested_source_order_id is not null then
+    case when requested_catalog_model_id is not null then catalog_model.model_name
+      when requested_source_order_id is not null then
       coalesce(nullif(trim(source_model.model_name), ''), nullif(trim(source_model.model_number), ''), requested_model_name)
       else coalesce(nullif(trim(coalesce(requested_model_name, '')), ''),
                     nullif(trim(coalesce(requested_model_number, '')), '')) end,
-    coalesce(trim(requested_model_number), ''),
-    requested_source_order_id, coalesce(source_model.factory_model_code, ''),
+    coalesce(nullif(trim(requested_model_number), ''), catalog_model.client_model_code, ''),
+    requested_source_order_id, requested_catalog_model_id,
+    coalesce(catalog_model.factory_model_code, source_model.factory_model_code, ''),
     normalized_sizes, requested_color_ply_data, cut_total, total_plys,
     trim(requested_fabric), trim(coalesce(requested_fabric_details, '')),
-    requested_fabric_id, requested_fabric_quantity, requested_bolt_count, fabric_unit,
+    requested_fabric_id, requested_fabric_quantity, requested_bolt_count, fabric_unit, requested_cutting_request_id,
     trim(coalesce(requested_technical_notes, '')),
     coalesce(nullif(trim(coalesce(requested_model_image_url, '')), ''),
+      case when requested_catalog_model_id is not null then catalog_model.model_image_url end,
       case when requested_source_order_id is not null then source_model.model_image_url end, '')
   );
+  if requested_cutting_request_id is not null then
+    update public.factory_cutting_requests
+    set status = 'submitted',
+        completed_story_id = requested_order_id,
+        submitted_at = now()
+    where id = requested_cutting_request_id
+      and status = 'pending';
+    if not found then
+      raise exception 'The cutting request changed while its story was being submitted.';
+    end if;
+  end if;
+  if requested_catalog_model_id is not null
+     and length(trim(coalesce(requested_model_number, ''))) > 0
+     and requested_model_number is distinct from catalog_model.client_model_code then
+    update public.factory_model_catalog
+    set client_model_code = trim(requested_model_number)
+    where id = requested_catalog_model_id;
+  end if;
 
   return cut_total;
 end;
@@ -4377,6 +4627,7 @@ declare
   story public.factory_cutting_stories%rowtype;
   customer public.factory_clients%rowtype;
   source_model public.orders%rowtype;
+  catalog_model public.factory_model_catalog%rowtype;
   resolved_parent_order_id uuid;
   resolved_model_serial bigint;
   new_order_id uuid := gen_random_uuid();
@@ -4420,6 +4671,16 @@ begin
     resolved_parent_order_id := coalesce(source_model.parent_order_id, source_model.id);
     resolved_model_serial := source_model.model_serial;
   end if;
+  if story.catalog_model_id is not null then
+    select * into catalog_model
+    from public.factory_model_catalog
+    where id = story.catalog_model_id
+      and customer_id = story.customer_id
+    for key share;
+    if not found then
+      raise exception 'The registered catalog model for this story no longer exists.';
+    end if;
+  end if;
   if story.fabric_id is not null then
     perform 1 from public.factory_fabrics where id = story.fabric_id for update;
     if not found then
@@ -4447,13 +4708,13 @@ begin
     else 'تم القص'
   end;
   insert into public.orders (
-    id, client_id, customer_id, model_name, model_number, model_serial, parent_order_id, client_model_code, sender_name,
+    id, client_id, customer_id, model_name, model_number, model_serial, parent_order_id, factory_model_catalog_id, client_model_code, sender_name,
     colors, color_names, sizes, original_total_pieces, total_pieces,
     status, model_image_url, work_stages
   )
   values (
     new_order_id, customer.user_id, customer.id, story.model_name, '',
-    resolved_model_serial, resolved_parent_order_id,
+    resolved_model_serial, resolved_parent_order_id, story.catalog_model_id,
     coalesce(trim(story.model_number), ''),
     story.submitted_by_name, colors, color_names, story.size_data::text,
     story.total_pieces, story.total_pieces, order_status,
@@ -4535,6 +4796,12 @@ begin
   if not found then
     raise exception 'The cutting story was not found or has already been reviewed.';
   end if;
+  update public.factory_cutting_requests
+  set status = 'pending',
+      completed_story_id = null,
+      submitted_at = null
+  where completed_story_id = requested_story_id
+    and status = 'submitted';
 end;
 $$;
 
@@ -5458,6 +5725,15 @@ begin
   if not found then
     raise exception 'The selected factory customer does not exist.';
   end if;
+  if exists (
+    select 1
+    from public.orders as factory_order
+    where factory_order.customer_id = matched_client.id
+      and factory_order.archived_at is null
+      and factory_order.status not in ('تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق')
+  ) then
+    raise exception 'Client account settlement is blocked while goods remain undelivered.';
+  end if;
   settlement_time := clock_timestamp();
 
   select round(coalesce((payload ->> 'balance')::numeric, 0), 2)
@@ -6009,6 +6285,8 @@ grant select on public.factory_fabrics to authenticated;
 grant select on public.factory_fabric_transactions to authenticated;
 revoke all on public.factory_cutting_stories from public, anon, authenticated;
 grant select on public.factory_cutting_stories to authenticated;
+grant select on public.factory_cutting_requests to authenticated;
+grant select on public.factory_model_catalog to authenticated;
 grant select on public.factory_live_signals to authenticated;
 grant select on public.factory_auth_events to authenticated;
 grant update (completed_quantity, status, updated_at) on public.production_stages to authenticated;
@@ -6494,8 +6772,14 @@ grant execute on function public.complete_factory_handover(uuid, integer, text) 
 revoke all on function public.admin_update_factory_delivery_quantity(uuid, uuid, integer) from public, anon, authenticated;
 grant execute on function public.admin_update_factory_delivery_quantity(uuid, uuid, integer) to authenticated;
 revoke all on function public.calculate_factory_cutting_breakdown(jsonb, jsonb) from public, anon, authenticated;
-revoke all on function public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, text, integer, text, uuid, numeric, text, uuid) from public, anon, authenticated;
-grant execute on function public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, text, integer, text, uuid, numeric, text, uuid) to authenticated;
+revoke all on function public.admin_create_factory_cutting_request(uuid) from public, anon, authenticated;
+grant execute on function public.admin_create_factory_cutting_request(uuid) to authenticated;
+revoke all on function public.admin_create_factory_model_cutting_request(uuid) from public, anon, authenticated;
+grant execute on function public.admin_create_factory_model_cutting_request(uuid) to authenticated;
+revoke all on function public.admin_create_factory_model(uuid, uuid, text, text, text) from public, anon, authenticated;
+grant execute on function public.admin_create_factory_model(uuid, uuid, text, text, text) to authenticated;
+revoke all on function public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, text, integer, text, uuid, numeric, text, uuid, uuid, uuid) from public, anon, authenticated;
+grant execute on function public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, text, integer, text, uuid, numeric, text, uuid, uuid, uuid) to authenticated;
 revoke all on function public.admin_approve_factory_cutting_story(uuid, text) from public, anon, authenticated;
 grant execute on function public.admin_approve_factory_cutting_story(uuid, text) to authenticated;
 revoke all on function public.admin_reject_factory_cutting_story(uuid) from public, anon, authenticated;
