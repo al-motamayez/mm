@@ -971,6 +971,23 @@ function factoryOrderFullyDelivered(order) {
     .some(factoryOrderDeliveredStatus);
 }
 
+function factoryOrderHasActualDelivery(order) {
+  const deliveredPieces = Number(order.deliveredPieces ?? order.delivered_pieces ?? 0);
+  const recordedDeliveryPieces = (order.deliveryHistory || order.deliveries || [])
+    .reduce((total, delivery) => total + Number(delivery.quantity || 0), 0);
+  return Math.max(deliveredPieces, recordedDeliveryPieces) > 0;
+}
+
+function factoryOrderLedgerAmounts(order) {
+  const totalAmount = Number(order.totalAmount || 0);
+  const expectedAmount = Number(order.expectedAmount || 0);
+  const hasActualDelivery = factoryOrderHasActualDelivery(order);
+  return {
+    deliveredAmount: hasActualDelivery ? totalAmount : 0,
+    pendingAmount: hasActualDelivery ? expectedAmount : addMoney(totalAmount, expectedAmount)
+  };
+}
+
 function effectiveFactoryOrderStatus(order) {
   const sewingStageStatus = order.sewingStageStatus || "";
   if (["متاح للخياطة", "في انتظار الخياطة"].includes(sewingStageStatus)) {
@@ -2251,13 +2268,9 @@ function clientAccountSummary(client, data) {
   const latestSettlement = settlements[0] || null;
   const openingBalance = roundMoney(latestSettlement?.balance || 0);
   const orders = data.models.filter((order) => order.customerId === client.id && !order.archivedAt);
-  const deliveryReadyOrders = orders.filter(factoryOrderHasReachedDelivery);
-  const preDeliveryOrders = orders.filter((order) => !factoryOrderHasReachedDelivery(order));
-  const deliveredTotal = sumMoney(deliveryReadyOrders.map((order) => Number(order.totalAmount)));
-  const expectedTotal = sumMoney([
-    ...deliveryReadyOrders.map((order) => order.expectedAmount),
-    ...preDeliveryOrders.map((order) => addMoney(order.totalAmount, order.expectedAmount))
-  ]);
+  const orderLedgerAmounts = orders.map(factoryOrderLedgerAmounts);
+  const deliveredTotal = sumMoney(orderLedgerAmounts.map((amounts) => amounts.deliveredAmount));
+  const expectedTotal = sumMoney(orderLedgerAmounts.map((amounts) => amounts.pendingAmount));
   const orderPaid = sumMoney(orders.map((order) => order.paidAmount));
   const periodStart = client.account_period_started_at || latestSettlement?.date || null;
   const payments = data.payments.filter((payment) =>
@@ -4232,13 +4245,9 @@ function clientView(data, session) {
     || new Date(item._createdAt || item.created_at || item.date).getTime()
       >= new Date(latestSettlement.date || latestSettlement._createdAt).getTime()
   );
-  const deliveryReadyOrders = currentOrders.filter(factoryOrderHasReachedDelivery);
-  const preDeliveryOrders = currentOrders.filter((order) => !factoryOrderHasReachedDelivery(order));
-  const totalAmount = sumMoney(deliveryReadyOrders.map((item) => Number(item.totalAmount)));
-  const expectedTotal = sumMoney([
-    ...deliveryReadyOrders.map((item) => item.expectedAmount),
-    ...preDeliveryOrders.map((item) => addMoney(item.totalAmount, item.expectedAmount))
-  ]);
+  const orderLedgerAmounts = currentOrders.map(factoryOrderLedgerAmounts);
+  const totalAmount = sumMoney(orderLedgerAmounts.map((amounts) => amounts.deliveredAmount));
+  const expectedTotal = sumMoney(orderLedgerAmounts.map((amounts) => amounts.pendingAmount));
   const periodStart = latestSettlement?.date || latestSettlement?._createdAt || null;
   const accountAdjustments = data.accountAdjustments.filter((entry) =>
     entry._ownerId === session.accountId
