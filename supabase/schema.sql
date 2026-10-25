@@ -4544,6 +4544,19 @@ from public.orders as factory_order
 where delivery.order_id = factory_order.id
   and delivery.expected_delivery_date is null;
 
+update public.orders as factory_order
+set status = 'جاهز للتسليم'
+where factory_order.status in ('تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق')
+  and factory_order.total_pieces > 0
+  and greatest(
+    factory_order.delivered_pieces,
+    coalesce((
+      select sum(delivery.quantity)::integer
+      from public.factory_deliveries as delivery
+      where delivery.order_id = factory_order.id
+    ), 0)
+  ) < factory_order.total_pieces;
+
 drop function if exists public.record_factory_delivery(uuid, integer);
 create or replace function public.record_factory_delivery(
   requested_order_id uuid,
@@ -4591,7 +4604,10 @@ begin
   end if;
   if current_order.archived_at is not null
      or current_order.workflow_archived_at is not null
-     or current_order.status = 'تم التسليم' then
+     or (
+       current_order.status = 'تم التسليم'
+       and current_order.delivered_pieces >= current_order.total_pieces
+     ) then
     raise exception 'Closed or archived factory orders cannot receive new deliveries.';
   end if;
   if current_order.total_pieces <= 0 then
@@ -4611,7 +4627,13 @@ begin
   returning id into saved_delivery_id;
 
   update public.orders
-  set delivered_pieces = delivered_pieces + requested_quantity
+  set delivered_pieces = delivered_pieces + requested_quantity,
+      status = case
+        when status in ('تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق')
+          and delivered_pieces < total_pieces
+          then 'جاهز للتسليم'
+        else status
+      end
   where id = current_order.id;
 
   update public.production_stages
@@ -4692,13 +4714,17 @@ begin
     raise exception 'The final delivery quantity cannot exceed the remaining order quantity.';
   end if;
   if has_prior_deliveries
-     and requested_final_batch_qty not in (0, remaining_quantity) then
-    raise exception 'After earlier deliveries, close on the delivered total or deliver the entire remainder.';
+     and requested_final_batch_qty <> remaining_quantity then
+    raise exception 'The final handover must record delivery of all remaining pieces.';
   end if;
-  if not has_prior_deliveries and requested_final_batch_qty = 0 then
-    raise exception 'The first handover must record a positive delivery quantity.';
+  if not has_prior_deliveries
+     and requested_final_batch_qty <> current_order.total_pieces then
+    raise exception 'The first handover must deliver the full order; record partial batches with record_factory_delivery.';
   end if;
   final_delivered_quantity := current_order.delivered_pieces + requested_final_batch_qty;
+  if final_delivered_quantity <> current_order.total_pieces then
+    raise exception 'An order cannot be closed until all pieces have been delivered.';
+  end if;
   if requested_final_batch_qty > 0 then
     if length(trim(coalesce(requested_recipient_name, ''))) = 0 then
       raise exception 'A recipient name is required when recording an additional delivery.';
@@ -4791,8 +4817,8 @@ begin
   update public.orders
   set delivered_pieces = updated_delivered_quantity,
       status = case
-        when updated_delivered_quantity = 0
-          and status = 'تم التسليم'
+        when status in ('تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق')
+          and updated_delivered_quantity < total_pieces
           then 'جاهز للتسليم'
         else status
       end
@@ -6286,10 +6312,7 @@ begin
   opening_balance := coalesce(opening_balance, 0);
 
   select round(coalesce(sum(total_amount), 0), 2),
-         round(coalesce(sum(case
-           when status in ('تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق') then 0
-           else expected_total_amount
-         end), 0), 2),
+         round(coalesce(sum(expected_total_amount), 0), 2),
          round(coalesce(sum(paid_amount), 0), 2)
     into delivered_total, pending_total, order_paid_total
   from public.orders
@@ -6397,7 +6420,10 @@ begin
     from public.orders as factory_order
     where factory_order.customer_id = matched_client.id
       and factory_order.archived_at is null
-      and factory_order.status not in ('تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق')
+      and (
+        factory_order.total_pieces <= 0
+        or factory_order.delivered_pieces < factory_order.total_pieces
+      )
   ) then
     raise exception 'Client account settlement is blocked while goods remain undelivered.';
   end if;
@@ -6413,10 +6439,7 @@ begin
   opening_balance := coalesce(opening_balance, 0);
 
   select round(coalesce(sum(total_amount), 0), 2),
-         round(coalesce(sum(case
-           when status in ('تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق') then 0
-           else expected_total_amount
-         end), 0), 2),
+         round(coalesce(sum(expected_total_amount), 0), 2),
          round(coalesce(sum(paid_amount), 0), 2)
     into delivered_total, pending_total, order_paid_total
   from public.orders

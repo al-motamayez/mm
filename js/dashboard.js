@@ -608,8 +608,16 @@ async function readDashboardData(session) {
       .reduce((maximum, stage) => Math.max(maximum, Number(stage.completed_quantity || 0)), 0);
     const originalQuantity = Number(order.original_total_pieces ?? order.total_pieces ?? 0);
     const deliveredPieces = Number(order.delivered_pieces || 0);
+    const recordedDeliveryPieces = data.deliveries
+      .filter((delivery) => delivery.order_id === order.id)
+      .reduce((total, delivery) => total + Number(delivery.quantity || 0), 0);
+    const deliveredQuantityComplete = Number(order.total_pieces || 0) > 0
+      && Math.max(deliveredPieces, recordedDeliveryPieces) >= Number(order.total_pieces);
     const storedStatus = factoryOrderDeliveredStatus(order.delivery_status)
-      ? "تم التسليم"
+      || factoryOrderDeliveredStatus(order.status)
+      ? deliveredQuantityComplete || Number(order.total_pieces || 0) <= 0
+        ? "تم التسليم"
+        : "جاهز للتسليم"
       : order.status || "";
     const sewingStageStatus = sewingStage?.status || "";
     const effectiveStatus = effectiveFactoryOrderStatus({
@@ -659,14 +667,8 @@ async function readDashboardData(session) {
       quantityDifference: deliveredPieces - originalQuantity,
       pricePerPiece: Number(order.price_per_piece || 0),
       totalAmount: Number(order.total_amount || 0),
-      expectedAmount: factoryOrderFullyDelivered({
-        ...order,
-        quantity: order.total_pieces,
-        deliveredPieces
-      })
-        ? 0
-        : Number(order.expected_total_amount)
-          || Math.max(Number(order.total_pieces || 0) - deliveredPieces, 0) * Number(order.price_per_piece || 0),
+      expectedAmount: Number(order.expected_total_amount
+        ?? Math.max(Number(order.total_pieces || 0) - deliveredPieces, 0) * Number(order.price_per_piece || 0)),
       operationalExpenses: Number(order.operational_expenses || 0),
       expenseEntries: data.orderExpenses.filter((expense) => expense.order_id === order.id),
       paidAmount: Number(order.paid_amount || 0),
@@ -954,18 +956,13 @@ function factoryOrderDeliveredStatus(status) {
 }
 
 function factoryOrderFullyDelivered(order) {
-  const statuses = [order.deliveryStatus, order.delivery_status, order.storedStatus, order.status]
-    .map((status) => String(status || "").trim())
-    .filter(Boolean);
-  if (statuses.some(factoryOrderDeliveredStatus)) {
-    return true;
-  }
-  if (statuses.length) return false;
   const quantity = Number(order.quantity ?? order.total_pieces ?? 0);
   const deliveredPieces = Number(order.deliveredPieces ?? order.delivered_pieces ?? 0);
   const recordedDeliveryPieces = (order.deliveryHistory || order.deliveries || [])
     .reduce((total, delivery) => total + Number(delivery.quantity || 0), 0);
-  return quantity > 0 && Math.max(deliveredPieces, recordedDeliveryPieces) >= quantity;
+  if (quantity > 0) return Math.max(deliveredPieces, recordedDeliveryPieces) >= quantity;
+  return [order.deliveryStatus, order.delivery_status, order.storedStatus, order.status]
+    .some(factoryOrderDeliveredStatus);
 }
 
 function effectiveFactoryOrderStatus(order) {
@@ -2248,10 +2245,8 @@ function clientAccountSummary(client, data) {
   const latestSettlement = settlements[0] || null;
   const openingBalance = roundMoney(latestSettlement?.balance || 0);
   const orders = data.models.filter((order) => order.customerId === client.id && !order.archivedAt);
-  const deliveredOrders = orders.filter(factoryOrderFullyDelivered);
-  const undeliveredOrders = orders.filter((order) => !factoryOrderFullyDelivered(order));
-  const deliveredTotal = sumMoney(deliveredOrders.map((order) => Number(order.totalAmount)));
-  const expectedTotal = sumMoney(undeliveredOrders.map((order) => addMoney(order.totalAmount, order.expectedAmount)));
+  const deliveredTotal = sumMoney(orders.map((order) => Number(order.totalAmount)));
+  const expectedTotal = sumMoney(orders.map((order) => order.expectedAmount));
   const orderPaid = sumMoney(orders.map((order) => order.paidAmount));
   const periodStart = client.account_period_started_at || latestSettlement?.date || null;
   const payments = data.payments.filter((payment) =>
@@ -2319,7 +2314,7 @@ function pendingGoodsBreakdown(summary) {
     ? [{
       label: summary.clientName || "عميل",
       note: summary.hasUndeliveredGoods
-        ? `رصيد مستحق عند استلام البضاعة · ${summary.orders.filter((order) => !factoryOrderFullyDelivered(order)).length} طلب غير مسلّم`
+        ? `رصيد مستحق عند استلام البضاعة · ${summary.orders.filter((order) => order.expectedAmount > 0 || !factoryOrderFullyDelivered(order)).length} طلب غير مسلّم`
         : "قيمة متبقية لبضاعة غير مسلّمة بعد خصم الدفعات المقدمة",
       value: money(summary.pendingGoodsBalance)
     }]
@@ -4220,10 +4215,8 @@ function clientView(data, session) {
     || new Date(item._createdAt || item.created_at || item.date).getTime()
       >= new Date(latestSettlement.date || latestSettlement._createdAt).getTime()
   );
-  const deliveredOrders = currentOrders.filter(factoryOrderFullyDelivered);
-  const undeliveredOrders = currentOrders.filter((order) => !factoryOrderFullyDelivered(order));
-  const totalAmount = sumMoney(deliveredOrders.map((item) => Number(item.totalAmount)));
-  const expectedTotal = sumMoney(undeliveredOrders.map((item) => addMoney(item.totalAmount, item.expectedAmount)));
+  const totalAmount = sumMoney(currentOrders.map((item) => Number(item.totalAmount)));
+  const expectedTotal = sumMoney(currentOrders.map((item) => item.expectedAmount));
   const periodStart = latestSettlement?.date || latestSettlement?._createdAt || null;
   const accountAdjustments = data.accountAdjustments.filter((entry) =>
     entry._ownerId === session.accountId
@@ -9605,20 +9598,24 @@ function bindActions(session) {
     const hasEarlierDeliveries = Boolean(order.deliveryHistory?.length || order.deliveredPieces > 0);
     deliveryForm.elements.orderId.value = order.id;
     deliveryForm.elements.finalize.value = "true";
-    deliveryForm.elements.quantity.min = hasEarlierDeliveries ? "0" : "1";
+    deliveryForm.elements.quantity.min = hasEarlierDeliveries && order.remainingPieces === 0 ? "0" : "1";
     deliveryForm.elements.quantity.max = hasEarlierDeliveries ? String(order.remainingPieces) : String(order.quantity);
     deliveryModalTitle.textContent = "تسوية وإغلاق الطلب";
     settlementChoiceFields.forEach((field) => { field.hidden = false; });
     if (hasEarlierDeliveries) {
-      settlementChoice.innerHTML = `<option value="close-current">إغلاق على ${order.deliveredPieces} قطعة مسلّمة</option>${order.remainingPieces > 0 ? `<option value="deliver-remainder">تسليم المتبقي (${order.remainingPieces} قطعة) ثم الإغلاق</option>` : ""}`;
-      settlementChoice.value = "close-current";
-      deliveryModalDescription.textContent = `سبق تسجيل ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.deliveredPieces)} قطعة. اختر إغلاق الطلب على الكمية المسلّمة أو تسليم جميع القطع المتبقية ثم الإغلاق.`;
+      settlementChoice.innerHTML = order.remainingPieces > 0
+        ? `<option value="deliver-remainder">تسليم جميع القطع المتبقية (${order.remainingPieces} قطعة) ثم الإغلاق</option>`
+        : `<option value="close-current">اكتمل تسليم جميع القطع (${order.deliveredPieces} قطعة)</option>`;
+      settlementChoice.value = order.remainingPieces > 0 ? "deliver-remainder" : "close-current";
+      deliveryModalDescription.textContent = order.remainingPieces > 0
+        ? `سبق تسجيل ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.deliveredPieces)} قطعة. يجب تسليم جميع القطع المتبقية قبل إغلاق الطلب.`
+        : `تم تسجيل تسليم كامل العدد (${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.deliveredPieces)} قطعة). يمكنك الآن إغلاق الطلب.`;
       deliveryQuantityLabel.textContent = "كمية الدفعة الأخيرة";
       deliverySubmitButton.textContent = "تسوية وإغلاق الطلب";
     } else {
-      settlementChoice.innerHTML = `<option value="full">تسليم كامل العدد (${order.quantity} قطعة)</option>${order.quantity > 1 ? '<option value="partial">تسجيل دفعة أولى جزئية</option>' : ""}`;
+      settlementChoice.innerHTML = `<option value="full">تسليم كامل العدد (${order.quantity} قطعة)</option>`;
       settlementChoice.value = "full";
-      deliveryModalDescription.textContent = `لم تُسجل دفعات سابقة. يمكنك تسليم العدد كاملاً (${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity)} قطعة) أو إدخال كمية أول دفعة جزئية. سيُغلق الطلب بعد التسوية.`;
+      deliveryModalDescription.textContent = `لم تُسجل دفعات سابقة. يجب تسجيل استلام كامل العدد (${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity)} قطعة) قبل إغلاق الطلب.`;
       deliveryQuantityLabel.textContent = "كمية التسليم";
       deliverySubmitButton.textContent = "تسليم وإغلاق الطلب";
     }
@@ -9674,14 +9671,12 @@ function bindActions(session) {
     if (finalize) {
       const hasEarlierDeliveries = Boolean(order.deliveryHistory?.length || order.deliveredPieces > 0);
       const validFinalQuantity = hasEarlierDeliveries
-        ? quantity === 0 || quantity === order.remainingPieces
-        : quantity > 0 && quantity <= order.quantity;
-      if (!validFinalQuantity
-          || (!hasEarlierDeliveries && settlementChoice.value === "full" && quantity !== order.quantity)
-          || (!hasEarlierDeliveries && settlementChoice.value === "partial" && quantity >= order.quantity)) {
+        ? quantity === order.remainingPieces
+        : quantity === order.quantity;
+      if (!validFinalQuantity) {
         window.factoryUI.toast(hasEarlierDeliveries
-          ? "اختر إغلاق الكمية المسلّمة أو تسليم جميع القطع المتبقية."
-          : "اختر التسليم الكامل أو أدخل كمية أقل من العدد الكلي كدفعة جزئية.", "error");
+          ? "لا يمكن إغلاق الطلب قبل تسليم جميع القطع المتبقية."
+          : "لا يمكن إغلاق الطلب إلا بعد تسجيل تسليم كامل العدد.", "error");
         return;
       }
     } else if (quantity > order.remainingPieces) {
