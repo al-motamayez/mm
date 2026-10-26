@@ -372,7 +372,7 @@ async function readDashboardData(session) {
       .select("id, source_order_id, catalog_model_id, customer_id, requested_by, status, completed_story_id, fabric_id, roll_details, operational_notes, archived_at, created_at, submitted_at")
       .order("created_at", { ascending: false })
     : Promise.resolve({ data: [], error: null });
-  const modelCatalogPromise = ["admin", "cutting"].includes(session.role)
+  const modelCatalogPromise = ["admin", "cutting", "sewing"].includes(session.role)
     ? supabaseClient.from("factory_model_catalog")
       .select("id, customer_id, model_name, client_model_code, model_serial, factory_model_code, model_image_url, archived_at, created_at")
       .order("created_at", { ascending: false })
@@ -3710,6 +3710,7 @@ function modelRegistryEntries(data) {
 
 function modelRegistryView(data, allowRepeat = false, detailsKind = "cutting", canRequestCut = false) {
   const entries = modelRegistryEntries(data);
+  const sewingView = detailsKind === "sewing";
   const customerOptions = data.clients.map((client) =>
     `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)}${client.brand_name ? ` · ${escapeHtml(client.brand_name)}` : ""}</option>`
   ).join("");
@@ -3720,10 +3721,12 @@ function modelRegistryView(data, allowRepeat = false, detailsKind = "cutting", c
     <header class="production-compact-heading">${canRequestCut
       ? catalogModelImageControl(catalogModel || orders[0])
       : modelImageMarkup(model.modelImageUrls || model.modelImageUrl)}<h3>${escapeHtml(model.name || "موديل بدون اسم")}</h3></header>
-    <strong class="production-compact-total">${orders.length ? `${new Intl.NumberFormat("ar-EG-u-nu-latn").format(orders.reduce((sum, order) => sum + Number(order.quantity || 0), 0))} قطعة` : "بانتظار طلب القصة الأولى"}</strong>
+    ${sewingView
+      ? `<p class="model-registry-code">كود الموديل بالنظام: ${escapeHtml(code)}</p>`
+      : `<strong class="production-compact-total">${orders.length ? `${new Intl.NumberFormat("ar-EG-u-nu-latn").format(orders.reduce((sum, order) => sum + Number(order.quantity || 0), 0))} قطعة` : "بانتظار طلب القصة الأولى"}</strong>
     <p class="model-registry-code">كود الموديل بالنظام: ${escapeHtml(code)}${model.clientModelCode ? ` · كود العميل: ${escapeHtml(model.clientModelCode)}` : ""}</p>
-    <div class="production-compact-facts"><div><span>الألوان</span>${colorSummaryMarkup(model.colors, model.colorNames, model.colorPlyData)}</div><div><span>المقاسات</span>${sizeBadgesMarkup(model.sizes)}</div></div>
-    <div class="form-actions">${productionDetailsButton(detailsKind, detailsKind === "sewing" ? sewingDetailsProjection(model) : model)}
+    <div class="production-compact-facts"><div><span>الألوان</span>${colorSummaryMarkup(model.colors, model.colorNames, model.colorPlyData)}</div><div><span>المقاسات</span>${sizeBadgesMarkup(model.sizes)}</div></div>`}
+    ${sewingView ? "" : `<div class="form-actions">${productionDetailsButton(detailsKind, detailsKind === "sewing" ? sewingDetailsProjection(model) : model)}
       ${allowRepeat
         && orders.length
         ? `<button class="button button-primary" type="button" data-repeat-cut="${escapeHtml(orders[0].id)}" data-model-code="${escapeHtml(code)}">تكرار القصة / قص جديد</button>`
@@ -3733,7 +3736,7 @@ function modelRegistryView(data, allowRepeat = false, detailsKind = "cutting", c
         : ""}
       ${canRequestCut && catalogModel ? `<button class="row-action order-delete-action" type="button" data-delete-factory-model="${escapeHtml(catalogModel.id)}">حذف / أرشفة الموديل</button>` : ""}
       <a class="row-action" href="#cutting-history">سجل القصات</a>
-    </div>
+    </div>`}
   </article>`).join("");
   return panel("سجل الموديلات", `${registrationForm}${cards
     ? `<div class="cutting-story-list">${cards}</div>`
@@ -3854,18 +3857,17 @@ function cuttingHistoryView(data, allowRepeat = false, sewingView = false, canMa
         : "";
       return `<tr>
       <td><span class="register-model-cell">${modelImageMarkup(cut.modelImageUrl || cut.modelImageUrls, `صورة الموديل ${cut.model}` , "register-thumbnail") || '<span class="register-thumbnail-placeholder" aria-hidden="true">▣</span>'}<span>${escapeHtml(cut.model)}</span></span></td><td>${escapeHtml(cut.factoryModelCode || "—")}</td>
-      <td>${escapeHtml(cut.clientModelCode || "—")}</td><td>${escapeHtml(cut.client || "—")}</td>
-      ${sewingView ? "" : `<td>${escapeHtml(cut.fabric || "—")} · ${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(cut.fabricQuantity || 0)} ${escapeHtml(cut.fabricUnit || "")}</td><td>${cut.layerCount || 0}</td>`}
-      <td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(cut.cut || cut.total || 0)}</td>
-      <td>${escapeHtml(cut.status || cut.orderStatus || "—")}</td>
-      <td><div class="form-actions">${productionDetailsButton(sewingView ? "sewing-history" : "cutting", sewingView ? sewingDetailsProjection(cut) : cut)}${managementAction}${allowRepeat
+      ${sewingView ? "" : `<td>${escapeHtml(cut.clientModelCode || "—")}</td><td>${escapeHtml(cut.client || "—")}</td><td>${escapeHtml(cut.fabric || "—")} · ${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(cut.fabricQuantity || 0)} ${escapeHtml(cut.fabricUnit || "")}</td><td>${cut.layerCount || 0}</td>`}
+      ${sewingView ? "" : `<td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(cut.cut || cut.total || 0)}</td>
+      <td>${escapeHtml(cut.status || cut.orderStatus || "—")}</td>`}
+      ${sewingView ? "" : `<td><div class="form-actions">${productionDetailsButton("cutting", cut)}${managementAction}${allowRepeat
         ? `<button type="button" class="row-action" data-repeat-cut="${escapeHtml(cut.order)}" data-model-code="${escapeHtml(cut.factoryModelCode || "")}">تكرار القصة</button>`
-        : ""}</div></td>
+        : ""}</div></td>`}
     </tr>`;
     });
   return panel("سجل القصات المنفذة", rows.length
     ? table(sewingView
-      ? ["الموديل","كود النظام","كود العميل","العميل","القطع","الحالة","الإجراء"]
+      ? ["الموديل","كود النظام"]
       : ["الموديل","كود النظام","كود العميل","العميل","الخامة والكمية","الراقات","القطع","الحالة","الإجراء"], rows)
     : '<div class="empty-state">لا توجد قصات مسجلة بعد.</div>');
 }
@@ -4059,15 +4061,15 @@ function cuttingPersonalAccountView(data, session) {
       : '<div class="empty-state">لا توجد تصفيات محفوظة لحسابك.</div>')}`;
 }
 
-function sewingOrderRows(orders, actionLabel = "", action = "", allowEdit = true) {
+function sewingOrderRows(orders, actionLabel = "", action = "", compact = false) {
   return orders.length
     ? `<div class="sewing-order-grid">${orders.map((item) => {
-      const canEdit = allowEdit && item.stageStatus !== "مكتمل";
+      const canEdit = !compact && item.stageStatus !== "مكتمل";
       return `<article class="sewing-order-card production-compact-card">
-      <header class="production-compact-heading">${modelImageMarkup(item.modelImageUrls || item.modelImageUrl)}<h3>${escapeHtml(item.model)}</h3>${statusTag(item.stageStatus === "مكتمل" && item.orderStatus ? item.orderStatus : item.status)}</header>
-      <strong class="production-compact-total">${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.target)} قطعة</strong>
-      <div class="production-compact-facts"><div><span>الألوان</span>${colorSummaryMarkup(item.colors, item.colorNames, item.colorPlyData)}</div><div><span>المقاسات</span>${sizeBadgesMarkup(item.sizes)}</div></div>
-      <div class="form-actions">${productionDetailsButton("sewing", sewingDetailsProjection(item))}${canEdit ? `<button class="button button-secondary" type="button" data-open-sewing-editor="${escapeHtml(item.order)}">تعديل</button>` : ""}${action ? `<button class="button button-primary" type="button" data-sewing-action="${action}" data-sewing-order="${escapeHtml(item.order)}">${actionLabel}</button>` : ""}</div>
+      <header class="production-compact-heading">${modelImageMarkup(item.modelImageUrls || item.modelImageUrl)}<div class="sewing-model-monitor-info"><h3>${escapeHtml(item.model)}</h3><p>كود الموديل: <strong>${escapeHtml(item.factoryModelCode || "—")}</strong></p></div>${statusTag(item.stageStatus === "مكتمل" && item.orderStatus ? item.orderStatus : item.status)}</header>
+      ${compact ? "" : `<strong class="production-compact-total">${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.target)} قطعة</strong>
+      <div class="production-compact-facts"><div><span>الألوان</span>${colorSummaryMarkup(item.colors, item.colorNames, item.colorPlyData)}</div><div><span>المقاسات</span>${sizeBadgesMarkup(item.sizes)}</div></div>`}
+      <div class="form-actions">${compact ? "" : `${productionDetailsButton("sewing", sewingDetailsProjection(item))}${canEdit ? `<button class="button button-secondary" type="button" data-open-sewing-editor="${escapeHtml(item.order)}">تعديل</button>` : ""}`}${action ? `<button class="button button-primary" type="button" data-sewing-action="${action}" data-sewing-order="${escapeHtml(item.order)}">${actionLabel}</button>` : ""}</div>
     </article>
     ${canEdit ? `<div class="modal-backdrop sewing-editor-modal" data-sewing-editor-modal="${escapeHtml(item.order)}" hidden>
       <section class="modal-card production-editor-modal-card" role="dialog" aria-modal="true" aria-label="تعديل بيانات الخياطة">
@@ -4097,14 +4099,36 @@ function sewingView(data) {
     ["before_cutting", "waiting_sewing", "unclassified"].includes(factoryOrderPipelineCategory(order))
     && !["قيد الخياطة", "قيد التنفيذ", "مكتمل"].includes(order.sewingStageStatus)
   );
+  const activeModelCodes = new Set(activeOrders.map((order) => order.factoryModelCode).filter(Boolean));
+  const catalogOnlyModels = (data.modelCatalog || [])
+    .filter((model) => !model.archived_at && !activeModelCodes.has(model.factory_model_code))
+    .map((model) => ({
+      id: model.id,
+      name: model.model_name || "موديل بدون اسم",
+      factoryModelCode: model.factory_model_code || "",
+      modelImageUrl: model.model_image_url || DEFAULT_MODEL_IMAGE_URL,
+      status: "قيد الانتظار"
+    }));
   const sewingWorkflow = `<div class="stats-grid">${pipelineGroups.map((group) => stat(group.label, group.orders.length)).join("")}</div>
-    ${panel("قصّات متاحة للبدء", sewingOrderRows(available, "بدء الخياطة", "start", false), "لا يبدأ العمل إلا بعد استلام المشرف للقصّة")}
-    ${panel("قصّات قيد الخياطة الفعلية", sewingOrderRows(inProgress, "إنهاء الخياطة", "finish", false))}
-    ${panel("قصّات مكتملة الخياطة", sewingOrderRows(completed, "", "", false), "تم تسليمها للمرحلة التالية")}`;
-  const modelMonitoring = notStartedOrders.length
-    ? `<div class="sewing-model-monitor-grid">${notStartedOrders.map((order) => `<article class="sewing-model-monitor-card">
-        ${modelImageMarkup(order.modelImageUrls || order.modelImageUrl)}
-        <div class="sewing-model-monitor-info"><h3>${escapeHtml(order.name || "موديل بدون اسم")}</h3><p>كود الموديل: <strong>${escapeHtml(order.factoryModelCode || "—")}</strong></p><span class="status">${escapeHtml(order.displayStatus || order.status || "قيد الإنشاء")}</span></div>
+    ${panel("قصّات متاحة للبدء", sewingOrderRows(available, "بدء الخياطة", "start", true), "لا يبدأ العمل إلا بعد استلام المشرف للقصّة")}
+    ${panel("قصّات قيد الخياطة الفعلية", sewingOrderRows(inProgress, "إنهاء الخياطة", "finish", true))}
+    ${panel("قصّات مكتملة الخياطة", sewingOrderRows(completed, "", "", true), "تم تسليمها للمرحلة التالية")}`;
+  const monitoredModels = [
+    ...notStartedOrders.map((order) => ({
+      id: order.id,
+      name: order.name || "موديل بدون اسم",
+      factoryModelCode: order.factoryModelCode || "",
+      modelImageUrls: order.modelImageUrls || order.modelImageUrl,
+      status: ["before_cutting", "unclassified"].includes(factoryOrderPipelineCategory(order))
+        ? "قيد الانتظار"
+        : order.displayStatus || order.status || "قيد الانتظار"
+    })),
+    ...catalogOnlyModels
+  ];
+  const modelMonitoring = monitoredModels.length
+    ? `<div class="sewing-model-monitor-grid">${monitoredModels.map((model) => `<article class="sewing-model-monitor-card">
+        ${modelImageMarkup(model.modelImageUrls || model.modelImageUrl)}
+        <div class="sewing-model-monitor-info"><h3>${escapeHtml(model.name)}</h3><p>كود الموديل: <strong>${escapeHtml(model.factoryModelCode || "—")}</strong></p><span class="status">${escapeHtml(model.status)}</span></div>
       </article>`).join("")}</div>`
     : '<div class="empty-state">لا توجد موديلات بانتظار بدء الخياطة.</div>';
   return `<div class="client-management-tabs sewing-dashboard-tabs" role="tablist" aria-label="شاشة الخياطة">

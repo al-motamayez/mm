@@ -3734,11 +3734,13 @@ create policy "Admins and cutting supervisors read cutting request reservations"
     or public.has_active_factory_role(array['cutting'])
   );
 drop policy if exists "Admins and cutting supervisors read model catalog" on public.factory_model_catalog;
-create policy "Admins and cutting supervisors read model catalog"
+drop policy if exists "Admins, cutting and sewing supervisors read model catalog" on public.factory_model_catalog;
+create policy "Admins, cutting and sewing supervisors read model catalog"
   on public.factory_model_catalog for select to authenticated
   using (
     public.is_active_factory_admin()
     or public.has_active_factory_role(array['cutting'])
+    or public.has_active_factory_role(array['sewing'])
   );
 alter table public.factory_live_signals enable row level security;
 alter table public.factory_auth_events enable row level security;
