@@ -2482,54 +2482,21 @@ function clientAccountSummary(client, data) {
 }
 
 function pendingGoodsBreakdown(summary) {
-  let remainingCreditOffset = summary.pendingGoodsCreditOffset;
-  const balances = [
-    ...(summary.openingPendingBalance > 0
-      ? [{
-        label: `${summary.clientName || "عميل"} · بضاعة غير مسلّمة من رصيد سابق`,
-        note: "رصيد مرحّل لبضاعة لم يثبت تسليمها",
-        balance: summary.openingPendingBalance
-      }]
-      : []),
-    ...[...summary.orders]
-      .sort((left, right) => String(left.createdAt || left.id).localeCompare(String(right.createdAt || right.id)))
-      .filter((order) => order.pendingBalance > 0)
-      .map((order) => ({
-        label: `${summary.clientName || "عميل"} · ${order.name || order.modelNumber || "طلب بدون اسم"}`,
-        note: `${order.factoryModelCode ? `كود ${order.factoryModelCode} · ` : ""}${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity || 0)} قطعة · ${order.displayStatus || order.status || "لم يتم التسليم"}`,
-        balance: order.pendingBalance
-      }))
-  ];
-  const details = balances.map((entry) => {
-    const offset = Math.min(remainingCreditOffset, entry.balance);
-    remainingCreditOffset = subtractMoney(remainingCreditOffset, offset);
-    return {
-      label: entry.label,
-      note: `${entry.note} · بعد خصم الدفعات والرصيد الدائن`,
-      value: money(subtractMoney(entry.balance, offset)),
-      balance: subtractMoney(entry.balance, offset)
-    };
-  }).filter((entry) => entry.balance > 0)
-    .map(({ label, note, value }) => ({ label, note, value }));
-  return details;
+  return summary.netPendingGoodsBalance > 0
+    ? [{
+      label: summary.clientName || "عميل",
+      value: money(summary.netPendingGoodsBalance)
+    }]
+    : [];
 }
 
 function deliveredDebtBreakdown(summary) {
-  const details = summary.orders
-    .filter((order) => order.deliveredBalance > 0)
-    .map((order) => ({
-      label: `${summary.clientName || "عميل"} · ${order.name || order.modelNumber || "طلب بدون اسم"}`,
-      note: `${order.factoryModelCode ? `كود ${order.factoryModelCode} · ` : ""}الحالة ${canonicalFactoryOrderStatus(order.status)} · بعد الدفعات`,
-      value: money(order.deliveredBalance)
-    }));
-  if (summary.accountBalance > 0) {
-    details.push({
-      label: `${summary.clientName || "عميل"} · رصيد مرحّل / حركات الحساب`,
-      note: "رصيد سابق أو حركات حساب لا تخص طلباً غير مستلم",
-      value: money(summary.accountBalance)
-    });
-  }
-  return details;
+  return summary.receivableBalance > 0
+    ? [{
+      label: summary.clientName || "عميل",
+      value: money(summary.receivableBalance)
+    }]
+    : [];
 }
 
 function clientOrderLedgerPanel(summary) {
