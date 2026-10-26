@@ -7193,7 +7193,7 @@ create policy "Admins manage worker production submissions"
 drop policy if exists "Workers read own production submissions" on public.factory_worker_production_submissions;
 create policy "Workers read own production submissions"
   on public.factory_worker_production_submissions for select to authenticated
-  using (worker_id = auth.uid() and public.has_active_factory_role(array['worker']));
+  using (worker_id = auth.uid() and public.has_active_factory_role(array['worker', 'cutting', 'sewing']));
 drop policy if exists "Permitted workers submit own production" on public.factory_worker_production_submissions;
 create policy "Permitted workers submit own production"
   on public.factory_worker_production_submissions for insert to authenticated
@@ -7214,7 +7214,7 @@ create policy "Permitted workers submit own production"
     and exists (
       select 1 from public.users
       where id = auth.uid()
-        and role = 'worker'
+        and role in ('worker', 'cutting', 'sewing')
         and status = 'active'
         and can_submit_production
         and name = factory_worker_production_submissions.worker_name
@@ -7233,7 +7233,7 @@ create policy "Permitted workers update own pending production"
     and exists (
       select 1 from public.users
       where id = auth.uid()
-        and role = 'worker'
+        and role in ('worker', 'cutting', 'sewing')
         and status = 'active'
         and can_submit_production
         and name = factory_worker_production_submissions.worker_name
@@ -7257,7 +7257,7 @@ create policy "Permitted workers update own pending production"
     and exists (
       select 1 from public.users
       where id = auth.uid()
-        and role = 'worker'
+        and role in ('worker', 'cutting', 'sewing')
         and status = 'active'
         and can_submit_production
         and name = factory_worker_production_submissions.worker_name
@@ -7899,7 +7899,7 @@ create policy "Factory staff upload model images"
         and exists (
           select 1 from public.users
           where id = auth.uid()
-            and role = 'worker'
+            and role in ('worker', 'cutting', 'sewing')
             and status = 'active'
             and can_submit_production
         )
@@ -7924,12 +7924,12 @@ create policy "Factory staff delete eligible model images"
     and (
       public.has_active_factory_role(array['admin'])
       or (
-        public.has_active_factory_role(array['worker'])
+        public.has_active_factory_role(array['worker', 'cutting', 'sewing'])
         and name like ('worker-submissions/' || auth.uid()::text || '/%')
         and exists (
           select 1 from public.users
           where id = auth.uid()
-            and role = 'worker'
+            and role in ('worker', 'cutting', 'sewing')
             and status = 'active'
             and can_submit_production
         )

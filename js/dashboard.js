@@ -6,6 +6,8 @@ let usersTableHasStatus = false;
 let selectedClientId = "";
 let clientManagementTab = "summary";
 let activeClientProfileTab = "overview";
+let activeSystemTab = "requests";
+let activeSystemLogTab = "workforce";
 let realtimeChannel = null;
 let presenceChannel = null;
 let realtimeRefreshTimer = null;
@@ -182,7 +184,8 @@ async function readSession() {
     phone: account.phone || "",
     roleName: roleNames[account.role],
     jobTitle: account.job_title || "",
-    canSubmitProduction: account.role === "worker" && account.can_submit_production === true
+    canSubmitProduction: ["worker", "cutting", "sewing"].includes(account.role)
+      && account.can_submit_production === true
   };
   return session;
 }
@@ -342,7 +345,7 @@ async function readDashboardData(session) {
       .order("occurred_at", { ascending: false })
       .limit(100)
     : Promise.resolve({ data: [], error: null });
-  const productionSubmissionsPromise = ["admin", "worker"].includes(session.role)
+  const productionSubmissionsPromise = session.role === "admin" || session.canSubmitProduction
     ? supabaseClient.from("factory_worker_production_submissions")
       .select("id, worker_id, parent_submission_id, worker_name, job_title, model_name, model_number, quantity, colors, image_path, notes, status, created_at, updated_at")
       .order("created_at", { ascending: false })
@@ -3523,17 +3526,102 @@ function fabricStockView(data, isAdmin) {
 }
 
 function workerPermissionsView(users) {
-  const workers = users.filter((user) => user.roleKey === "worker");
-  const rows = workers.map((worker) => `<tr data-worker-permissions="${escapeHtml(worker.id)}">
-    <td>${escapeHtml(worker.name)}</td><td>${escapeHtml(worker.username)}</td>
-    <td><select name="jobTitle" aria-label="الدور أو المسمى الوظيفي للعامل">${WORKER_JOB_TITLES.map((title) => `<option value="${escapeHtml(title)}" ${title === (worker.jobTitle || "غير محدد") ? "selected" : ""}>${escapeHtml(title)}</option>`).join("")}</select></td>
+  const staff = users.filter((user) => ["worker", "cutting", "sewing"].includes(user.roleKey));
+  const rows = staff.map((worker) => `<tr data-worker-permissions="${escapeHtml(worker.id)}" data-account-role="${escapeHtml(worker.roleKey)}">
+    <td>${escapeHtml(worker.name)}</td><td>${escapeHtml(worker.username)}</td><td>${escapeHtml(worker.role)}</td>
+    <td>${worker.roleKey === "worker"
+      ? `<select name="jobTitle" aria-label="المسمى الوظيفي">${WORKER_JOB_TITLES.map((title) => `<option value="${escapeHtml(title)}" ${title === (worker.jobTitle || "غير محدد") ? "selected" : ""}>${escapeHtml(title)}</option>`).join("")}</select>`
+      : escapeHtml(worker.jobTitle || "—")}</td>
     <td><label class="permission-toggle"><input name="canSubmitProduction" type="checkbox" ${worker.canSubmitProduction ? "checked" : ""}><span>إذن تسليم القصات / تسليمات الأعداد</span></label></td>
     <td><button class="row-action" type="button" data-save-worker-permissions="${escapeHtml(worker.id)}">حفظ الصلاحيات</button></td>
   </tr>`);
-  return panel("إعدادات المستخدمين والصلاحيات · تسليم القصات والأعداد", workers.length
-    ? table(["العامل","اسم المستخدم","المسمى الوظيفي","إذن تسليم القصات / تسليمات الأعداد","إجراء"], rows)
-    : '<div class="empty-state">لا توجد حسابات عمال مفعّلة لإدارة صلاحياتها.</div>',
-  "هذا الإذن مستقل لكل عامل، ويُظهر له شاشة تسليم القصات والأعداد ويسمح بإرسالها للمراجعة فقط. العاملون والأقسام غير المصرح لهم لا تظهر لهم الشاشة ولا يمكنهم إرسال التسليمات؛ الاعتماد وربط العميل يظلان للإدارة.");
+  return panel("إعدادات المستخدمين والصلاحيات · تسليم القصات والأعداد", staff.length
+    ? table(["الاسم","اسم المستخدم","القسم","المسمى الوظيفي","إذن تسليم القصات / تسليمات الأعداد","إجراء"], rows)
+    : '<div class="empty-state">لا توجد حسابات عمال أو مشرفين مفعّلة لإدارة صلاحياتها.</div>',
+  "امنح هذا الإذن بشكل مستقل لأي عامل أو مشرف قص أو مشرف خياطة. تظهر شاشة التسليم للحسابات المفعّل لها الإذن فقط، وتبقى مراجعة التسليم واعتماده للإدارة.");
+}
+
+function findProductionSubmissionOrder(submission, orders) {
+  const normalize = (value) => String(value || "").trim().toLocaleLowerCase("ar");
+  const code = normalize(submission.model_number);
+  const name = normalize(submission.model_name);
+  const exactCodeMatches = code
+    ? orders.filter((order) => [order.clientModelCode, order.modelNumber].some((value) => normalize(value) === code))
+    : [];
+  if (exactCodeMatches.length === 1) return exactCodeMatches[0];
+  const exactNameMatches = name ? orders.filter((order) => normalize(order.name) === name) : [];
+  return exactNameMatches.length === 1 ? exactNameMatches[0] : null;
+}
+
+function findProductionSubmissionStory(submission, stories, matchedOrder) {
+  const normalize = (value) => String(value || "").trim().toLocaleLowerCase("ar");
+  const availableStories = stories.filter((story) => story.status === "sent_to_sewing" && !story.archived_at);
+  const customerStories = matchedOrder?.clientId
+    ? availableStories.filter((story) => story.customer_id === matchedOrder.clientId
+      || story.approved_order_id === matchedOrder.id
+      || story.source_order_id === matchedOrder.id)
+    : availableStories;
+  const code = normalize(submission.model_number);
+  const exactCodeMatches = code
+    ? customerStories.filter((story) => [story.model_number, story.factory_model_code]
+      .some((value) => normalize(value) === code))
+    : [];
+  if (exactCodeMatches.length === 1) return exactCodeMatches[0];
+  const name = normalize(submission.model_name);
+  const nameMatches = customerStories.filter((story) => normalize(story.model_name) === name);
+  return nameMatches.length === 1 ? nameMatches[0] : null;
+}
+
+function productionSubmissionComparisonMarkup(story, colors, actualQuantity) {
+  if (!story) return '<p class="muted">اختر قصة قصّ مرسلة للخياطة لعرض مقارنة الأعداد الأصلية مع الأعداد المستلمة.</p>';
+  const actualColors = Array.isArray(colors) ? colors : [];
+  const actualRows = actualColors.flatMap((entry) => {
+    const color = String(entry?.name || entry?.hex || entry?.color || "لون غير محدد");
+    const colorKey = String(entry?.hex || entry?.color || entry?.name || "لون غير محدد").toUpperCase();
+    const sizes = entry?.sizes && typeof entry.sizes === "object" ? entry.sizes : {};
+    return Object.entries(sizes).map(([size, count]) => ({
+      key: `${colorKey}\u0000${size}`,
+      color,
+      size,
+      count: Number(count || 0)
+    }));
+  });
+  const sizeData = parseSizeData(story.size_data);
+  const sizeCounts = sizeData.sizes.length
+    ? sizeData.sizes.reduce((counts, size) => {
+      counts[size] = Number(counts[size] || 0) + 1;
+      return counts;
+    }, {})
+    : Object.keys(sizeData.multiplicities).length
+      ? sizeData.multiplicities
+      : sizeData.counts;
+  const originalRows = Object.entries(sizeCounts).flatMap(([size, sizeCount]) =>
+    parseColorPlyData(story.color_ply_data).map((colorEntry) => ({
+      key: `${colorEntry.color}\u0000${size}`,
+      color: colorEntry.name || colorEntry.color,
+      size,
+      count: Number(colorEntry.plys || 0) * Number(sizeCount || 0)
+    }))
+  );
+  const originalQuantity = Number(story.total_pieces || 0);
+  const breakdownTotal = originalRows.reduce((sum, row) => sum + row.count, 0);
+  const aggregateRows = (rows) => rows.reduce((result, row) => {
+    const existing = result.get(row.key);
+    if (existing) existing.count += row.count;
+    else result.set(row.key, { ...row });
+    return result;
+  }, new Map());
+  const originalByKey = aggregateRows(originalRows);
+  const actualByKey = aggregateRows(actualRows);
+  const detailKeys = [...new Set([...originalByKey.keys(), ...actualByKey.keys()])];
+  const detailTable = detailKeys.length && breakdownTotal === originalQuantity
+    ? table(["اللون","المقاس","الأصل بالقصة","المستلم فعلياً"], detailKeys.map((key) => {
+      const original = originalByKey.get(key);
+      const actual = actualByKey.get(key);
+      return `<tr><td>${escapeHtml(original?.color || actual?.color || "—")}</td><td>${escapeHtml(original?.size || actual?.size || "—")}</td><td>${original?.count || 0}</td><td>${actual?.count || 0}</td></tr>`;
+    }))
+    : '<p class="muted">تعذر عرض توزيع القصة بأمان لعدم تطابق تفاصيل الألوان والمقاسات مع إجمالي القصة المسجل.</p>';
+  return `<div class="submission-comparison-totals"><div><span>العدد الأصلي بالقصة</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(originalQuantity)}</strong></div><div><span>العدد المستلم فعلياً</span><strong data-comparison-actual-total>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(actualQuantity || 0)}</strong></div><div><span>الفرق</span><strong data-comparison-difference>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(Number(actualQuantity || 0) - originalQuantity)}</strong></div></div>${detailTable}`;
 }
 
 function workerProductionReviewView(data) {
@@ -3542,10 +3630,17 @@ function workerProductionReviewView(data) {
   const confirmedRows = data.finishedGoods.map((item) =>
     `<tr><td>${escapeHtml(item.model_name)}${item.model_number ? `<small class="worker-model-number">${escapeHtml(item.model_number)}</small>` : ""}${data.productionSubmissions.find((submission) => submission.id === item.submission_id)?.parent_submission_id ? '<small class="submission-parent-note">تسليم تابع للتسليم السابق</small>' : ""}</td><td>${escapeHtml(data.clients.find((client) => client.id === item.customer_id)?.name || "—")}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.quantity)} قطعة</td><td>${workerProductionColorMarkup(item.colors)}</td><td>${modelImageMarkup(item.imageUrl, `صورة القطعة ${item.model_name}`, "submission-image-preview") || "—"}</td><td>${escapeHtml(item.worker_name)}</td><td>${formatDateTime(item.confirmed_at)}</td></tr>`
   );
-  const orderOptions = data.models.map((order) =>
-    `<option value="${escapeHtml(order.id)}" data-customer="${escapeHtml(order.clientId || "")}">${escapeHtml(order.name)} · ${escapeHtml(order.client || "بدون عميل")}</option>`
-  ).join("");
   const cards = pending.map((item) => {
+    const matchedOrder = findProductionSubmissionOrder(item, data.models);
+    const availableStories = data.cuttingStories.filter((story) => story.status === "sent_to_sewing" && !story.archived_at);
+    const matchedStory = findProductionSubmissionStory(item, availableStories, matchedOrder);
+    const orderOptions = data.models.map((order) =>
+      `<option value="${escapeHtml(order.id)}" data-customer="${escapeHtml(order.clientId || "")}"${matchedOrder?.id === order.id ? " selected" : ""}>${escapeHtml(order.name)} · ${escapeHtml(order.client || "بدون عميل")}</option>`
+    ).join("");
+    const storyOptions = availableStories.map((story) => {
+      const sourceOrder = data.models.find((order) => order.id === (story.approved_order_id || story.source_order_id));
+      return `<option value="${escapeHtml(story.id)}" data-customer="${escapeHtml(story.customer_id || sourceOrder?.clientId || "")}"${matchedStory?.id === story.id ? " selected" : ""}>${escapeHtml(story.model_name)} · ${escapeHtml(story.factory_model_code || story.model_number || "بدون كود")} · ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(story.total_pieces)} قطعة</option>`;
+    }).join("");
     const colors = Array.isArray(item.colors) ? item.colors : [];
     const initialColors = colors.map((entry) => typeof entry === "string" ? entry : entry.hex || entry.color || "")
       .filter((color) => /^#[0-9A-F]{6}$/i.test(color)).join(", ");
@@ -3564,15 +3659,16 @@ function workerProductionReviewView(data) {
       type: initialSizeType,
       counts: Object.fromEntries(initialSizeNames.map((size) => [size, "0"]))
     });
+    const matchedCustomerId = matchedOrder?.clientId || matchedStory?.customer_id;
     const clientOptions = data.clients.map((client) =>
-      `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)}${client.brand_name ? ` · ${escapeHtml(client.brand_name)}` : ""}</option>`
+      `<option value="${escapeHtml(client.id)}"${matchedCustomerId === client.id ? " selected" : ""}>${escapeHtml(client.name)}${client.brand_name ? ` · ${escapeHtml(client.brand_name)}` : ""}</option>`
     ).join("");
     return `<form class="worker-submission-review" data-worker-submission="${escapeHtml(item.id)}">
       <header>${modelImageMarkup(item.imageUrl, `صورة القطعة ${item.model_name}`, "submission-image-preview")}<div><h3>${escapeHtml(item.model_name)}</h3><p>${escapeHtml(item.worker_name)} · ${escapeHtml(item.job_title || "عامل")} · ${formatDateTime(item.created_at)}</p>${item.parentSubmission ? `<span class="submission-parent-note">تسليم تابع للتسليم السابق · ${escapeHtml(item.parentSubmission.model_name)} · ${formatDateTime(item.parentSubmission.created_at)}</span>` : ""}</div></header>
       <div class="form-grid">
         <label class="field"><span>الموديل / الوصف</span><input name="modelName" maxlength="160" value="${escapeHtml(item.model_name)}" required></label>
         <label class="field"><span>كود/رقم الموديل للعميل (اختياري)</span><input name="modelNumber" maxlength="120" value="${escapeHtml(item.model_number || "")}"></label>
-        <label class="field"><span>العدد المسلّم</span><input name="quantity" type="number" min="1" step="1" value="${Number(item.quantity)}" required></label>
+        <label class="field"><span>العدد المسلّم (محسوب من التوزيع)</span><input name="quantity" type="number" min="1" step="1" value="${Number(item.quantity)}" readonly required></label>
         ${colorPickerMarkup(initialColors, `worker-review-${item.id}`, initialColorNames)}
         ${sizePickerMarkup(initialSizeData, `worker-review-sizes-${item.id}`, false)}
         <div class="field worker-production-allocation"><label>توزيع الألوان على المقاسات</label><div data-worker-production-allocation>${workerProductionAllocationGridMarkup(colors.map((entry) => ({
@@ -3580,10 +3676,12 @@ function workerProductionReviewView(data) {
           name: typeof entry === "string" ? "" : String(entry.name || "")
         })).filter((entry) => /^#[0-9A-F]{6}$/.test(entry.color)), JSON.parse(initialSizeData), colors)}</div></div>
         <label class="field"><span>العميل</span><select name="customerId" required><option value="">اختر العميل</option>${clientOptions}</select></label>
-        <label class="field"><span>ربط بطلبية مسجلة (اختياري)</span><select name="orderId"><option value="">بدون ربط بطلبية</option>${orderOptions}</select></label>
+        <label class="field"><span>ربط بملف العميل والطلبية</span><select name="orderId"><option value="">بدون ربط بطلبية</option>${orderOptions}</select></label>
+        <label class="field"><span>قصة القص الأصلية للمقارنة</span><select name="storyId"><option value="">اختر قصة قصّ مرسلة للخياطة</option>${storyOptions}</select></label>
         <label class="field wide"><span>ملاحظات العامل</span><textarea name="notes" rows="2" maxlength="1000">${escapeHtml(item.notes || "")}</textarea></label>
       </div>
-      <div class="form-actions"><button class="row-action" type="button" data-save-production-submission="${escapeHtml(item.id)}">حفظ التعديلات</button><button class="button button-primary" type="button" data-confirm-production-submission="${escapeHtml(item.id)}">تأكيد واستلام النهائي</button><button class="button button-danger" type="button" data-reject-production-submission="${escapeHtml(item.id)}">رفض الطلب</button><button class="button button-secondary" type="button" data-delete-production-submission="${escapeHtml(item.id)}">حذف الطلب</button></div>
+      <section class="submission-comparison" data-submission-comparison>${productionSubmissionComparisonMarkup(matchedStory, colors, item.quantity)}</section>
+      <div class="form-actions"><button class="row-action" type="button" data-save-production-submission="${escapeHtml(item.id)}">حفظ التعديلات</button><button class="button button-primary" type="button" data-confirm-production-submission="${escapeHtml(item.id)}">اعتماد الأعداد واستلام النهائي</button><button class="button button-danger" type="button" data-reject-production-submission="${escapeHtml(item.id)}">رفض الطلب</button><button class="button button-secondary" type="button" data-delete-production-submission="${escapeHtml(item.id)}">حذف الطلب</button></div>
     </form>`;
   });
   const rejectedCards = rejected.map((item) =>
@@ -3611,6 +3709,24 @@ function adminView(data, accounts) {
   const paymentFilterOptions = data.clients
     .map((client) => `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)}</option>`)
     .join("");
+  const accountById = new Map([...data.users, ...accounts].map((account) => [account.id, account]));
+  const renderAuthEvents = (roleFilter) => {
+    const rows = data.authEvents
+      .filter((event) => {
+        const account = accountById.get(event.user_id);
+        return account && (roleFilter === "admin"
+          ? account.roleKey === "admin" || account.role === "admin"
+          : account.roleKey !== "admin" && account.role !== "admin");
+      })
+      .map((event) => {
+        const account = accountById.get(event.user_id);
+        const role = account.roleKey || account.role || "حساب غير محدد";
+        return `<tr><td>${escapeHtml(account.name || account.username || event.user_id)}</td><td>${escapeHtml(account.username || "—")}</td><td>${escapeHtml(roleNames[role] || role)}</td><td>${event.event_type === "signup" ? "إنشاء حساب" : "تسجيل دخول"}</td><td>${formatDateTime(event.occurred_at)}</td></tr>`;
+      });
+    return rows.length
+      ? table(["الاسم","اسم المستخدم","الفئة","نوع الحدث","وقت الحدث"], rows)
+      : '<div class="empty-state">لا توجد أحداث دخول ضمن هذا السجل.</div>';
+  };
   return `
     <section id="dashboard" class="dashboard-section">
       ${adminDashboardView(data)}<div class="stats-grid">${stat("إجمالي القطع", new Intl.NumberFormat("ar-EG-u-nu-latn").format(totalUnits), "قطعة")}${stat("المدفوعات المسجلة", money(paid), "إجمالي الدفعات")}${stat("طلبات الانصراف", data.leaves.filter((item) => item.status === "قيد المراجعة").length, "بانتظار المراجعة")}</div>
@@ -3680,7 +3796,7 @@ function adminView(data, accounts) {
       </div>
       <div data-finance-panel="ledger"${activeFinanceTab === "ledger" ? "" : " hidden"}>${cashLedgerView(data)}</div>
     </section>
-    <section id="workers-production" class="dashboard-section">${workerPermissionsView(data.users)}${workerProductionReviewView(data)}${panel("طلبات وأذونات الانصراف", table(["الموظف","التاريخ","السبب","الحالة","إجراء"], data.leaves.map((item, index) => `<tr><td>${escapeHtml(item.name)}</td><td>${formatRecordDate(item.date)}</td><td>${escapeHtml(item.reason)}</td><td>${statusTag(item.status)}</td><td>${item.status === "قيد المراجعة" ? `<button class="row-action" data-action="approve-leave" data-index="${index}" type="button">اعتماد</button> <button class="row-action" data-action="deny-leave" data-index="${index}" type="button">رفض</button>` : "—"}</td></tr>`)))}</section>
+    <section id="workers-production" class="dashboard-section">${workerProductionReviewView(data)}${panel("طلبات وأذونات الانصراف", table(["الموظف","التاريخ","السبب","الحالة","إجراء"], data.leaves.map((item, index) => `<tr><td>${escapeHtml(item.name)}</td><td>${formatRecordDate(item.date)}</td><td>${escapeHtml(item.reason)}</td><td>${statusTag(item.status)}</td><td>${item.status === "قيد المراجعة" ? `<button class="row-action" data-action="approve-leave" data-index="${index}" type="button">اعتماد</button> <button class="row-action" data-action="deny-leave" data-index="${index}" type="button">رفض</button>` : "—"}</td></tr>`)))}</section>
     ${workforceView(data)}
     ${fabricStockView(data, true)}
     <section id="clients" class="dashboard-section">
@@ -3700,14 +3816,34 @@ function adminView(data, accounts) {
     </section>
     <section id="client-details" class="dashboard-section">${data.clients.some((client) => client.id === selectedClientId) ? clientDetailsView(data.clients.find((client) => client.id === selectedClientId), data) : '<div class="empty-state">اختر عميلاً لعرض تفاصيل حسابه.</div>'}</section>
     <section id="accounts" class="dashboard-section">
+      <div class="client-management-tabs system-management-tabs" role="tablist" aria-label="الطلبات والمستخدمون والنظام">
+        <button type="button" role="tab" aria-selected="${activeSystemTab === "requests"}" class="client-management-tab${activeSystemTab === "requests" ? " active" : ""}" data-system-tab="requests">طلبات وحسابات المستخدمين</button>
+        <button type="button" role="tab" aria-selected="${activeSystemTab === "permissions"}" class="client-management-tab${activeSystemTab === "permissions" ? " active" : ""}" data-system-tab="permissions">الصلاحيات</button>
+        <button type="button" role="tab" aria-selected="${activeSystemTab === "logs"}" class="client-management-tab${activeSystemTab === "logs" ? " active" : ""}" data-system-tab="logs">السجل</button>
+        <button type="button" role="tab" aria-selected="${activeSystemTab === "system"}" class="client-management-tab${activeSystemTab === "system" ? " active" : ""}" data-system-tab="system">النظام</button>
+      </div>
+      <div data-system-panel="requests"${activeSystemTab === "requests" ? "" : " hidden"}>
         ${panel("طلبات إنشاء الحسابات والموافقة", pendingAccountRows(accounts, data.clients), "اعتماد العميل يتم من هنا؛ أما حسابات العاملين والمشرفين فتبقى معلقة حتى إنشاء ملفها وربطها من تبويب العاملين.")}
         ${panel("حسابات المستخدمين", table(["الاسم","اسم المستخدم","الدور الوظيفي","الحالة","إجراء"], userRows(data.users)))}
-        ${panel("سجل تسجيل الدخول وطلبات التسجيل", table(["الحساب","نوع الحدث","وقت الحدث"], data.authEvents.map((entry) => {
-          const account = data.users.find((user) => user.id === entry.user_id)
-            || accounts.find((user) => user.id === entry.user_id);
-          return `<tr><td>${escapeHtml(account?.name || entry.user_id)}</td><td>${entry.event_type === "signup" ? "إنشاء حساب" : "تسجيل دخول"}</td><td>${formatDateTime(entry.occurred_at)}</td></tr>`;
-        })))}
+      </div>
+      <div data-system-panel="permissions"${activeSystemTab === "permissions" ? "" : " hidden"}>
+        ${workerPermissionsView(data.users)}
+      </div>
+      <div data-system-panel="logs"${activeSystemTab === "logs" ? "" : " hidden"}>
+        <div class="client-management-tabs system-log-tabs" role="tablist" aria-label="تصنيف سجلات الدخول">
+          <button type="button" role="tab" aria-selected="${activeSystemLogTab === "workforce"}" class="client-management-tab${activeSystemLogTab === "workforce" ? " active" : ""}" data-system-log-tab="workforce">العمال والعملاء</button>
+          <button type="button" role="tab" aria-selected="${activeSystemLogTab === "admin"}" class="client-management-tab${activeSystemLogTab === "admin" ? " active" : ""}" data-system-log-tab="admin">الإدارة</button>
+        </div>
+        <div data-system-log-panel="workforce"${activeSystemLogTab === "workforce" ? "" : " hidden"}>
+          ${panel("سجل دخول العمال والعملاء", renderAuthEvents("workforce"), "هذا السجل يستبعد حسابات الأدمن نهائياً.")}
+        </div>
+        <div data-system-log-panel="admin"${activeSystemLogTab === "admin" ? "" : " hidden"}>
+          ${panel("سجل دخول الإدارة", renderAuthEvents("admin"), "سجل مستقل لحسابات الإدارة، ولا تظهر أحداثه في سجل العمال والعملاء.")}
+        </div>
+      </div>
+      <div data-system-panel="system"${activeSystemTab === "system" ? "" : " hidden"}>
         ${panel("إعادة ضبط النظام", `<div class="panel-body"><p>مسح جميع بيانات المصنع وحسابات المستخدمين الأخرى نهائياً، مع الإبقاء على حساب الأدمن الحالي فقط.</p><button class="button button-danger" type="button" data-reset-factory>مسح البيانات وإعادة النظام للبداية</button></div>`)}
+      </div>
     </section>
     <div class="modal-backdrop" id="client-account-modal" hidden><section class="modal-card compact-view-modal" role="dialog" aria-modal="true" aria-labelledby="client-account-modal-title"><button class="modal-close" type="button" data-close-client-view aria-label="إغلاق">×</button><div id="client-account-modal-content"></div></section></div>
     <div class="modal-backdrop" id="model-details-modal" hidden><section class="modal-card compact-view-modal" role="dialog" aria-modal="true" aria-labelledby="model-details-title"><button class="modal-close" type="button" data-close-model-view aria-label="إغلاق">×</button><div id="model-details-modal-content"></div><div class="form-actions"><button class="button button-secondary" type="button" data-print-model-details>طباعة الموديل</button><button class="button button-secondary" type="button" data-edit-model-from-details>تعديل الطلبية</button><button class="row-action order-delete-action" type="button" data-action="delete-order">حذف الطلبية</button><button class="row-action" type="button" data-close-model-view>إغلاق</button></div></section></div>
@@ -4524,6 +4660,24 @@ function workerProductionSubmissionForm(parentSubmission = null) {
   </form>`;
 }
 
+function authorizedProductionSubmissionView(data, session) {
+  if (!session.canSubmitProduction || !["cutting", "sewing"].includes(session.role)) return "";
+  const submissionCards = data.productionSubmissions.map((submission) =>
+    `<article class="worker-submission-card">
+      <header>${modelImageMarkup(submission.imageUrl, `صورة القطعة ${submission.model_name}`, "submission-image-preview")}<div><h3>${escapeHtml(submission.model_name)}${submission.model_number ? `<small class="worker-model-number">${escapeHtml(submission.model_number)}</small>` : ""}</h3><p>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(submission.quantity)} قطعة · ${formatDateTime(submission.created_at)}</p>${statusTag(submission.status === "pending" ? "قيد مراجعة الإدارة" : submission.status === "confirmed" ? "تم الاستلام النهائي" : "مرفوض")}</div></header>
+      ${workerProductionColorMarkup(submission.colors)}
+      ${submission.parentSubmission ? `<p class="muted">تابع للتسليم: ${escapeHtml(submission.parentSubmission.model_name)} · ${formatDateTime(submission.parentSubmission.created_at)}</p>` : ""}
+      ${submission.status === "confirmed" ? "" : `<details><summary>إضافة تسليم تابع لهذا العمل</summary>${workerProductionSubmissionForm(submission)}</details>`}
+    </article>`
+  );
+  return `<section id="worker-production" class="dashboard-section worker-production-section">
+    ${panel("تسليم القصة / الأعداد", workerProductionSubmissionForm(), "اعرض الألوان والمقاسات وأدخل الأعداد الفعلية لكل لون ومقاس، ثم أرسل التسليم للإدارة للمراجعة.")}
+    ${panel("تسليماتي المرسلة", submissionCards.length
+      ? `<div class="worker-submission-list">${submissionCards.join("")}</div>`
+      : '<div class="empty-state">لا توجد تسليمات إنتاج مرسلة بعد.</div>')}
+  </section>`;
+}
+
 function workerView(data, session) {
   const tasks = data.tasks.filter((item) => item.worker === session.username);
   const formatAmount = (record) => Number(record.amount ?? record.value ?? record.netAmount ?? record.salary ?? 0);
@@ -4801,7 +4955,7 @@ function navigationItems(role, info, session = null) {
       { id: "finance", icon: "ج.م", label: "حسابات العملاء / المصاريف" },
       { id: "owner-fabric", icon: "▧", label: "قماش الإدارة" },
       { id: "incoming-fabric", icon: "↘", label: "القماش الداخل" },
-      { id: "accounts", icon: "♙", label: "طلبات ومستخدمي النظام", last: true }
+      { id: "accounts", icon: "♙", label: "الطلبات والمستخدمون والنظام", last: true }
     ];
   }
   if (role === "client") {
@@ -4821,6 +4975,7 @@ function navigationItems(role, info, session = null) {
       { id: "cutting-requests", icon: "✉", label: "طلبات القص الجديدة" },
       { id: "admin-requests", icon: "✂", label: "طلبات الإدارة" },
       { id: "new-cutting", icon: "＋", label: "قصة جديدة" },
+      ...(session?.canSubmitProduction ? [{ id: "worker-production", icon: "✓", label: "تسليم الإنتاج" }] : []),
       { id: "incoming-fabric", icon: "↘", label: "القماش الداخل" },
       { id: "personal-account", icon: "◷", label: "متابعة الحساب والراتب", last: true }
     ];
@@ -4829,6 +4984,7 @@ function navigationItems(role, info, session = null) {
     return [
       { id: "dashboard", icon: info.icon, label: "لوحة التحكم" },
       { id: "records", icon: "▣", label: "سجلات الموديلات والقصات" },
+      ...(session?.canSubmitProduction ? [{ id: "worker-production", icon: "✓", label: "تسليم الإنتاج" }] : []),
       { id: "personal-account", icon: "◷", label: "متابعة الحساب والراتب", last: true }
     ];
   }
@@ -6891,9 +7047,9 @@ function render(session, data, accounts) {
     : session.role === "client"
       ? clientView(data, session)
       : session.role === "cutting"
-        ? `<section id="dashboard" class="dashboard-section">${cuttingDashboardView(data)}</section>${cuttingRequestsView(data)}${fabricStockView(data, false)}<section id="personal-account" class="dashboard-section">${cuttingPersonalAccountView(data, session)}</section>`
+        ? `<section id="dashboard" class="dashboard-section">${cuttingDashboardView(data)}</section>${cuttingRequestsView(data)}${fabricStockView(data, false)}${authorizedProductionSubmissionView(data, session)}<section id="personal-account" class="dashboard-section">${cuttingPersonalAccountView(data, session)}</section>`
       : session.role === "sewing"
-        ? `<section id="dashboard" class="dashboard-section">${sewingView(data)}</section>${factoryRegistersView(data, false, "sewing", true)}<section id="personal-account" class="dashboard-section">${cuttingPersonalAccountView(data, session)}</section>`
+        ? `<section id="dashboard" class="dashboard-section">${sewingView(data)}</section>${factoryRegistersView(data, false, "sewing", true)}${authorizedProductionSubmissionView(data, session)}<section id="personal-account" class="dashboard-section">${cuttingPersonalAccountView(data, session)}</section>`
         : workerView(data, session);
   document.querySelector("#app").innerHTML = `
     <div class="app-shell${collapsedClass}">
@@ -9167,12 +9323,45 @@ function bindWorkerProductionReview(session) {
     bindWorkerProductionAllocation(form);
     const customerSelect = form.elements.customerId;
     const orderSelect = form.elements.orderId;
+    const storySelect = form.elements.storyId;
+    const comparison = form.querySelector("[data-submission-comparison]");
+    const refreshComparison = () => {
+      if (!comparison) return;
+      const story = dashboardData.cuttingStories.find((entry) => entry.id === storySelect.value);
+      comparison.innerHTML = productionSubmissionComparisonMarkup(
+        story || null,
+        productionColorsFromForm(form),
+        workerProductionTotalFromForm(form)
+      );
+    };
     customerSelect.addEventListener("change", () => {
       [...orderSelect.options].forEach((option) => {
         if (!option.value) return;
         option.hidden = option.dataset.customer !== customerSelect.value;
         if (option.selected && option.hidden) orderSelect.value = "";
       });
+      [...storySelect.options].forEach((option) => {
+        if (!option.value) return;
+        option.hidden = option.dataset.customer !== customerSelect.value;
+        if (option.selected && option.hidden) storySelect.value = "";
+      });
+      refreshComparison();
+    });
+    orderSelect.addEventListener("change", () => {
+      const order = dashboardData.models.find((entry) => entry.id === orderSelect.value);
+      if (order?.clientId && customerSelect.value !== order.clientId) {
+        customerSelect.value = order.clientId;
+        customerSelect.dispatchEvent(new Event("change"));
+      } else {
+        refreshComparison();
+      }
+    });
+    storySelect.addEventListener("change", refreshComparison);
+    form.addEventListener("input", (event) => {
+      if (event.target.matches("[data-worker-production-count], [name='quantity']")) refreshComparison();
+    });
+    form.addEventListener("change", (event) => {
+      if (event.target.matches("[data-color-name], [data-size-toggle], [data-size-type]")) refreshComparison();
     });
     customerSelect.dispatchEvent(new Event("change"));
   });
@@ -9317,18 +9506,22 @@ function bindWorkerProductionReview(session) {
 function bindWorkerPermissionActions(session) {
   document.querySelectorAll("[data-save-worker-permissions]").forEach((button) => button.addEventListener("click", async () => {
     const row = button.closest("[data-worker-permissions]");
-    const jobTitle = row?.querySelector('[name="jobTitle"]').value;
+    const jobTitle = row?.querySelector('[name="jobTitle"]')?.value;
+    const role = row?.dataset.accountRole;
     const canSubmitProduction = Boolean(row?.querySelector('[name="canSubmitProduction"]').checked);
-    if (!row || !WORKER_JOB_TITLES.includes(jobTitle)) {
-      window.factoryUI.toast("اختر مسمى وظيفياً صالحاً للعامل.", "error");
+    if (!row || !["worker", "cutting", "sewing"].includes(role)
+      || (role === "worker" && !WORKER_JOB_TITLES.includes(jobTitle))) {
+      window.factoryUI.toast("تعذر تحديد حساب العامل أو المشرف أو المسمى الوظيفي.", "error");
       return;
     }
     button.disabled = true;
     try {
+      const updates = { can_submit_production: canSubmitProduction, updated_at: new Date().toISOString() };
+      if (role === "worker") updates.job_title = jobTitle;
       const { data, error } = await supabaseClient.from("users")
-        .update({ job_title: jobTitle, can_submit_production: canSubmitProduction, updated_at: new Date().toISOString() })
+        .update(updates)
         .eq("id", button.dataset.saveWorkerPermissions)
-        .eq("role", "worker")
+        .eq("role", role)
         .select("id")
         .maybeSingle();
       if (error) throw error;
@@ -9505,6 +9698,7 @@ function bindActions(session) {
   if (session.role === "client") bindClientModelRequestActions(session);
   if (session.role === "cutting") {
     bindPickers(document.querySelector("#app"));
+    bindWorkerProductionActions(session);
     bindCuttingActions(session);
     return;
   }
@@ -9520,6 +9714,7 @@ function bindActions(session) {
         panel.hidden = panel.dataset.sewingDashboardPanel !== activeSewingDashboardTab;
       });
     }));
+    bindWorkerProductionActions(session);
     bindSewingStageActions(session);
     return;
   }
@@ -9532,6 +9727,28 @@ function bindActions(session) {
   bindWorkforceActions(session);
   bindWorkerPermissionActions(session);
   bindWorkerProductionReview(session);
+  document.querySelectorAll("[data-system-tab]").forEach((button) => button.addEventListener("click", () => {
+    activeSystemTab = button.dataset.systemTab;
+    document.querySelectorAll("[data-system-tab]").forEach((tab) => {
+      const selected = tab === button;
+      tab.classList.toggle("active", selected);
+      tab.setAttribute("aria-selected", String(selected));
+    });
+    document.querySelectorAll("[data-system-panel]").forEach((panel) => {
+      panel.hidden = panel.dataset.systemPanel !== activeSystemTab;
+    });
+  }));
+  document.querySelectorAll("[data-system-log-tab]").forEach((button) => button.addEventListener("click", () => {
+    activeSystemLogTab = button.dataset.systemLogTab;
+    document.querySelectorAll("[data-system-log-tab]").forEach((tab) => {
+      const selected = tab === button;
+      tab.classList.toggle("active", selected);
+      tab.setAttribute("aria-selected", String(selected));
+    });
+    document.querySelectorAll("[data-system-log-panel]").forEach((panel) => {
+      panel.hidden = panel.dataset.systemLogPanel !== activeSystemLogTab;
+    });
+  }));
   bindPickers(document.querySelector("#app"));
   bindCuttingActions(session);
   document.querySelectorAll("[data-confirm-custom-color], [data-custom-color-trigger]").forEach((item) => {

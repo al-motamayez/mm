@@ -505,6 +505,14 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .worker-submission-review h3, .worker-submission-review p { margin: 0 0 5px; }
 .worker-submission-review .color-picker { grid-column: 1 / -1; }
 .worker-production-allocation { grid-column: 1 / -1; min-width: 0; }
+.submission-comparison { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: #f8faf8; }
+.submission-comparison > p { margin: 0; }
+.submission-comparison-totals { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.submission-comparison-totals > div { display: grid; gap: 4px; padding: 9px; border-radius: 8px; background: #fff; }
+.submission-comparison-totals span { color: var(--muted); font-size: 12px; }
+.submission-comparison-totals strong { color: var(--green-dark); font-size: 16px; }
+.system-management-tabs, .system-log-tabs { flex-wrap: wrap; }
+.system-log-tabs { margin-top: 12px; }
 .worker-allocation-scroll { max-width: 100%; overflow: auto; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
 .worker-allocation-table { width: 100%; min-width: 380px; border-collapse: collapse; }
 .worker-allocation-table th, .worker-allocation-table td { padding: 7px; border-bottom: 1px solid #edf1ed; text-align: center; white-space: nowrap; }
@@ -1257,6 +1265,7 @@ input, select, .modal-form textarea { color: #1d3028; font-size: 16px; }
     font-size: 15px;
     line-height: 1.5;
   }
+  .submission-comparison-totals { grid-template-columns: minmax(0, 1fr); }
   .field input, .field select, input, select, .modal-form textarea,
   .cutting-submit-form .form-section-grid .field input,
   .cutting-submit-form .form-section-grid .field select {
