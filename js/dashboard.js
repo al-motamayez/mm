@@ -2265,19 +2265,35 @@ function clientSettlementLedgerBalances(settlement) {
   }
 
   const pendingTotal = Math.max(0, roundMoney(settlement?.pendingTotal || 0));
-  const paymentsAppliedToPending = Math.min(
+  const orderPaymentsAppliedToPending = Math.min(
     pendingTotal,
-    addMoney(
-      Math.max(0, roundMoney(settlement?.orderPaidTotal || 0)),
-      Math.max(0, roundMoney(settlement?.paymentsTotal || 0)),
-      Math.max(0, roundMoney(settlement?.accountAdjustmentsTotal || 0))
-    )
+    Math.max(0, roundMoney(settlement?.orderPaidTotal || 0))
   );
-  const pendingBalance = Math.max(0, subtractMoney(pendingTotal, paymentsAppliedToPending));
+  const pendingBalance = Math.max(0, subtractMoney(pendingTotal, orderPaymentsAppliedToPending));
   return {
     deliveredBalance: subtractMoney(totalBalance, pendingBalance),
     pendingBalance
   };
+}
+
+function paymentOrderReferenceMatch(payment, orders) {
+  const explicitOrderId = String(payment.orderId || payment.order_id || "").trim();
+  if (explicitOrderId) {
+    const matchedOrder = orders.find((order) => String(order.id) === explicitOrderId);
+    if (matchedOrder) return matchedOrder;
+  }
+
+  const reference = String(payment.reference || payment.orderReference || "").trim().toLocaleLowerCase();
+  if (!reference) return null;
+  const matchingOrders = orders.filter((order) => [
+    order.id,
+    order.modelSerial,
+    order.factoryModelCode,
+    order.clientModelCode,
+    order.modelNumber,
+    order.name
+  ].some((value) => String(value ?? "").trim().toLocaleLowerCase() === reference));
+  return matchingOrders.length === 1 ? matchingOrders[0] : null;
 }
 
 function calculateClientAccountLedger({
@@ -2317,6 +2333,7 @@ function calculateClientAccountLedger({
       ledgerExcessPayment: excessPayment
     };
   });
+  const ledgersByOrderId = new Map(orderLedgers.map((order) => [String(order.id), order]));
   const deliveredTotal = sumMoney(orderLedgers.map((order) => order.ledgerDeliveredAmount));
   const expectedTotal = sumMoney(orderLedgers.map((order) => order.ledgerPendingAmount));
   const orderPaid = sumMoney(orderLedgers.map((order) => order.ledgerPaidAmount));
@@ -2328,26 +2345,33 @@ function calculateClientAccountLedger({
     addMoney(openingSettlement.deliveredBalance, clientExpensesTotal),
     accountAdjustmentsTotal
   );
-  let availableClientPayment = addMoney(
-    paymentsTotal,
-    sumMoney(orderLedgers.map((order) => order.ledgerExcessPayment))
-  );
   let pendingPaid = sumMoney(orderLedgers.map((order) => order.ledgerPendingPaid));
   let paidAfterPending = sumMoney(orderLedgers.map((order) => order.ledgerDeliveredPaid));
-  const openingPendingPaid = Math.min(availableClientPayment, openingPendingBalance);
-  openingPendingBalance = subtractMoney(openingPendingBalance, openingPendingPaid);
-  availableClientPayment = subtractMoney(availableClientPayment, openingPendingPaid);
-  pendingPaid = addMoney(pendingPaid, openingPendingPaid);
   const orderedLedgers = [...orderLedgers].sort((left, right) =>
     String(left.createdAt || left.id).localeCompare(String(right.createdAt || right.id))
   );
-  for (const order of orderedLedgers) {
-    const allocated = Math.min(availableClientPayment, order.pendingBalance);
-    order.pendingBalance = subtractMoney(order.pendingBalance, allocated);
-    order.ledgerPendingPaid = addMoney(order.ledgerPendingPaid, allocated);
-    order.ledgerPaidAmount = addMoney(order.ledgerPaidAmount, allocated);
-    availableClientPayment = subtractMoney(availableClientPayment, allocated);
-    pendingPaid = addMoney(pendingPaid, allocated);
+  let availableClientPayment = sumMoney(orderLedgers.map((order) => order.ledgerExcessPayment));
+  const chronologicalPayments = [...payments].sort((left, right) =>
+    String(left._createdAt || left.created_at || left.date || "").localeCompare(
+      String(right._createdAt || right.created_at || right.date || "")
+    )
+  );
+  for (const payment of chronologicalPayments) {
+    let unallocatedAmount = Math.max(0, roundMoney(payment.amount || 0));
+    const matchedOrder = paymentOrderReferenceMatch(payment, orders);
+    const order = matchedOrder ? ledgersByOrderId.get(String(matchedOrder.id)) : null;
+    if (order) {
+      const balanceKey = order.ledgerPendingAmount > 0 ? "pendingBalance" : "deliveredBalance";
+      const paidKey = order.ledgerPendingAmount > 0 ? "ledgerPendingPaid" : "ledgerDeliveredPaid";
+      const allocated = Math.min(unallocatedAmount, order[balanceKey]);
+      order[balanceKey] = subtractMoney(order[balanceKey], allocated);
+      order[paidKey] = addMoney(order[paidKey], allocated);
+      order.ledgerPaidAmount = addMoney(order.ledgerPaidAmount, allocated);
+      unallocatedAmount = subtractMoney(unallocatedAmount, allocated);
+      if (balanceKey === "pendingBalance") pendingPaid = addMoney(pendingPaid, allocated);
+      else paidAfterPending = addMoney(paidAfterPending, allocated);
+    }
+    availableClientPayment = addMoney(availableClientPayment, unallocatedAmount);
   }
   for (const order of orderedLedgers) {
     const allocated = Math.min(availableClientPayment, order.deliveredBalance);
@@ -3482,7 +3506,7 @@ function adminView(data, accounts) {
         <button type="button" role="tab" aria-selected="${activeFinanceTab === "ledger"}" class="client-management-tab${activeFinanceTab === "ledger" ? " active" : ""}" data-finance-tab="ledger">الداخل والخارج</button>
       </div>
       <div data-finance-panel="payments"${activeFinanceTab === "payments" ? "" : " hidden"}>
-        ${panel("تسجيل دفعة مالية", `<div class="panel-body"><form id="payment-form" class="form-grid payment-form"><input type="hidden" name="editIndex" value=""><div class="field"><label for="payment-client">العميل</label><select id="payment-client" name="customerId" required><option value="">اختر العميل</option>${paymentClientOptions}</select></div><div class="field"><label for="payment-amount">المبلغ المدفوع (ج.م)</label><input id="payment-amount" name="amount" type="number" min="0.01" step="0.01" required></div><div class="field"><label for="payment-date">تاريخ الدفعة</label><input id="payment-date" name="date" type="date" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10)}" required></div><div class="field"><label for="payment-method">طريقة الدفع</label><select id="payment-method" name="method"><option>تحويل بنكي</option><option>نقدي</option><option>محفظة إلكترونية</option></select></div><div class="field"><label for="payment-reference">رقم الطلبية / مرجع</label><input id="payment-reference" name="reference" autocomplete="off"></div><div class="field"><label for="payment-notes">ملاحظات</label><input id="payment-notes" name="notes"></div><div class="form-actions"><button class="button button-primary" type="submit">تسجيل الدفعة</button><button class="row-action" type="button" data-cancel-edit hidden>إلغاء التعديل</button></div></form></div>`, "تُربط الدفعة بملف العميل المحدد")}
+        ${panel("تسجيل دفعة مالية", `<div class="panel-body"><form id="payment-form" class="form-grid payment-form"><input type="hidden" name="editIndex" value=""><div class="field"><label for="payment-client">العميل</label><select id="payment-client" name="customerId" required><option value="">اختر العميل</option>${paymentClientOptions}</select></div><div class="field"><label for="payment-amount">المبلغ المدفوع (ج.م)</label><input id="payment-amount" name="amount" type="number" min="0.01" step="0.01" required></div><div class="field"><label for="payment-date">تاريخ الدفعة</label><input id="payment-date" name="date" type="date" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10)}" required></div><div class="field"><label for="payment-method">طريقة الدفع</label><select id="payment-method" name="method"><option>تحويل بنكي</option><option>نقدي</option><option>محفظة إلكترونية</option></select></div><div class="field"><label for="payment-reference">رقم الطلبية / مرجع</label><input id="payment-reference" name="reference" autocomplete="off"><small>تُخصم الدفعة من بضاعة تحت التسليم فقط إذا طابق المرجع كود أو رقم طلب واحد. الدفعات العامة لا تُوزع تلقائياً على الطلبات غير المسلّمة.</small></div><div class="field"><label for="payment-notes">ملاحظات</label><input id="payment-notes" name="notes"></div><div class="form-actions"><button class="button button-primary" type="submit">تسجيل الدفعة</button><button class="row-action" type="button" data-cancel-edit hidden>إلغاء التعديل</button></div></form></div>`, "تُربط الدفعة بملف العميل المحدد، ويحدد المرجع الطلب عند تخصيصها له")}
         ${panel("سجل الدفعات المالية", `<div class="panel-body"><div class="payment-filter field"><label for="payment-filter-client">تصفية حسب العميل</label><select id="payment-filter-client"><option value="">كل العملاء</option>${paymentFilterOptions}</select></div>${table(["العميل","المبلغ","التاريخ والوقت","طريقة الدفع","رقم الطلبية / المرجع","ملاحظات","إجراء"], paymentRows(data.payments, true, data.clients))}</div>`)}
       </div>
       <div data-finance-panel="ledger"${activeFinanceTab === "ledger" ? "" : " hidden"}>${cashLedgerView(data)}</div>

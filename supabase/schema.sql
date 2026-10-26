@@ -6505,11 +6505,7 @@ begin
   );
   pending_balance := greatest(
     0,
-    round(
-      opening_pending_balance
-        - least(opening_pending_balance, payments_total + account_adjustments_total),
-      2
-    )
+    round(opening_pending_balance, 2)
   );
   delivered_balance := round(closing_balance - pending_balance, 2);
 
