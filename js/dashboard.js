@@ -9543,13 +9543,17 @@ function bindActions(session) {
       window.factoryUI.toast("لا تغيّر حالة الخياطة يدوياً؛ استخدم أزرار نقل الطلب وبدء الخياطة وإنهائها.", "error");
       return;
     }
+    const stageManagedStatuses = [
+      "جاري التشطيب", "تم التشطيب", "جاري المكواة", "تم الكي",
+      "جاري الطباعة", "تمت الطباعة", "جاري التكييس", "تم التكييس",
+      "جاري الفرز", "تم الفرز", "جاهز للتسليم"
+    ];
+    if (!stageManagedStatuses.includes(select.value) && isFactoryOrderWorkflowManaged(order)) {
+      window.factoryUI.toast("لا يمكن إرجاع موديل دخل مراحل التشغيل من هنا؛ استخدم أدوات سير العمل.", "error");
+      return;
+    }
     button.disabled = true;
     try {
-      const stageManagedStatuses = [
-        "جاري التشطيب", "تم التشطيب", "جاري المكواة", "تم الكي",
-        "جاري الطباعة", "تمت الطباعة", "جاري التكييس", "تم التكييس",
-        "جاري الفرز", "تم الفرز", "جاهز للتسليم"
-      ];
       if (stageManagedStatuses.includes(select.value)) {
         const { error } = await supabaseClient.rpc("admin_update_factory_order_stage_status", {
           requested_order_id: order.id,
@@ -10358,6 +10362,13 @@ function bindActions(session) {
     const currentStoredStatus = existingOrder?.storedStatus || existingOrder?.status || "";
     const isWorkflowManagedOrder = existingOrder && isFactoryOrderWorkflowManaged(existingOrder);
     const requestedStatus = String(formData.get("status") || currentStoredStatus);
+    if (existingOrder
+        && canonicalFactoryOrderStatus(requestedStatus) !== canonicalFactoryOrderStatus(existingOrder.status)
+        && (INITIAL_READY_STAGE_BY_STATUS[requestedStatus]
+          || WORKFLOW_MANAGED_FACTORY_ORDER_STATUSES.includes(canonicalFactoryOrderStatus(requestedStatus)))) {
+      window.factoryUI.toast("لا يمكن نقل الموديل إلى مرحلة تشغيل من نموذج التعديل؛ استخدم أزرار سير العمل في شاشة القص أو الخياطة.", "error");
+      return;
+    }
     const statusForSave = existingOrder && (isWorkflowManagedOrder
       || canonicalFactoryOrderStatus(requestedStatus) === existingOrder.status)
       ? currentStoredStatus || requestedStatus
