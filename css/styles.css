@@ -602,6 +602,11 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .workforce-profile-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 14px; padding-inline-end: 28px; }
 .workforce-profile-heading h2 { margin: 0; }
 .workforce-profile-heading p { margin: 5px 0 0; color: var(--muted); }
+.workforce-identity-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
+.workforce-identity-summary > div { display: grid; gap: 3px; min-width: 0; padding: 9px 11px; border: 1px solid var(--line); border-radius: 9px; background: #f8faf8; }
+.workforce-identity-summary span { color: var(--muted); font-size: 11px; }
+.workforce-identity-summary strong { overflow-wrap: anywhere; color: var(--green-dark); font-size: 14px; }
+.workforce-identity-summary small { overflow-wrap: anywhere; color: var(--muted); font-size: 12px; }
 .workforce-profile-heading-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .workforce-identity-source { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
 .workforce-profile-stats { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); margin: 14px 0; }
@@ -674,6 +679,7 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
   .workforce-profile-backdrop { padding: 16px 10px; }
   .workforce-profile-modal { width: 96vw; max-width: 96vw; padding: 18px; }
   .workforce-profile-heading { flex-direction: column; padding-inline-end: 24px; }
+  .workforce-identity-summary { grid-template-columns: minmax(0, 1fr); }
   .workforce-finance-cards { grid-template-columns: minmax(0, 1fr); }
   .workforce-personal-form, .workforce-new-employee-form, .workforce-profile-fields,
   .workforce-new-employee-modal .workforce-profile-section .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; }

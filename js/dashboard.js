@@ -866,9 +866,16 @@ async function readUsers() {
   if (error?.code === "42703") {
     ({ data, error } = await supabaseClient
       .from("users")
-      .select("id, name, username, role, status, created_at")
+      .select("id, name, username, phone, role, status, created_at")
       .order("created_at", { ascending: false }));
     usersTableHasStatus = !error;
+  }
+  if (error?.code === "42703") {
+    ({ data, error } = await supabaseClient
+      .from("users")
+      .select("id, name, username, phone, role, created_at")
+      .order("created_at", { ascending: false }));
+    usersTableHasStatus = false;
   }
   if (error?.code === "42703") {
     ({ data, error } = await supabaseClient
@@ -906,10 +913,18 @@ async function readAccounts(session) {
   if (error?.code === "42703") {
     ({ data, error } = await supabaseClient
       .from("users")
-      .select("id, name, username, role, status, created_at")
+      .select("id, name, username, phone, role, status, created_at")
       .or("status.eq.pending,role.eq.pending")
       .order("created_at", { ascending: false }));
     usersTableHasStatus = !error;
+  }
+  if (error?.code === "42703") {
+    ({ data, error } = await supabaseClient
+      .from("users")
+      .select("id, name, username, phone, role, created_at")
+      .eq("role", "pending")
+      .order("created_at", { ascending: false }));
+    usersTableHasStatus = false;
   }
   if (error?.code === "42703") {
     ({ data, error } = await supabaseClient
@@ -935,9 +950,17 @@ async function findAccountByUsername(username) {
   if (error?.code === "42703") {
     ({ data, error } = await supabaseClient
       .from("users")
-      .select("id, name, username, role, status")
+      .select("id, name, username, phone, role, status")
       .ilike("username", username)
       .maybeSingle());
+  }
+  if (error?.code === "42703") {
+    ({ data, error } = await supabaseClient
+      .from("users")
+      .select("id, name, username, phone, role, created_at")
+      .ilike("username", username)
+      .maybeSingle());
+    if (!error && data) data.status = data.role === "pending" ? "pending" : "active";
   }
   if (error?.code === "42703") {
     ({ data, error } = await supabaseClient
@@ -4855,19 +4878,22 @@ function workforceSettings(data) {
 
 function workforceEmployees(data) {
   return data.workforceProfiles
-    .filter((profile) => profile.workerId && profile.employeeName && !profile.deletedAt)
+    .filter((profile) => profile.workerId && !profile.deletedAt)
     .map((profile) => {
       const linkedUserId = workforceLinkedAccountId({ id: profile.workerId }, data);
       const account = data.users.find((user) => user.id === linkedUserId);
       const roleKey = profile.roleKey || account?.roleKey || "worker";
+      const registeredName = String(account?.name || profile.registeredName || "").trim();
+      const registeredPhone = String(account?.phone || profile.registeredPhone || "").trim();
+      const employeeName = String(profile.employeeName || "").trim();
       return {
         ...profile,
         id: profile.workerId,
-        name: profile.employeeName,
+        name: employeeName || registeredName || account?.username || "عامل بدون اسم",
         username: account?.username || profile.username || "—",
-        phone: profile.phone || "",
-        registeredName: account?.name || profile.registeredName || "",
-        registeredPhone: account?.phone || profile.registeredPhone || "",
+        phone: String(profile.phone || "").trim(),
+        registeredName,
+        registeredPhone,
         roleKey,
         role: roleNames[roleKey] || roleKey,
         roleLabel: roleNames[roleKey] || roleKey,
@@ -4878,6 +4904,13 @@ function workforceEmployees(data) {
       };
     })
     .sort((left, right) => String(left.name).localeCompare(String(right.name), "ar"));
+}
+
+function workforceIdentitySummaryMarkup(worker) {
+  return `<div class="workforce-identity-summary">
+    <div><span>الاسم المعتمد لدى الإدارة</span><strong>${escapeHtml(worker.name)}</strong><small>الهاتف: ${escapeHtml(worker.phone || "غير مسجل")}</small></div>
+    <div><span>بيانات التسجيل الشخصي</span><strong>${escapeHtml(worker.registeredName || "غير متاح")}</strong><small>الهاتف: ${escapeHtml(worker.registeredPhone || "غير مسجل")}</small></div>
+  </div>`;
 }
 
 function workforceProfile(data, workerId) {
@@ -5328,7 +5361,7 @@ function workforceView(data) {
     .join("");
   const attendanceRows = workforceAttendanceGrid(data, employees, settings);
   const employeeRows = employees.map((worker) => `<tr>
-    <td><strong>${escapeHtml(worker.name)}</strong><small class="workforce-identity-source">الاسم الأساسي المعتمد</small></td>
+    <td><strong>${escapeHtml(worker.name)}</strong><small class="workforce-identity-source">الاسم الأساسي المعتمد</small><small class="workforce-identity-source">التسجيل الشخصي: ${escapeHtml(worker.registeredName || "غير متاح")} · ${escapeHtml(worker.registeredPhone || "هاتف غير مسجل")}</small></td>
     <td>${escapeHtml(worker.registeredName || "—")}<small class="workforce-identity-source">اسم حساب التسجيل</small></td>
     <td>${escapeHtml(worker.phone || "—")}<small class="workforce-identity-source">الهاتف الأساسي المعتمد</small></td>
     <td>${escapeHtml(worker.registeredPhone || "—")}<small class="workforce-identity-source">هاتف حساب التسجيل</small></td>
@@ -5432,7 +5465,7 @@ function workforceView(data) {
     <section class="modal-card workforce-profile-modal" role="dialog" aria-modal="true" aria-labelledby="workforce-profile-title">
       <button class="modal-close" type="button" data-close-workforce-profile aria-label="إغلاق">×</button>
       <header class="workforce-profile-heading"><div><h2 id="workforce-profile-title">كشف العامل: ${escapeHtml(selectedEmployee.name)}</h2>
-      <p>${escapeHtml(selectedEmployee.jobTitle || "مسمى وظيفي غير محدد")} · ${escapeHtml(selectedEmployee.roleLabel)}</p></div>
+      <p>${escapeHtml(selectedEmployee.jobTitle || "مسمى وظيفي غير محدد")} · ${escapeHtml(selectedEmployee.roleLabel)}</p>${workforceIdentitySummaryMarkup(selectedEmployee)}</div>
       <div class="workforce-profile-heading-actions"><button type="button" class="button button-secondary" data-print-workforce-profile>طباعة كشف العامل</button><button type="button" class="row-action order-delete-action" data-delete-workforce-employee="${escapeHtml(selectedEmployee.id)}">حذف ملف العامل</button></div></header>
       <div class="workforce-profile-tabs" role="tablist" aria-label="أقسام ملف العامل">
         <button type="button" role="tab" class="workforce-profile-tab${selectedWorkforceProfileTab === "finance" ? " active" : ""}" aria-selected="${selectedWorkforceProfileTab === "finance"}" data-workforce-profile-tab="finance">المستحقات والماليات</button>
