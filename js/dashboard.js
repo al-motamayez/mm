@@ -2397,6 +2397,8 @@ function calculateClientAccountLedger({
   );
   const deliveredNetBalance = addMoney(deliveredOrderBalance, Math.max(0, accountBalance));
   const creditBalance = addMoney(accountCredit, availableClientPayment);
+  const pendingGoodsCreditOffset = Math.min(pendingGoodsBalance, creditBalance);
+  const netPendingGoodsBalance = subtractMoney(pendingGoodsBalance, pendingGoodsCreditOffset);
   const paid = addMoney(orderPaid, paymentsTotal);
   const grossDue = addMoney(deliveredTotal, accountBalanceBeforePayments);
   const balance = subtractMoney(addMoney(deliveredNetBalance, pendingGoodsBalance), creditBalance);
@@ -2428,6 +2430,8 @@ function calculateClientAccountLedger({
     paymentsTotal,
     pendingPaid,
     pendingGoodsBalance,
+    pendingGoodsCreditOffset,
+    netPendingGoodsBalance,
     paidAfterPending,
     hasUndeliveredGoods,
     clientExpenses,
@@ -2478,20 +2482,35 @@ function clientAccountSummary(client, data) {
 }
 
 function pendingGoodsBreakdown(summary) {
-  const details = summary.orders
-    .filter((order) => order.pendingBalance > 0)
-    .map((order) => ({
-      label: `${summary.clientName || "عميل"} · ${order.name || order.modelNumber || "طلب بدون اسم"}`,
-      note: `${order.factoryModelCode ? `كود ${order.factoryModelCode} · ` : ""}${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity || 0)} قطعة · ${order.displayStatus || order.status || "لم يتم التسليم"} · بعد الدفعات`,
-      value: money(order.pendingBalance)
-    }));
-  if (summary.openingPendingBalance > 0) {
-    details.push({
-      label: `${summary.clientName || "عميل"} · بضاعة غير مسلّمة من رصيد سابق`,
-      note: "رصيد مرحّل لبضاعة لم يثبت تسليمها",
-      value: money(summary.openingPendingBalance)
-    });
-  }
+  let remainingCreditOffset = summary.pendingGoodsCreditOffset;
+  const balances = [
+    ...(summary.openingPendingBalance > 0
+      ? [{
+        label: `${summary.clientName || "عميل"} · بضاعة غير مسلّمة من رصيد سابق`,
+        note: "رصيد مرحّل لبضاعة لم يثبت تسليمها",
+        balance: summary.openingPendingBalance
+      }]
+      : []),
+    ...[...summary.orders]
+      .sort((left, right) => String(left.createdAt || left.id).localeCompare(String(right.createdAt || right.id)))
+      .filter((order) => order.pendingBalance > 0)
+      .map((order) => ({
+        label: `${summary.clientName || "عميل"} · ${order.name || order.modelNumber || "طلب بدون اسم"}`,
+        note: `${order.factoryModelCode ? `كود ${order.factoryModelCode} · ` : ""}${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity || 0)} قطعة · ${order.displayStatus || order.status || "لم يتم التسليم"}`,
+        balance: order.pendingBalance
+      }))
+  ];
+  const details = balances.map((entry) => {
+    const offset = Math.min(remainingCreditOffset, entry.balance);
+    remainingCreditOffset = subtractMoney(remainingCreditOffset, offset);
+    return {
+      label: entry.label,
+      note: `${entry.note} · بعد خصم الدفعات والرصيد الدائن`,
+      value: money(subtractMoney(entry.balance, offset)),
+      balance: subtractMoney(entry.balance, offset)
+    };
+  }).filter((entry) => entry.balance > 0)
+    .map(({ label, note, value }) => ({ label, note, value }));
   return details;
 }
 
@@ -2579,14 +2598,14 @@ function clientAccountCards(data) {
 function clientAccountsOverview(data) {
   const summaries = data.clients.map((client) => clientAccountSummary(client, data));
   const totalGoods = sumMoney(summaries.map((summary) => summary.deliveredTotal));
-  const totalExpected = sumMoney(summaries.map((summary) => summary.pendingGoodsBalance));
+  const totalExpected = sumMoney(summaries.map((summary) => summary.netPendingGoodsBalance));
   const totalPaid = sumMoney(summaries.map((summary) => summary.paid));
   const totalBalance = sumMoney(summaries.map((summary) => summary.receivableBalance - summary.creditBalance));
   const unpricedCount = summaries.reduce((count, summary) =>
     count + summary.orders.filter((order) => order.pricePerPiece <= 0).length, 0);
   const accountBalances = summaries
     .filter((summary) => summary.receivableBalance > 0 || summary.creditBalance > 0)
-    .map((summary) => `<tr><td>${escapeHtml(summary.clientName || "عميل")}</td><td>${summary.receivableBalance > 0 ? "مستحق حسب حالة الطلب" : "دائن / فائض للعميل"}</td><td>${money(summary.receivableBalance > 0 ? summary.receivableBalance : summary.creditBalance)}</td><td>${money(summary.pendingGoodsBalance)}</td></tr>`);
+    .map((summary) => `<tr><td>${escapeHtml(summary.clientName || "عميل")}</td><td>${summary.receivableBalance > 0 ? "مستحق حسب حالة الطلب" : "دائن / فائض للعميل"}</td><td>${money(summary.receivableBalance > 0 ? summary.receivableBalance : summary.creditBalance)}</td><td>${money(summary.netPendingGoodsBalance)}</td></tr>`);
   return `<div class="clients-toolbar"><div><h2>حسابات العملاء</h2><p>متابعة الأرصدة والدفعات وقيمة البضاعة وحالات الموديلات لكل عميل.</p></div></div>
     <div class="stats-grid">${stat("قيمة الطلبات بحالة التسليم أو الجاهزية", money(totalGoods), "تشمل الطلبات الجاهزة للتسليم وتم التسليم")}${stat("المتبقي من البضاعة تحت التسليم", money(totalExpected), "طلبات جميع الحالات الأخرى بعد تخصيص الدفعات")}${stat("إجمالي المدفوع", money(totalPaid), "دفعات العملاء والمدفوع على الطلب")}${stat("صافي المستحق حسب حالة الطلب", money(totalBalance), totalBalance < 0 ? "أرصدة دائنة للعملاء" : "لا يشمل قيمة الطلبات بحالات التشغيل")}${stat("موديلات بلا سعر", unpricedCount, "تحتاج إلى استكمال التسعير")}</div>
     ${panel("ديون العملاء / الأرصدة الدائنة", accountBalances.length
@@ -2702,7 +2721,7 @@ function adminDashboardView(data) {
     amount: summary.receivableBalance
   })).filter((entry) => entry.amount > 0).sort((left, right) => right.amount - left.amount);
   const customerReceivables = sumMoney(clientDebts.map((entry) => entry.amount));
-  const upcomingReceivables = sumMoney(clientSummaries.map((summary) => summary.pendingGoodsBalance));
+  const upcomingReceivables = sumMoney(clientSummaries.map((summary) => summary.netPendingGoodsBalance));
   const deliveredDebtDetails = clientSummaries.flatMap((summary) => deliveredDebtBreakdown(summary));
   const pendingGoodsDetails = clientSummaries.flatMap((summary) => pendingGoodsBreakdown(summary));
   const orderDetail = (order, quantity, amount) => ({
@@ -2735,7 +2754,7 @@ function adminDashboardView(data) {
     return stat(group.label, group.orders.length, "حسب مرحلة التشغيل الحالية",
       statDetailList(details, `لا توجد موديلات في مرحلة ${group.label}.`));
   }).join("");
-  return `<div class="stats-grid">${stat("النقدية في الدرج", money(drawerBalance), "", statDetailList(cashDetails))}${stat("مستحقات العملاء", money(customerReceivables), "الطلبات الجاهزة للتسليم أو المسلّمة بعد الدفعات", statDetailList(deliveredDebtDetails, "لا توجد مستحقات حسب حالة الطلب."))}${stat("بضاعة تحت التسليم", money(upcomingReceivables), "جميع حالات التشغيل الأخرى بعد الدفعات", statDetailList(pendingGoodsDetails, "لا توجد بضاعة متبقية للتسليم."))}${pipelineStats}</div>
+  return `<div class="stats-grid">${stat("النقدية في الدرج", money(drawerBalance), "", statDetailList(cashDetails))}${stat("مستحقات العملاء", money(customerReceivables), "الطلبات الجاهزة للتسليم أو المسلّمة بعد الدفعات", statDetailList(deliveredDebtDetails, "لا توجد مستحقات حسب حالة الطلب."))}${stat("بضاعة تحت التسليم", money(upcomingReceivables), "صافي قيمة الحالات غير الجاهزة بعد خصم الدفعات والرصيد الدائن", statDetailList(pendingGoodsDetails, "لا توجد بضاعة متبقية بعد خصم الدفعات والرصيد الدائن."))}${pipelineStats}</div>
     ${panel("آخر الموديلات وحالتها", activeOrders.length
       ? table(["الموديل","العميل","العدد","سعر القطعة","الحالة"], activeOrders.slice(0, 12).map((order) => `<tr><td>${escapeHtml(order.name)}${order.modelNumber ? ` · ${escapeHtml(order.modelNumber)}` : ""}</td><td>${escapeHtml(order.client || "—")}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity)}</td><td>${money(order.pricePerPiece)}</td><td>${statusTag(order.displayStatus || order.status)}</td></tr>`))
       : '<div class="empty-state">لا توجد موديلات حالية.</div>')}`;
