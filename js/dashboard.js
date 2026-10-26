@@ -4110,9 +4110,13 @@ function sewingView(data) {
       status: "قيد الانتظار"
     }));
   const sewingWorkflow = `<div class="stats-grid">${pipelineGroups.map((group) => stat(group.label, group.orders.length)).join("")}</div>
-    ${panel("قصّات متاحة للبدء", sewingOrderRows(available, "بدء الخياطة", "start", true), "لا يبدأ العمل إلا بعد استلام المشرف للقصّة")}
-    ${panel("قصّات قيد الخياطة الفعلية", sewingOrderRows(inProgress, "إنهاء الخياطة", "finish", true))}
-    ${panel("قصّات مكتملة الخياطة", sewingOrderRows(completed, "", "", true), "تم تسليمها للمرحلة التالية")}`;
+    ${panel("قصّات متاحة للبدء", sewingOrderRows(available, "بدء الخياطة", "start"), "تظهر الأعداد والألوان والمقاسات اللازمة للتشغيل")}
+    ${panel("قصّات قيد الخياطة الفعلية", sewingOrderRows(inProgress, "إنهاء الخياطة", "finish"))}`;
+  const sewingHistory = panel(
+    "سجل الخياطة",
+    sewingOrderRows(completed),
+    "أرشيف القصات التي اكتملت خياطتها"
+  );
   const monitoredModels = [
     ...notStartedOrders.map((order) => ({
       id: order.id,
@@ -4133,9 +4137,11 @@ function sewingView(data) {
     : '<div class="empty-state">لا توجد موديلات بانتظار بدء الخياطة.</div>';
   return `<div class="client-management-tabs sewing-dashboard-tabs" role="tablist" aria-label="شاشة الخياطة">
       <button type="button" role="tab" aria-selected="${activeSewingDashboardTab === "workflow"}" class="client-management-tab${activeSewingDashboardTab === "workflow" ? " active" : ""}" data-sewing-dashboard-tab="workflow">الخياطة</button>
+      <button type="button" role="tab" aria-selected="${activeSewingDashboardTab === "history"}" class="client-management-tab${activeSewingDashboardTab === "history" ? " active" : ""}" data-sewing-dashboard-tab="history">سجل الخياطة</button>
       <button type="button" role="tab" aria-selected="${activeSewingDashboardTab === "models"}" class="client-management-tab${activeSewingDashboardTab === "models" ? " active" : ""}" data-sewing-dashboard-tab="models">متابعة الموديلات</button>
     </div>
     <div data-sewing-dashboard-panel="workflow"${activeSewingDashboardTab === "workflow" ? "" : " hidden"}>${sewingWorkflow}</div>
+    <div data-sewing-dashboard-panel="history"${activeSewingDashboardTab === "history" ? "" : " hidden"}>${sewingHistory}</div>
     <div data-sewing-dashboard-panel="models"${activeSewingDashboardTab === "models" ? "" : " hidden"}>${modelMonitoring}</div>`;
 }
 
