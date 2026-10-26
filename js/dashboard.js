@@ -10856,6 +10856,7 @@ function bindActions(session) {
     const currentStoredStatus = existingOrder?.storedStatus || existingOrder?.status || "";
     const isWorkflowManagedOrder = existingOrder && isFactoryOrderWorkflowManaged(existingOrder);
     const requestedStatus = String(formData.get("status") || currentStoredStatus);
+    const statusCanBeChanged = !form.elements.status.disabled;
     const productionType = String(formData.get("productionType") || existingOrder?.productionType || "full_cutting");
     const workStages = [...form.querySelectorAll('[name="workStage"]:checked')].map((input) => input.value);
     const directSewingEntry = Boolean(existingOrder
@@ -10864,6 +10865,7 @@ function bindActions(session) {
       && workStages.includes("sewing")
       && !workStages.includes("cutting"));
     if (existingOrder
+        && statusCanBeChanged
         && canonicalFactoryOrderStatus(requestedStatus) !== canonicalFactoryOrderStatus(existingOrder.status)
         && (INITIAL_READY_STAGE_BY_STATUS[requestedStatus]
           || WORKFLOW_MANAGED_FACTORY_ORDER_STATUSES.includes(canonicalFactoryOrderStatus(requestedStatus)))
