@@ -674,6 +674,13 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .cutting-submit-form .form-section-grid .field { gap: 6px; }
 .cutting-submit-form .form-section-grid .field input,
 .cutting-submit-form .form-section-grid .field select { min-height: 40px; }
+.cutting-fabric-line { display: grid; grid-template-columns: minmax(0, 1fr) minmax(120px, .6fr) auto; align-items: end; gap: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 9px; background: #fcfdfb; }
+.cutting-fabric-line-external { grid-template-columns: minmax(0, 1fr) minmax(120px, .6fr) minmax(100px, .5fr) auto; }
+.cutting-fabric-line .field { display: grid; min-width: 0; gap: 6px; }
+.cutting-fabric-line .field > span { color: var(--muted); font-size: 12px; }
+.cutting-fabric-line .field input, .cutting-fabric-line .field select { min-height: 40px; }
+.cutting-fabric-line [data-fabric-line-stock] { color: var(--muted); font-size: 11px; }
+.cutting-fabric-line [data-remove-cutting-fabric-line] { justify-self: start; }
 .form-help { margin: 0; color: var(--muted); line-height: 1.8; }
 .cutting-target { color: var(--green-dark); font-weight: 700; }
 .client-note-list { display: grid; gap: 10px; margin-bottom: 16px; }
@@ -690,6 +697,8 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
   .color-ply-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .color-ply-row > .field:first-child { grid-column: 1 / -1; }
   .color-ply-remove { grid-column: 1 / -1; justify-self: start; }
+  .cutting-fabric-line { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
+  .cutting-fabric-line [data-remove-cutting-fabric-line] { grid-column: 1 / -1; }
 }
 .client-finance-summary { margin-bottom: 20px; }
 .client-detail-section { min-width: 0; margin-top: 22px; }

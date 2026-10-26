@@ -2924,6 +2924,7 @@ create table if not exists public.factory_cutting_stories (
   fabric_quantity numeric(14, 3) not null check (fabric_quantity > 0),
   bolt_count integer not null default 0 check (bolt_count >= 0),
   fabric_unit text not null check (fabric_unit in ('متر', 'توب')),
+  fabric_lines jsonb not null default '[]'::jsonb check (jsonb_typeof(fabric_lines) = 'array'),
   technical_notes text not null default '',
   model_image_url text default '',
   status text not null default 'pending' check (status in ('pending', 'added_to_models', 'sent_to_sewing', 'rejected')),
@@ -2939,12 +2940,17 @@ alter table public.factory_cutting_stories
   add column if not exists source_order_id uuid references public.orders (id) on delete set null,
   add column if not exists factory_model_code text not null default '',
   add column if not exists fabric_details text not null default '',
+  add column if not exists fabric_lines jsonb not null default '[]'::jsonb,
   add column if not exists approved_order_id uuid references public.orders (id) on delete set null,
   add column if not exists approved_action text,
   add column if not exists approved_by uuid references auth.users (id) on delete set null,
   add column if not exists approved_at timestamptz,
   add column if not exists rejected_by uuid references auth.users (id) on delete set null,
   add column if not exists rejected_at timestamptz;
+alter table public.factory_cutting_stories
+  drop constraint if exists factory_cutting_stories_fabric_lines_check,
+  add constraint factory_cutting_stories_fabric_lines_check
+    check (jsonb_typeof(fabric_lines) = 'array');
 alter table public.factory_cutting_stories
   alter column model_image_url drop not null,
   drop constraint if exists factory_cutting_stories_status_check,
@@ -4956,6 +4962,7 @@ drop function if exists public.submit_factory_cutting(uuid, uuid, text, text, js
 drop function if exists public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, text, integer, text, uuid, numeric, text, uuid);
 drop function if exists public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, text, integer, text, uuid, numeric, text, uuid, uuid);
 drop function if exists public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, text, integer, text, uuid, numeric, text, uuid, uuid, uuid);
+drop function if exists public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, text, integer, text, uuid, numeric, text, uuid, uuid, uuid, jsonb);
 drop function if exists public.read_factory_cutting_clients();
 create function public.read_factory_cutting_clients()
 returns table (id uuid, name text, brand_name text)
@@ -4993,7 +5000,8 @@ create function public.submit_factory_cutting(
   requested_external_fabric_unit text,
   requested_source_order_id uuid,
   requested_cutting_request_id uuid,
-  requested_catalog_model_id uuid
+  requested_catalog_model_id uuid,
+  requested_fabric_lines jsonb
 )
 returns integer
 language plpgsql
@@ -5012,6 +5020,14 @@ declare
   cut_total integer;
   total_plys integer;
   fabric_unit text;
+  fabric_line jsonb;
+  first_fabric_line jsonb;
+  first_fabric_id uuid;
+  first_fabric_quantity numeric(14, 3);
+  first_bolt_count integer := 0;
+  combined_fabric_label text;
+  line_quantity numeric(14, 3);
+  saved_fabric_lines jsonb;
 begin
   if not (
     public.is_active_factory_admin()
@@ -5030,46 +5046,86 @@ begin
      or coalesce(jsonb_typeof(requested_color_ply_data -> 'colors'), '') <> 'array'
      or coalesce(jsonb_typeof(requested_color_ply_data -> 'sizes'), '') <> 'array'
      or coalesce(requested_color_ply_data ->> 'type', '') not in ('men', 'women', 'children')
-     or length(trim(coalesce(requested_fabric, ''))) = 0
      or length(trim(coalesce(requested_fabric_details, ''))) > 240
      or length(trim(coalesce(requested_technical_notes, ''))) > 2000
-     or requested_bolt_count is null or requested_bolt_count < 0
-     or requested_fabric_quantity is null or requested_fabric_quantity <= 0 then
-    raise exception 'A valid model, fabric, and positive fabric quantity are required.';
+     or coalesce(jsonb_typeof(requested_fabric_lines), '') <> 'array'
+     or jsonb_array_length(coalesce(requested_fabric_lines, '[]'::jsonb)) = 0
+     or jsonb_array_length(coalesce(requested_fabric_lines, '[]'::jsonb)) > 100 then
+    raise exception 'A valid model and one or more fabric color quantities are required.';
   end if;
   if jsonb_array_length(requested_color_ply_data -> 'colors') = 0
      or jsonb_array_length(requested_color_ply_data -> 'sizes') = 0 then
     raise exception 'A complete cutting story requires at least one size and one color with a positive ply count.';
   end if;
-  if requested_fabric_id is null
-     and coalesce(nullif(trim(requested_external_fabric_unit), ''), '') not in ('متر', 'توب') then
-    raise exception 'Choose متر or توب for the external fabric quantity.';
-  end if;
-  if requested_fabric_id is null
-     and ((requested_external_fabric_unit = 'توب'
-           and (requested_fabric_quantity <> trunc(requested_fabric_quantity)
-             or requested_bolt_count::numeric <> requested_fabric_quantity))
-       or (requested_external_fabric_unit = 'متر' and requested_bolt_count <> 0)) then
-    raise exception 'External cutting quantity and its selected unit do not match.';
-  end if;
-  if requested_fabric_id is not null then
-    select * into selected_fabric
-    from public.factory_fabrics where id = requested_fabric_id
-    for update;
-    if not found
-       or selected_fabric.stock_scope <> 'incoming'
-       or selected_fabric.customer_id <> requested_customer_id
-       or selected_fabric.unit not in ('متر', 'توب')
-       or selected_fabric.quantity_available < requested_fabric_quantity
-       or (selected_fabric.unit = 'توب'
-           and (requested_fabric_quantity <> trunc(requested_fabric_quantity)
-             or requested_bolt_count::numeric <> requested_fabric_quantity))
-       or (selected_fabric.unit = 'متر' and requested_bolt_count <> 0) then
-      raise exception 'The cutting quantity must match the stock item measurement unit.';
+  combined_fabric_label := '';
+  for fabric_line in
+    select value from jsonb_array_elements(requested_fabric_lines)
+  loop
+    if trim(coalesce(fabric_line ->> 'quantity', '')) !~ '^[0-9]+(\.[0-9]{1,3})?$'
+       or coalesce(fabric_line ->> 'unit', '') not in ('متر', 'توب')
+       or length(trim(coalesce(fabric_line ->> 'name', ''))) = 0
+       or length(trim(coalesce(fabric_line ->> 'name', ''))) > 120
+       or length(trim(coalesce(fabric_line ->> 'fabric_type', ''))) > 120
+       or (nullif(trim(coalesce(fabric_line ->> 'fabric_id', '')), '') is null
+         and length(trim(coalesce(fabric_line ->> 'color_name', ''))) = 0)
+       or length(trim(coalesce(fabric_line ->> 'color_name', ''))) > 64 then
+      raise exception 'Each fabric color must have a name, a valid unit, and a positive quantity.';
     end if;
-    fabric_unit := selected_fabric.unit;
-  else
-    fabric_unit := requested_external_fabric_unit;
+    line_quantity := (fabric_line ->> 'quantity')::numeric;
+    if line_quantity <= 0 then
+      raise exception 'Fabric color quantities must be positive.';
+    end if;
+    if fabric_line ->> 'unit' = 'توب' and line_quantity <> trunc(line_quantity) then
+      raise exception 'Fabric quantities measured in tobs must be whole numbers.';
+    end if;
+
+    if nullif(trim(coalesce(fabric_line ->> 'fabric_id', '')), '') is not null then
+      select * into selected_fabric
+      from public.factory_fabrics
+      where id = (fabric_line ->> 'fabric_id')::uuid;
+      if not found then
+        raise exception 'The selected fabric stock item no longer exists.';
+      end if;
+      if selected_fabric.stock_scope <> 'incoming'
+         or selected_fabric.customer_id is distinct from requested_customer_id
+         or selected_fabric.name <> trim(fabric_line ->> 'name')
+         or selected_fabric.fabric_type <> trim(coalesce(fabric_line ->> 'fabric_type', ''))
+         or selected_fabric.unit <> fabric_line ->> 'unit'
+         or selected_fabric.color_name <> coalesce(fabric_line ->> 'color_name', '') then
+        raise exception 'Each selected color must match available incoming stock assigned to this client.';
+      end if;
+      if selected_fabric.quantity_available < line_quantity then
+        raise exception 'The available stock is insufficient for one or more selected colors.';
+      end if;
+    elsif length(trim(coalesce(fabric_line ->> 'source', ''))) = 0
+       or length(trim(coalesce(fabric_line ->> 'source', ''))) > 120 then
+      raise exception 'External fabric lines require a valid source name.';
+    end if;
+
+    if first_fabric_line is null then
+      first_fabric_line := fabric_line;
+      first_fabric_id := nullif(trim(coalesce(fabric_line ->> 'fabric_id', '')), '')::uuid;
+      first_fabric_quantity := line_quantity;
+      fabric_unit := fabric_line ->> 'unit';
+      if fabric_unit = 'توب' then first_bolt_count := line_quantity::integer; end if;
+    end if;
+    combined_fabric_label := concat_ws(
+      '، ',
+      nullif(combined_fabric_label, ''),
+      format('%s (%s)', coalesce(nullif(trim(fabric_line ->> 'name'), ''), 'قماش خارجي'),
+        coalesce(nullif(trim(fabric_line ->> 'color_name'), ''), 'غير محدد'))
+    );
+  end loop;
+
+  if exists (
+    select 1
+    from jsonb_array_elements(requested_fabric_lines) as line(value)
+    join public.factory_fabrics as stock
+      on stock.id = nullif(trim(coalesce(line.value ->> 'fabric_id', '')), '')::uuid
+    group by stock.id, stock.quantity_available
+    having sum((line.value ->> 'quantity')::numeric) > stock.quantity_available
+  ) then
+    raise exception 'The combined quantity for a selected fabric color exceeds available stock.';
   end if;
 
   select *
@@ -5118,6 +5174,19 @@ begin
     if not found then
       raise exception 'The cutting request is no longer pending or does not match this model.';
     end if;
+    select jsonb_agg(jsonb_build_object(
+      'fabric_id', fabric.id,
+      'name', fabric.name,
+      'fabric_type', fabric.fabric_type,
+      'color_name', fabric.color_name,
+      'quantity', reservation.quantity,
+      'unit', fabric.unit,
+      'source', ''
+    ) order by fabric.id)
+      into saved_fabric_lines
+    from public.factory_cutting_request_reservations as reservation
+    join public.factory_fabrics as fabric on fabric.id = reservation.fabric_id
+    where reservation.request_id = requested_cutting_request_id;
   end if;
 
   select coalesce(nullif(trim(name), ''), username)
@@ -5141,7 +5210,7 @@ begin
   insert into public.factory_cutting_stories (
     id, customer_id, customer_name, submitted_by, submitted_by_name,
     model_name, model_number, source_order_id, catalog_model_id, factory_model_code, size_data, color_ply_data, total_pieces, ply_count,
-    fabric, fabric_details, fabric_id, fabric_quantity, bolt_count, fabric_unit, cutting_request_id,
+    fabric, fabric_details, fabric_id, fabric_quantity, bolt_count, fabric_unit, fabric_lines, cutting_request_id,
     technical_notes, model_image_url
   )
   values (
@@ -5155,8 +5224,9 @@ begin
     requested_source_order_id, requested_catalog_model_id,
     coalesce(catalog_model.factory_model_code, source_model.factory_model_code, ''),
     normalized_sizes, requested_color_ply_data, cut_total, total_plys,
-    trim(requested_fabric), trim(coalesce(requested_fabric_details, '')),
-    requested_fabric_id, requested_fabric_quantity, requested_bolt_count, fabric_unit, requested_cutting_request_id,
+    combined_fabric_label, trim(coalesce(requested_fabric_details, '')),
+    first_fabric_id, first_fabric_quantity, first_bolt_count, fabric_unit,
+    coalesce(saved_fabric_lines, requested_fabric_lines), requested_cutting_request_id,
     trim(coalesce(requested_technical_notes, '')),
     coalesce(nullif(trim(coalesce(requested_model_image_url, '')), ''),
       case when requested_catalog_model_id is not null then catalog_model.model_image_url end,
@@ -5212,6 +5282,7 @@ declare
   first_reserved_quantity numeric(14, 3);
   first_reserved_unit text;
   reserved_fabric_details text := '';
+  current_fabric public.factory_fabrics%rowtype;
 begin
   if not public.is_active_factory_admin() then
     raise exception 'Only active admins can approve cutting stories.';
@@ -5269,7 +5340,9 @@ begin
     from public.factory_cutting_request_reservations
     where request_id = story.cutting_request_id
   ) into has_reservations;
-  if story.fabric_id is not null and not has_reservations then
+  if story.fabric_id is not null
+     and not has_reservations
+     and jsonb_array_length(coalesce(story.fabric_lines, '[]'::jsonb)) = 0 then
     perform 1 from public.factory_fabrics where id = story.fabric_id for update;
     if not found then
       raise exception 'The selected fabric stock item no longer exists.';
@@ -5312,13 +5385,18 @@ begin
 
   if has_reservations then
     for reservation in
-      select r.fabric_id, r.quantity, f.name, f.color_name, f.unit, f.quantity_available
+      select r.fabric_id, r.quantity, f.name, f.color_name, f.unit, f.quantity_available,
+             f.stock_scope, f.customer_id
       from public.factory_cutting_request_reservations as r
       join public.factory_fabrics as f on f.id = r.fabric_id
       where r.request_id = story.cutting_request_id
       order by r.fabric_id
       for update of f, r
     loop
+      if reservation.stock_scope <> 'incoming'
+         or reservation.customer_id is distinct from story.customer_id then
+        raise exception 'Reserved fabric stock no longer belongs to this client.';
+      end if;
       if reservation.quantity_available < reservation.quantity then
         raise exception 'Reserved fabric stock is no longer sufficient for this cutting request.';
       end if;
@@ -5350,6 +5428,66 @@ begin
     delete from public.factory_cutting_request_reservations
     where request_id = story.cutting_request_id;
     resolved_fabric_name := reserved_fabric_details;
+  elsif jsonb_array_length(coalesce(story.fabric_lines, '[]'::jsonb)) > 0 then
+    for reservation in
+      select nullif(trim(coalesce(line.value ->> 'fabric_id', '')), '')::uuid as fabric_id,
+             (line.value ->> 'quantity')::numeric as quantity,
+             coalesce(nullif(trim(line.value ->> 'name'), ''),
+               nullif(trim(line.value ->> 'source'), ''), 'قماش خارجي') as name,
+             trim(coalesce(line.value ->> 'color_name', '')) as color_name,
+             line.value ->> 'unit' as unit,
+             nullif(trim(line.value ->> 'source'), '') as source
+      from jsonb_array_elements(story.fabric_lines) as line(value)
+      order by nullif(trim(coalesce(line.value ->> 'fabric_id', '')), '')
+    loop
+      if reservation.fabric_id is not null then
+        select *
+          into current_fabric
+        from public.factory_fabrics
+        where id = reservation.fabric_id
+        for update;
+        if not found then
+          raise exception 'A selected fabric stock item no longer exists.';
+        end if;
+        if current_fabric.stock_scope <> 'incoming'
+           or current_fabric.customer_id is distinct from story.customer_id
+           or current_fabric.unit <> reservation.unit
+           or current_fabric.color_name <> reservation.color_name then
+          raise exception 'A selected fabric stock item no longer matches this client, color, or unit.';
+        end if;
+        if current_fabric.quantity_available < reservation.quantity then
+          raise exception 'Available stock is no longer sufficient for a selected fabric color.';
+        end if;
+        update public.factory_fabrics
+        set quantity_available = quantity_available - reservation.quantity,
+            updated_at = now()
+        where id = reservation.fabric_id;
+        insert into public.factory_fabric_transactions (
+          fabric_id, order_id, transaction_type, quantity, notes, actor_id
+        ) values (
+          reservation.fabric_id, new_order_id, 'withdrawal', reservation.quantity,
+          format('سحب لون %s عند اعتماد قصة القص', reservation.color_name), auth.uid()
+        );
+      end if;
+      if first_reserved_unit is null then
+        first_reserved_quantity := reservation.quantity;
+        first_reserved_unit := reservation.unit;
+      end if;
+      if first_reserved_fabric_id is null and reservation.fabric_id is not null then
+        first_reserved_fabric_id := reservation.fabric_id;
+      end if;
+      reserved_fabric_details := concat_ws(
+        E'\n',
+        nullif(reserved_fabric_details, ''),
+        format('%s · لون %s%s: %s %s',
+          reservation.name,
+          coalesce(nullif(reservation.color_name, ''), 'غير محدد'),
+          case when reservation.source is null then '' else ' · مصدر ' || reservation.source end,
+          reservation.quantity,
+          reservation.unit)
+      );
+    end loop;
+    resolved_fabric_name := reserved_fabric_details;
   else
     resolved_fabric_name := public.reconcile_factory_fabric_usage(
       new_order_id, story.fabric_id, story.fabric_quantity, story.fabric
@@ -5361,17 +5499,30 @@ begin
       completed_quantity = story.total_pieces,
       fabric = resolved_fabric_name,
       fabric_details = case when has_reservations
+          or jsonb_array_length(coalesce(story.fabric_lines, '[]'::jsonb)) > 0
         then concat_ws(E'\n', nullif(trim(story.fabric_details), ''), reserved_fabric_details)
         else story.fabric_details end,
-      fabric_id = case when has_reservations then first_reserved_fabric_id else story.fabric_id end,
-      external_fabric_source = case when has_reservations then ''
+      fabric_id = case when has_reservations
+          or jsonb_array_length(coalesce(story.fabric_lines, '[]'::jsonb)) > 0
+        then coalesce(first_reserved_fabric_id, story.fabric_id) else story.fabric_id end,
+      external_fabric_source = case when has_reservations
+          or jsonb_array_length(coalesce(story.fabric_lines, '[]'::jsonb)) > 0
+        then ''
         when story.fabric_id is null then story.fabric else '' end,
-      external_fabric_unit = case when has_reservations then ''
+      external_fabric_unit = case when has_reservations
+          or jsonb_array_length(coalesce(story.fabric_lines, '[]'::jsonb)) > 0
+        then ''
         when story.fabric_id is null then story.fabric_unit else '' end,
-      fabric_quantity = case when has_reservations then first_reserved_quantity else story.fabric_quantity end,
-      bolt_count = case when has_reservations and first_reserved_unit = 'توب'
+      fabric_quantity = case when has_reservations
+          or jsonb_array_length(coalesce(story.fabric_lines, '[]'::jsonb)) > 0
+        then coalesce(first_reserved_quantity, story.fabric_quantity) else story.fabric_quantity end,
+      bolt_count = case when (has_reservations
+          or jsonb_array_length(coalesce(story.fabric_lines, '[]'::jsonb)) > 0)
+          and coalesce(first_reserved_unit, story.fabric_unit) = 'توب'
         then first_reserved_quantity::integer
-        when has_reservations then 0 else story.bolt_count end,
+        when has_reservations
+          or jsonb_array_length(coalesce(story.fabric_lines, '[]'::jsonb)) > 0
+        then 0 else story.bolt_count end,
       layer_count = story.ply_count,
       color_ply_data = story.color_ply_data,
       technical_notes = story.technical_notes,
@@ -7512,8 +7663,8 @@ revoke all on function public.admin_delete_factory_cutting_request(uuid) from pu
 grant execute on function public.admin_delete_factory_cutting_request(uuid) to authenticated;
 revoke all on function public.admin_archive_factory_order(uuid) from public, anon, authenticated;
 grant execute on function public.admin_archive_factory_order(uuid) to authenticated;
-revoke all on function public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, text, integer, text, uuid, numeric, text, uuid, uuid, uuid) from public, anon, authenticated;
-grant execute on function public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, text, integer, text, uuid, numeric, text, uuid, uuid, uuid) to authenticated;
+revoke all on function public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, text, integer, text, uuid, numeric, text, uuid, uuid, uuid, jsonb) from public, anon, authenticated;
+grant execute on function public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, text, integer, text, uuid, numeric, text, uuid, uuid, uuid, jsonb) to authenticated;
 revoke all on function public.admin_approve_factory_cutting_story(uuid, text) from public, anon, authenticated;
 grant execute on function public.admin_approve_factory_cutting_story(uuid, text) to authenticated;
 revoke all on function public.admin_reject_factory_cutting_story(uuid) from public, anon, authenticated;
