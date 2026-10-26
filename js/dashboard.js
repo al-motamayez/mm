@@ -9622,19 +9622,28 @@ function bindActions(session) {
   const updateProductionPathFields = () => {
     const readySewing = orderForm.elements.productionType.value === "ready_sewing";
     const cuttingStage = orderForm.querySelector('[name="workStage"][value="cutting"]');
+    const sewingStage = orderForm.querySelector('[name="workStage"][value="sewing"]');
+    const editIndex = orderForm.elements.editIndex.value;
+    const existingOrder = editIndex ? dashboardData.models[Number(editIndex)] : null;
+    const sewingAlreadyStarted = ["قيد الخياطة", "قيد التنفيذ", "مكتمل"].includes(existingOrder?.sewingStageStatus || "");
     cuttingStage.disabled = readySewing;
     if (readySewing) {
       cuttingStage.checked = false;
-      if (!WORKFLOW_MANAGED_FACTORY_ORDER_STATUSES.includes(orderForm.elements.status.value)
-          || orderForm.elements.status.value === "تم التسليم") {
+      sewingStage.checked = true;
+      if (!LOCKED_FACTORY_ORDER_STATUSES.includes(existingOrder?.status || "")
+          && !sewingAlreadyStarted) {
         orderForm.elements.status.value = "في انتظار الخياطة";
       }
+      orderForm.elements.status.disabled = Boolean(existingOrder
+        && (LOCKED_FACTORY_ORDER_STATUSES.includes(existingOrder.status) || sewingAlreadyStarted));
     } else {
       if (!cuttingStage.checked && !orderForm.elements.editIndex.value) cuttingStage.checked = true;
       if (WORKFLOW_MANAGED_FACTORY_ORDER_STATUSES.includes(orderForm.elements.status.value)
           && orderForm.elements.status.value !== "تم التسليم") {
         orderForm.elements.status.value = "قيد الانتظار";
       }
+      orderForm.elements.status.disabled = Boolean(existingOrder
+        && (LOCKED_FACTORY_ORDER_STATUSES.includes(existingOrder.status) || isFactoryOrderWorkflowManaged(existingOrder)));
     }
     updateStagePricing(orderForm);
     updateOrderConditionalFields();
@@ -10363,21 +10372,11 @@ function bindActions(session) {
     const requestedStatus = String(formData.get("status") || currentStoredStatus);
     const productionType = String(formData.get("productionType") || existingOrder?.productionType || "full_cutting");
     const workStages = [...form.querySelectorAll('[name="workStage"]:checked')].map((input) => input.value);
-    const cuttingStageIsUnstarted = existingOrder
-      && ["", "معلق", "قيد الانتظار", "بانتظار"].includes(existingOrder.cuttingStageStatus || "")
-      && !existingOrder.fabric
-      && !existingOrder.fabricId
-      && !Number(existingOrder.cuttingPlys || existingOrder.layerCount || 0)
-      && !Number(existingOrder.fabricQuantity || 0)
-      && !Number(existingOrder.boltCount || 0)
-      && !existingOrder.cutterName
-      && !existingOrder.cuttingNotes;
     const directSewingEntry = Boolean(existingOrder
       && requestedStatus === "في انتظار الخياطة"
       && productionType === "ready_sewing"
       && workStages.includes("sewing")
-      && !workStages.includes("cutting")
-      && cuttingStageIsUnstarted);
+      && !workStages.includes("cutting"));
     if (existingOrder
         && canonicalFactoryOrderStatus(requestedStatus) !== canonicalFactoryOrderStatus(existingOrder.status)
         && (INITIAL_READY_STAGE_BY_STATUS[requestedStatus]
