@@ -73,6 +73,16 @@ const FACTORY_ORDER_STATUSES = [
   "في انتظار الخياطة",
   "جاري الخياطة",
   "تمت الخياطة",
+  "جاري التشطيب",
+  "تم التشطيب",
+  "جاري المكواة",
+  "تم الكي",
+  "جاري الطباعة",
+  "تمت الطباعة",
+  "جاري التكييس",
+  "تم التكييس",
+  "جاري الفرز",
+  "تم الفرز",
   "جاهز للتسليم",
   "تم التسليم"
 ];
@@ -86,6 +96,22 @@ const WORKFLOW_MANAGED_FACTORY_ORDER_STATUSES = [
   "جاري الطباعة", "تمت الطباعة", "جاري التكييس", "تم التكييس",
   "جاري الفرز", "تم الفرز", "مكتمل", "جاهز للتسليم"
 ];
+const INITIAL_READY_STAGE_BY_STATUS = {
+  "تم القص": "sewing",
+  "في انتظار الخياطة": "sewing",
+  "جاري الخياطة": "sewing",
+  "تمت الخياطة": "sewing",
+  "جاري التشطيب": "finishing",
+  "تم التشطيب": "finishing",
+  "جاري المكواة": "ironing",
+  "تم الكي": "ironing",
+  "جاري الطباعة": "printing",
+  "تمت الطباعة": "printing",
+  "جاري التكييس": "packaging",
+  "تم التكييس": "packaging",
+  "جاري الفرز": "sorting",
+  "تم الفرز": "sorting"
+};
 
 function isFactoryOrderWorkflowManaged(order) {
   return WORKFLOW_MANAGED_FACTORY_ORDER_STATUSES
@@ -3487,7 +3513,7 @@ function adminView(data, accounts) {
       </div>
       <div data-orders-tab-panel="status"${activeOrdersTab === "status" ? "" : " hidden"}>${modelStatusReviewView(data)}</div>
       <div class="modal-backdrop" id="model-expense-modal" hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="model-expense-title"><button class="modal-close" type="button" data-close-model-expense aria-label="إغلاق">×</button><h2 id="model-expense-title">إضافة مصروف خارجي للموديل</h2><p data-model-expense-name></p><form class="modal-form" data-model-expense-form><input type="hidden" name="orderId"><label for="model-expense-description">بيان المصروف الخارجي</label><input id="model-expense-description" name="description" maxlength="240" required><label for="model-expense-type">نوع المصروف والأثر المالي</label><select id="model-expense-type" name="expenseType" required><option value="customer_cash">مصروف على العميل ومسحوب من الخزنة</option><option value="treasury_only">مصروف مسحوب من الخزنة فقط (تكلفة تشغيلية)</option><option value="included_in_price">مصروف مدمج ضمن سعر القطعة</option></select><small class="model-expense-impact-hint">تُسجّل جميع الأنواع كحركة خروج نقدي؛ ويُضاف النوع الأول فقط إلى حساب العميل.</small><label for="model-expense-amount">قيمة المصروف (ج.م)</label><input id="model-expense-amount" name="amount" type="number" min="0.01" max="999999999999.99" step="0.01" required><div class="form-actions"><button class="button button-primary" type="submit">حفظ المصروف</button><button class="row-action" type="button" data-close-model-expense>إلغاء</button></div></form></section></div>
-      <div class="modal-backdrop" id="order-modal" hidden><section class="modal-card order-modal-card" role="dialog" aria-modal="true" aria-labelledby="order-modal-title"><button class="modal-close" type="button" data-close-order aria-label="إغلاق">×</button><h2 id="order-modal-title">إضافة موديل / طلبية</h2><p>يمكن ترك العدد فارغًا حتى انتهاء الفرش والقص، ثم إدخال العدد الفعلي عند تعديل الطلب.</p>      <form id="model-form" class="order-form modal-form" novalidate><input type="hidden" name="editIndex" value=""><input type="hidden" name="savedOrderId" value=""><input type="hidden" name="productionType" value="full_cutting">
+      <div class="modal-backdrop" id="order-modal" hidden><section class="modal-card order-modal-card" role="dialog" aria-modal="true" aria-labelledby="order-modal-title"><button class="modal-close" type="button" data-close-order aria-label="إغلاق">×</button><h2 id="order-modal-title">إضافة موديل / طلبية</h2><p>يمكن ترك العدد فارغًا حتى انتهاء الفرش والقص، ثم إدخال العدد الفعلي عند تعديل الطلب.</p>            <form id="model-form" class="order-form modal-form" novalidate><input type="hidden" name="editIndex" value=""><input type="hidden" name="savedOrderId" value="">
         <section class="form-section"><h3>المعلومات الأساسية <span>إجباري</span></h3><div class="form-section-grid">
           <input type="hidden" name="customerId">
           <div class="field model-customer-field"><label for="model-client">اختيار اسم العميل</label><select id="model-client" name="customerSelection"><option value="">اختر اسم العميل</option>${clientOptions}</select><small>اختر العميل أو البراند؛ اختيار أحدهما يلغي الآخر.</small></div>
@@ -3499,6 +3525,7 @@ function adminView(data, accounts) {
           <div class="field" data-original-quantity-field hidden><label for="model-original-quantity">العدد المطلوب الأصلي</label><input id="model-original-quantity" name="originalQuantity" type="number" min="0" step="1"></div>
         </div></section>
         <section class="form-section"><h3>التفاصيل التشغيلية <span>اختياري</span></h3><div class="form-section-grid">
+          <div class="field wide"><label for="model-production-type">مسار التشغيل</label><select id="model-production-type" name="productionType"><option value="full_cutting">قص وفرش داخل المصنع</option><option value="ready_sewing">موديل جاهز ومقصوص مسبقاً</option></select><small>الموديل الجاهز يتجاوز القص، ويبدأ من الحالة والمرحلة التي تحددها أدناه.</small></div>
           <fieldset class="field work-stage-picker"><legend>الأقسام المطلوبة</legend><div class="work-stage-options">${WORK_STAGES.map(([key, label]) => `<label><input type="checkbox" name="workStage" value="${key}" ${["cutting", "sewing", "finishing"].includes(key) ? "checked" : ""}><span>${label}</span></label>`).join("")}</div></fieldset>
           ${colorPickerMarkup("", "model-colors")}
           ${sizePickerMarkup("", "model-sizes", true, true)}
@@ -4037,7 +4064,7 @@ function sewingOrderRows(orders, actionLabel = "", action = "", allowEdit = true
     ? `<div class="sewing-order-grid">${orders.map((item) => {
       const canEdit = allowEdit && item.stageStatus !== "مكتمل";
       return `<article class="sewing-order-card production-compact-card">
-      <header class="production-compact-heading">${modelImageMarkup(item.modelImageUrls || item.modelImageUrl)}<h3>${escapeHtml(item.model)}</h3>${statusTag(item.status)}</header>
+      <header class="production-compact-heading">${modelImageMarkup(item.modelImageUrls || item.modelImageUrl)}<h3>${escapeHtml(item.model)}</h3>${statusTag(item.stageStatus === "مكتمل" && item.orderStatus ? item.orderStatus : item.status)}</header>
       <strong class="production-compact-total">${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.target)} قطعة</strong>
       <div class="production-compact-facts"><div><span>الألوان</span>${colorSummaryMarkup(item.colors, item.colorNames, item.colorPlyData)}</div><div><span>المقاسات</span>${sizeBadgesMarkup(item.sizes)}</div></div>
       <div class="form-actions">${productionDetailsButton("sewing", sewingDetailsProjection(item))}${canEdit ? `<button class="button button-secondary" type="button" data-open-sewing-editor="${escapeHtml(item.order)}">تعديل</button>` : ""}${action ? `<button class="button button-primary" type="button" data-sewing-action="${action}" data-sewing-order="${escapeHtml(item.order)}">${actionLabel}</button>` : ""}</div>
@@ -9558,6 +9585,27 @@ function bindActions(session) {
     orderForm.querySelector("[data-model-priority-field]").hidden = isDelivered;
     if (!isEditing && !isDelivered) orderForm.elements.deliveredPieces.value = "";
   };
+  const updateProductionPathFields = () => {
+    const readySewing = orderForm.elements.productionType.value === "ready_sewing";
+    const cuttingStage = orderForm.querySelector('[name="workStage"][value="cutting"]');
+    orderForm.elements.productionType.disabled = Boolean(orderForm.elements.editIndex.value);
+    cuttingStage.disabled = readySewing;
+    if (readySewing) {
+      cuttingStage.checked = false;
+      if (!WORKFLOW_MANAGED_FACTORY_ORDER_STATUSES.includes(orderForm.elements.status.value)
+          || orderForm.elements.status.value === "تم التسليم") {
+        orderForm.elements.status.value = "في انتظار الخياطة";
+      }
+    } else {
+      if (!cuttingStage.checked && !orderForm.elements.editIndex.value) cuttingStage.checked = true;
+      if (WORKFLOW_MANAGED_FACTORY_ORDER_STATUSES.includes(orderForm.elements.status.value)
+          && orderForm.elements.status.value !== "تم التسليم") {
+        orderForm.elements.status.value = "قيد الانتظار";
+      }
+    }
+    updateStagePricing(orderForm);
+    updateOrderConditionalFields();
+  };
   bindPickers(orderForm);
   orderForm.noValidate = true;
   orderForm.elements.customerSelection.addEventListener("change", () => {
@@ -9577,6 +9625,9 @@ function bindActions(session) {
       updateOrderTotals();
     } else if (event.target.matches('[name="status"]')) {
       updateOrderConditionalFields();
+    } else if (event.target.matches('[name="productionType"]')) {
+      updateProductionPathFields();
+      updateOrderTotals();
     }
   });
   orderForm.addEventListener("input", (event) => {
@@ -9646,6 +9697,7 @@ function bindActions(session) {
     orderModal.hidden = true;
     removeWorkflowStatusOptions();
     orderForm.reset();
+    updateProductionPathFields();
     const cuttingEditor = orderForm.parentElement.querySelector("[data-order-cutting-editor]");
     cuttingEditor.hidden = true;
     cuttingEditor.replaceChildren();
@@ -9696,6 +9748,7 @@ function bindActions(session) {
     orderForm.querySelectorAll('[name="workStage"]').forEach((input) => {
       input.checked = (currentOrder.workStages || []).includes(input.value);
     });
+    updateProductionPathFields();
     updateStagePricing(orderForm);
     orderForm.elements.quantity.value = currentOrder.quantity || "";
     orderForm.elements.deliveredPieces.value = currentOrder.deliveredPieces;
@@ -10285,6 +10338,8 @@ function bindActions(session) {
     const modelName = String(formData.get("name")).trim();
     const customerId = String(formData.get("customerId"));
     const workStages = [...form.querySelectorAll('[name="workStage"]:checked')].map((input) => input.value);
+    const productionType = String(formData.get("productionType") || existingOrder?.productionType || "full_cutting");
+    const initialReadyStage = INITIAL_READY_STAGE_BY_STATUS[requestedStatus];
     const pricingMode = String(formData.get("pricingMode"));
     const stagePrices = JSON.parse(String(formData.get("stagePrices") || "{}"));
     const colors = String(formData.get("colors") || "").trim();
@@ -10315,6 +10370,15 @@ function bindActions(session) {
     }
     if (!workStages.length) {
       window.factoryUI.toast("اختر قسماً واحداً على الأقل للموديل.", "error");
+      return;
+    }
+    if (!existingOrder && initialReadyStage && productionType !== "ready_sewing") {
+      window.factoryUI.toast("اختر مسار «موديل جاهز ومقصوص مسبقاً» للدخول مباشرة إلى مراحل التشغيل.", "error");
+      return;
+    }
+    if (!existingOrder && productionType === "ready_sewing"
+        && (!initialReadyStage || !workStages.includes(initialReadyStage) || workStages.includes("cutting"))) {
+      window.factoryUI.toast("حدد حالة تشغيل مباشرة وقسماً مطابقاً لها، ولا تضف قسم القص للموديل الجاهز.", "error");
       return;
     }
     if (!["total", "stages"].includes(pricingMode)) {
@@ -10364,7 +10428,7 @@ function bindActions(session) {
           ? existingOrder.storedStatus || existingOrder.status
           : statusForSave,
         priority: String(formData.get("priority")),
-        productionType: String(formData.get("productionType") || existingOrder?.productionType || "full_cutting"),
+        productionType,
         workStages,
         pricingMode,
         stagePrices: pricingMode === "stages" ? stagePrices : {},

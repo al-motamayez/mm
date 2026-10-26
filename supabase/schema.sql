@@ -1479,6 +1479,8 @@ declare
   matched_client_id uuid;
   resolved_model_name text;
   normalized_color_names jsonb;
+  requested_initial_stage text;
+  requested_initial_stage_status text;
 begin
   if not public.is_active_factory_admin() then
     raise exception 'Only active admins can create or edit factory orders.';
@@ -1681,13 +1683,47 @@ begin
     nullif(trim(coalesce(requested_model_number, '')), '')
   );
 
-  if requested_order_id is null
-     and requested_status in (
-       'في انتظار الخياطة', 'جاري الخياطة', 'تمت الخياطة', 'جاري التشطيب', 'تم التشطيب',
-       'جاري المكواة', 'تم الكي', 'جاري الطباعة', 'تمت الطباعة',
-       'جاري التكييس', 'تم التكييس', 'جاري الفرز', 'تم الفرز', 'مكتمل', 'جاهز للتسليم'
-     ) then
-    raise exception 'New orders cannot skip the cutting and sewing handoff workflow.';
+  if requested_order_id is null then
+    requested_initial_stage := case requested_status
+      when 'تم القص' then 'sewing'
+      when 'في انتظار الخياطة' then 'sewing'
+      when 'جاري الخياطة' then 'sewing'
+      when 'تمت الخياطة' then 'sewing'
+      when 'جاري التشطيب' then 'finishing'
+      when 'تم التشطيب' then 'finishing'
+      when 'جاري المكواة' then 'ironing'
+      when 'تم الكي' then 'ironing'
+      when 'جاري الطباعة' then 'printing'
+      when 'تمت الطباعة' then 'printing'
+      when 'جاري التكييس' then 'packaging'
+      when 'تم التكييس' then 'packaging'
+      when 'جاري الفرز' then 'sorting'
+      when 'تم الفرز' then 'sorting'
+      else null
+    end;
+    if requested_initial_stage is not null
+       and requested_production_type <> 'ready_sewing' then
+      raise exception 'Choose the pre-cut production path before entering an advanced production status.';
+    end if;
+    if requested_production_type = 'ready_sewing' then
+      if 'cutting' = any(requested_work_stages) then
+        raise exception 'Pre-cut models cannot include a cutting stage.';
+      end if;
+      if requested_initial_stage is null
+         or not (requested_initial_stage = any(requested_work_stages)) then
+        raise exception 'Choose an active status that matches one of the selected production stages.';
+      end if;
+      requested_initial_stage_status := case
+        when requested_status in ('تم القص', 'في انتظار الخياطة') then 'متاح للخياطة'
+        when requested_status in (
+          'تمت الخياطة', 'تم التشطيب', 'تم الكي', 'تمت الطباعة', 'تم التكييس', 'تم الفرز'
+        ) then 'مكتمل'
+        else case requested_initial_stage
+          when 'sewing' then 'قيد الخياطة'
+          else 'قيد التنفيذ'
+        end
+      end;
+    end if;
   end if;
 
   if requested_order_id is null then
@@ -1707,6 +1743,29 @@ begin
       trim(coalesce(requested_client_model_code, '')), trim(requested_status)
     )
     returning id into saved_order_id;
+    if requested_production_type = 'ready_sewing' then
+      update public.production_stages as stage
+      set status = 'مكتمل',
+          completed_quantity = stage.target_quantity,
+          updated_at = now()
+      where stage.order_id = saved_order_id
+        and stage.stage_name = any(requested_work_stages)
+        and array_position(requested_work_stages, stage.stage_name)
+          < array_position(requested_work_stages, requested_initial_stage);
+
+      update public.production_stages
+      set status = requested_initial_stage_status,
+          completed_quantity = case
+            when requested_initial_stage_status = 'مكتمل' then target_quantity
+            else completed_quantity
+          end,
+          updated_at = now()
+      where order_id = saved_order_id
+        and stage_name = requested_initial_stage;
+      if not found then
+        raise exception 'The selected direct-entry production stage was not initialized.';
+      end if;
+    end if;
     if requested_operational_expenses > 0 then
       insert into public.factory_order_expenses (
         order_id, description, amount, created_by
