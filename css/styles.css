@@ -329,6 +329,14 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .client-management-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 16px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
 .client-management-tab { min-height: 40px; padding: 8px 14px; border: 1px solid var(--line); border-radius: 8px; color: #34483f; background: #fff; font-weight: 600; }
 .client-management-tab.active { border-color: var(--green); color: #fff; background: var(--green); }
+.client-waiting-model-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 12px; }
+.client-waiting-model-card { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+.client-waiting-model-card .model-image-trigger { flex: 0 0 72px; width: 72px; height: 82px; overflow: hidden; border: 0; border-radius: 8px; background: #f1f4f1; }
+.client-waiting-model-card .model-thumbnail { width: 100%; height: 100%; object-fit: cover; }
+.client-waiting-model-card > div { display: grid; justify-items: start; gap: 6px; min-width: 0; }
+.client-waiting-model-card h3, .client-waiting-model-card p { margin: 0; overflow-wrap: anywhere; }
+.client-waiting-model-card h3 { color: var(--green-dark); font-size: 15px; }
+.client-waiting-model-card p { color: var(--muted); font-size: 13px; }
 .client-statement-filters { display: flex; align-items: end; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; }
 .client-statement-filters .field { min-width: 170px; margin: 0; }
 .client-statement-filters > span { padding: 10px 0; color: var(--muted); font-size: 13px; }
@@ -350,6 +358,12 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .cutting-details-grid > div { min-width: 0; padding: 10px 12px; border: 1px solid #e2eae4; border-radius: 9px; background: #fff; }
 .cutting-details-grid dt { color: var(--muted); font-size: 11px; }
 .cutting-details-grid dd { margin: 4px 0 0; font-weight: 700; overflow-wrap: anywhere; }
+.cutting-fabric-breakdown { display: grid; gap: 10px; }
+.cutting-fabric-group { padding: 11px 12px; border: 1px solid #e2eae4; border-radius: 9px; background: #fff; }
+.cutting-fabric-group h4 { margin: 0 0 8px; color: var(--green-dark); font-size: 14px; }
+.cutting-fabric-group .table-wrap { margin: 0; }
+.cutting-fabric-color { display: inline-flex; align-items: center; gap: 8px; }
+.fabric-color-swatch { display: inline-block; flex: 0 0 18px; width: 18px; height: 18px; border: 1px solid #cbd5ce; border-radius: 50%; background: var(--fabric-color); }
 .cutting-details-notes { margin: 0; padding: 10px 12px; border-right: 3px solid var(--green); border-radius: 6px; background: #fff; }
 .cutting-pricing-preview-section { grid-column: 1 / -1; }
 .cutting-pricing-details { display: grid; gap: 8px; }

@@ -1087,6 +1087,56 @@ function factoryOrderPipelineGroups(orders) {
   return groups;
 }
 
+function parseCuttingFabricDetails(value) {
+  return String(value || "").split(/\r?\n/).flatMap((line) => {
+    const match = line.trim().match(/^(.+?)\s*(?:\(([^()]+)\)|·\s*لون\s+(.+?))\s*:\s*([\d]+(?:\.[\d]+)?)\s*(متر|توب)\s*$/u);
+    if (!match) return [];
+    return [{
+      name: match[1].trim(),
+      color_name: String(match[2] || match[3] || "").split(" · مصدر ")[0].trim(),
+      quantity: Number(match[4]),
+      unit: match[5]
+    }];
+  });
+}
+
+function cuttingFabricBreakdownMarkup(fabricLines, fallbackFabric = "") {
+  const lines = Array.isArray(fabricLines) ? fabricLines : [];
+  if (lines.length) {
+    const groups = new Map();
+    lines.forEach((line) => {
+      const fabricName = String(line.name || line.fabric_type || line.source || "قماش").trim();
+      const colorName = String(line.color_name || "لون غير مسمى").trim();
+      const unit = String(line.unit || "").trim();
+      const quantity = Number(line.quantity || 0);
+      const colors = groups.get(fabricName) || new Map();
+      const colorKey = `${colorName}\u0000${unit}`;
+      const color = colors.get(colorKey) || { colorName, unit, quantity: 0, colorHex: line.color_hex || line.colorHex || "" };
+      color.quantity += Number.isFinite(quantity) ? quantity : 0;
+      colors.set(colorKey, color);
+      groups.set(fabricName, colors);
+    });
+    return `<div class="cutting-fabric-breakdown">${[...groups].map(([fabricName, colors]) =>
+      `<section class="cutting-fabric-group"><h4>${escapeHtml(fabricName)}</h4>${table(
+        ["درجة اللون","عدد الأطواب / الكمية"],
+        [...colors.values()].map((color) => {
+          const swatch = /^#[0-9a-f]{6}$/i.test(color.colorHex)
+            ? `<i class="fabric-color-swatch" style="--fabric-color:${color.colorHex}" aria-hidden="true"></i>`
+            : "";
+          return `<tr><td><span class="cutting-fabric-color">${swatch}${escapeHtml(color.colorName)}</span></td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(color.quantity)} ${escapeHtml(color.unit)}</td></tr>`;
+        })
+      )}</section>`
+    ).join("")}</div>`;
+  }
+  const uniqueNames = [...new Set(String(fallbackFabric || "")
+    .split(/[،,]/)
+    .map((name) => name.trim().replace(/\s+\([^)]*\)\s*$/, ""))
+    .filter(Boolean))];
+  return uniqueNames.length
+    ? `<div class="cutting-fabric-breakdown">${uniqueNames.map((name) => `<section class="cutting-fabric-group"><h4>${escapeHtml(name)}</h4><p class="muted">لا توجد تفاصيل ألوان وكميات مسجلة لهذه الخامة.</p></section>`).join("")}</div>`
+    : "";
+}
+
 function cuttingDetailsMarkup(order) {
   const sizeData = parseSizeData(order.sizes);
   const sizes = orderedSizeEntries(sizeData);
@@ -1097,16 +1147,24 @@ function cuttingDetailsMarkup(order) {
     const colorName = order.colorNames?.[color.color] || color.name || "اسم اللون غير مسجل";
     return `<tr><td>${escapeHtml(colorName)}</td><td>${escapeHtml(size)}${totalOccurrences > 1 ? ` · تكرار ${occurrence} من ${totalOccurrences}` : ""}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(color.plys)} راقات</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(color.plys)} قطعة</td></tr>`;
   }));
+  const explicitFabricLines = Array.isArray(order.fabricLines) ? order.fabricLines : [];
+  const parsedFabricDetails = parseCuttingFabricDetails(order.fabricDetails);
+  const fabricLines = explicitFabricLines.length
+    ? explicitFabricLines
+    : parsedFabricDetails.length ? parsedFabricDetails : parseCuttingFabricDetails(order.fabric);
+  const fabricBreakdown = cuttingFabricBreakdownMarkup(fabricLines, order.fabric || order.externalFabricSource);
   const cuttingDetails = [
     ["مسؤول القص", order.cutterName || "—"],
-    ["الخامة", order.fabric || order.externalFabricSource || "—"],
-    ...(order.fabricDetails ? [["تفاصيل الخامة", order.fabricDetails]] : []),
     ["مصدر الخامة", order.fabricId === "external" ? "خامة خارجية / مورد" : order.fabricId ? "خامة العميل من المخزن" : "—"],
-    ["كمية القماش", `${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(order.fabricQuantity || 0)} ${order.fabricUnit || "متر"}`],
-    ["عدد الأتواب", new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.boltCount || 0)],
+    ...(!fabricLines.length ? [
+      ["كمية القماش", `${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(order.fabricQuantity || 0)} ${order.fabricUnit || "متر"}`],
+      ["عدد الأتواب", new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.boltCount || 0)]
+    ] : []),
     ["إجمالي الراقات", new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.layerCount || order.cuttingPlys || 0)]
   ];
   return `<section class="cutting-details-section"><h3 class="modal-subheading">تفاصيل القص والخامات</h3><dl class="cutting-details-grid">${cuttingDetails.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`).join("")}</dl>
+    ${fabricBreakdown}
+    ${order.fabricDetails && !fabricLines.length ? `<p class="cutting-details-notes"><strong>تفاصيل الخامة / المصدر:</strong> ${escapeHtml(order.fabricDetails)}</p>` : ""}
     ${breakdown.length ? table(["اللون","المقاس","الرقات","العدد الناتج"], breakdown) : '<p class="empty-state">لم تُسجل تفاصيل المقاسات والرقات بعد.</p>'}
     ${order.cuttingNotes ? `<p class="cutting-details-notes"><strong>ملاحظات القص:</strong> ${escapeHtml(order.cuttingNotes)}</p>` : ""}
   </section>`;
@@ -1163,13 +1221,10 @@ function cuttingStoryDetailsMarkup(story) {
     return `<tr><td>${escapeHtml(color.name || "اسم اللون غير مسجل")}</td><td>${escapeHtml(size)}${(sizeData.multiplicities[size] || 0) > 1 ? ` · التكرار ${occurrence}` : ""}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(color.plys)}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(color.plys)} قطعة</td></tr>`;
   }));
   const fabricLines = Array.isArray(story.fabric_lines) ? story.fabric_lines : [];
-  const fabricRows = fabricLines.map((line) =>
-    `<tr><td>${escapeHtml(line.name || line.fabric_type || "قماش")}</td><td>${escapeHtml(line.color_name || "—")}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(Number(line.quantity || 0))} ${escapeHtml(line.unit || "")}</td></tr>`
-  );
   return `<header class="production-details-heading">${modelImageMarkup(story.model_image_url)}<div><small>تفاصيل قصة القص</small><h2>${escapeHtml(story.model_name || story.model_number || "قصة بدون اسم")}</h2><p>كود الموديل بالنظام: ${escapeHtml(story.factory_model_code || "—")} · كود/رقم الموديل للعميل: ${escapeHtml(story.model_number || "—")} · العميل: ${escapeHtml(story.customer_name || "—")}</p></div></header>
-    <dl class="sewing-order-facts"><div><dt>إجمالي القطع</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(story.total_pieces)} قطعة</dd></div><div><dt>عدد الرقات</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(story.ply_count || 0)}</dd></div><div><dt>عدد الأتواب</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(story.bolt_count || 0)} توب</dd></div><div><dt>كمية القماش</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(story.fabric_quantity || 0)} ${escapeHtml(story.fabric_unit || "")}</dd></div><div><dt>القماش</dt><dd>${escapeHtml(story.fabric || "—")}</dd></div><div><dt>المورد / تفاصيل المصدر</dt><dd>${escapeHtml(story.fabric_details || "—")}</dd></div><div><dt>مسؤول القص</dt><dd>${escapeHtml(story.submitted_by_name || "مشرف القص")}</dd></div></dl>
+    <dl class="sewing-order-facts"><div><dt>إجمالي القطع</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(story.total_pieces)} قطعة</dd></div><div><dt>عدد الرقات</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(story.ply_count || 0)}</dd></div>${fabricLines.length ? "" : `<div><dt>عدد الأتواب</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(story.bolt_count || 0)} توب</dd></div><div><dt>كمية القماش</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(story.fabric_quantity || 0)} ${escapeHtml(story.fabric_unit || "")}</dd></div><div><dt>القماش</dt><dd>${escapeHtml(story.fabric || "—")}</dd></div>`}<div><dt>المورد / تفاصيل المصدر</dt><dd>${escapeHtml(story.fabric_details || "—")}</dd></div><div><dt>مسؤول القص</dt><dd>${escapeHtml(story.submitted_by_name || "مشرف القص")}</dd></div></dl>
     ${breakdown.length ? `<section class="cutting-details-section"><h3 class="modal-subheading">المقاسات والأعداد بالترتيب، مع إظهار التكرار</h3>${table(["اللون","المقاس","عدد الراقات","قطع المقاس واللون"], breakdown)}</section>` : '<p class="empty-state">لا توجد تفاصيل مقاسات مسجلة.</p>'}
-    ${fabricRows.length ? `<section class="cutting-details-section"><h3 class="modal-subheading">الخامات والألوان المسحوبة</h3>${table(["نوع القماش","اللون","الكمية"], fabricRows)}</section>` : ""}
+    ${fabricLines.length ? `<section class="cutting-details-section"><h3 class="modal-subheading">الخامات والألوان المسحوبة</h3>${cuttingFabricBreakdownMarkup(fabricLines, story.fabric)}</section>` : ""}
     ${story.technical_notes ? `<p class="cutting-details-notes"><strong>ملاحظات فنية:</strong> ${escapeHtml(story.technical_notes)}</p>` : ""}`;
 }
 
@@ -2254,9 +2309,6 @@ function clientOrderCards(orders) {
     <header class="order-card-heading">${modelImageMarkup(item.modelImageUrls || item.modelImageUrl)}<div><p class="order-card-label">كود الموديل بالنظام: ${escapeHtml(item.factoryModelCode || "—")} · كود/رقم الموديل للعميل: ${escapeHtml(item.clientModelCode || "—")}</p><h3>${escapeHtml(item.name || "موديل بدون اسم")}</h3></div>${statusTag(item.displayStatus || item.status)}</header>
     <dl class="order-card-details">
       ${item.cutterName ? `<div><dt>مين اللي قص القصة؟</dt><dd>${escapeHtml(item.cutterName)}</dd></div>` : ""}
-      <div><dt>الخامة المستخدمة</dt><dd>${escapeHtml(item.fabric || item.externalFabricSource || "—")}</dd></div>
-      <div><dt>كمية القماش والأتواب</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(item.fabricQuantity || 0)} ${escapeHtml(item.fabricUnit || "متر")} · ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.boltCount || 0)} توب</dd></div>
-      <div><dt>الراقات</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.layerCount || item.cuttingPlys || 0)}</dd></div>
       <div><dt>العدد المطلوب الأصلي</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.originalQuantity)}</dd></div><div><dt>العدد الفعلي بعد القص</dt><dd>${item.quantity ? new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.quantity) : "بانتظار الحصر"}</dd></div><div><dt>الكمية المنجزة</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.completedPieces)}</dd></div>
       <div><dt>الكمية المسلّمة</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.deliveredPieces)}</dd></div><div><dt>المتبقي</dt><dd>${item.quantity ? new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.remainingPieces) : "بانتظار الحصر بعد القص"}</dd></div>
       ${["تم التسليم", "تم التسليم بالكامل", "تم التسليم والإغلاق"].includes(item.status) ? `<div><dt>فرق التسليم عن العدد المطلوب الأصلي</dt><dd>${item.quantityDifference > 0 ? `زيادة ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.quantityDifference)} قطعة` : item.quantityDifference < 0 ? `نقص ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(Math.abs(item.quantityDifference))} قطعة` : "مطابق للعدد المطلوب"}</dd></div>` : ""}
@@ -2856,6 +2908,57 @@ function clientDetailsView(client, data) {
   const clientModelRequests = (data.clientModelRequests || []).filter((request) => request.client_id === client.id);
   const pendingClientModelRequests = clientModelRequests.filter((request) => request.status === "pending");
   const reviewedClientModelRequests = clientModelRequests.filter((request) => request.status !== "pending");
+  const clientCuttingStories = (data.cuttingStories || []).filter((story) => story.customer_id === client.id);
+  const storyMatchesOrder = (story, order) =>
+    story.source_order_id === order.id
+    || story.approved_order_id === order.id
+    || Boolean(order.factoryModelCode && story.factory_model_code === order.factoryModelCode);
+  const hasUnstartedCuttingStage = (order) =>
+    canonicalFactoryOrderStatus(order.storedStatus || order.status) === "قيد الانتظار"
+    && ["", "معلق", "قيد الانتظار", "بانتظار"].includes(order.cuttingStageStatus || "")
+    && Number(order.layerCount || order.cuttingPlys || 0) === 0
+    && Number(order.completedPieces || 0) === 0
+    && !order.cutterName;
+  const waitingOrderModels = summary.orders.filter((order) =>
+    !order.archivedAt
+    && hasUnstartedCuttingStage(order)
+    && !clientCuttingStories.some((story) => storyMatchesOrder(story, order))
+  );
+  const activeOrderCodes = new Set(summary.orders
+    .filter((order) => !order.archivedAt)
+    .map((order) => order.factoryModelCode)
+    .filter(Boolean));
+  const storyCatalogIds = new Set(clientCuttingStories.map((story) => story.catalog_model_id).filter(Boolean));
+  const storyModelCodes = new Set(clientCuttingStories.map((story) => story.factory_model_code).filter(Boolean));
+  const waitingCatalogModels = (data.modelCatalog || []).filter((model) =>
+    model.customer_id === client.id
+    && !model.archived_at
+    && !storyCatalogIds.has(model.id)
+    && !storyModelCodes.has(model.factory_model_code)
+    && !activeOrderCodes.has(model.factory_model_code)
+  );
+  const waitingCandidates = [
+    ...waitingOrderModels.map((order) => ({
+      key: order.factoryModelCode || order.modelNumber || order.id,
+      name: order.name,
+      code: order.factoryModelCode,
+      image: order.modelImageUrls || order.modelImageUrl
+    })),
+    ...waitingCatalogModels.map((model) => ({
+      key: model.factory_model_code || model.id,
+      name: model.model_name,
+      code: model.factory_model_code,
+      image: model.model_image_url || DEFAULT_MODEL_IMAGE_URL
+    })),
+    ...pendingClientModelRequests.map((request) => ({
+      key: request.model_number || request.model_name || request.id,
+      name: request.model_name,
+      code: request.model_number,
+      image: request.imageUrl
+    }))
+  ];
+  const waitingModels = [...new Map(waitingCandidates.map((model) => [model.key, model])).values()];
+  const waitingOrderIds = new Set(waitingOrderModels.map((order) => order.id));
   const clientRequestRows = (requests) => requests.map((request) =>
     `<tr><td>${escapeHtml(request.model_name || "—")}</td><td>${escapeHtml(request.model_number || "—")}</td><td>${request.quantity ?? "—"}</td><td>${modelImageMarkup(request.imageUrl, `صورة الموديل ${request.model_name || ""}`) || "—"}</td><td>${statusTag(request.status === "pending" ? "بانتظار المراجعة" : request.status)}</td><td>${formatDateTime(request.created_at)}</td></tr>`
   );
@@ -2941,6 +3044,7 @@ function clientDetailsView(client, data) {
   const orderCard = (order, archived = false) => {
     const index = dashboardData.models.findIndex((item) => item.id === order.id);
     const locked = Boolean(order.archivedAt) || LOCKED_FACTORY_ORDER_STATUSES.includes(order.status);
+    const cuttingStory = clientCuttingStories.find((story) => storyMatchesOrder(story, order));
     return `<article class="order-card client-history-card">
     <label class="print-model-select"><input type="checkbox" data-print-model-select="${escapeHtml(order.id)}"><span>اختيار للطباعة</span></label>
     <header class="order-card-heading">${modelImageMarkup(order.modelImageUrls || order.modelImageUrl)}<div><p class="order-card-label">${archived ? "طلب مؤرشف" : "طلب حالي"} · كود الموديل بالنظام: ${escapeHtml(order.factoryModelCode || "—")} · كود/رقم الموديل للعميل: ${escapeHtml(order.clientModelCode || "—")}</p><h3>${escapeHtml(order.name || "موديل بدون اسم")}</h3></div>${statusTag(order.displayStatus || order.status)}</header>
@@ -2949,9 +3053,6 @@ function clientDetailsView(client, data) {
       <div><dt>المستلم</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.deliveredPieces)} قطعة</dd></div>
       <div><dt>المتبقي</dt><dd>${order.quantity ? `${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.remainingPieces)} قطعة` : "بانتظار الحصر"}</dd></div>
       <div><dt>مسؤول القص</dt><dd>${escapeHtml(order.cutterName || "—")}</dd></div>
-      <div><dt>الخامة المستخدمة</dt><dd>${escapeHtml(order.fabric || order.externalFabricSource || "—")}</dd></div>
-      <div><dt>كمية القماش والأتواب</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(order.fabricQuantity || 0)} ${escapeHtml(order.fabricUnit || "متر")} · ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.boltCount || 0)} توب</dd></div>
-      <div><dt>الراقات</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.layerCount || order.cuttingPlys || 0)}</dd></div>
       <div><dt>كود الموديل لدى العميل</dt><dd>${escapeHtml(order.clientModelCode || "—")}</dd></div>
       ${order.pricePerPiece > 0 ? `<div><dt>سعر القطعة</dt><dd>${money(order.pricePerPiece)}</dd></div>` : '<div><dt>التسعير</dt><dd>لم يُسعّر بعد</dd></div>'}
       <div><dt>مصاريف التشغيل الإضافية</dt><dd>${money(order.operationalExpenses)}</dd></div>
@@ -2963,7 +3064,7 @@ function clientDetailsView(client, data) {
       ${archived ? `<div><dt>تاريخ الأرشفة</dt><dd>${formatDateTime(order.archivedAt)}</dd></div>` : ""}
     </dl>
     <h4 class="modal-subheading">توزيع المقاسات والألوان</h4>${modelSizeColorCardsMarkup(order)}
-    ${cuttingDetailsMarkup(order)}
+    ${cuttingDetailsMarkup({ ...order, fabricLines: cuttingStory?.fabric_lines || [] })}
     ${!archived ? `<footer class="order-card-actions"><button class="row-action" type="button" data-edit-client-order="${escapeHtml(order.id)}">تعديل السعر أو بيانات الموديل</button>${locked ? '<span class="status">تم التسليم / مغلق</span>' : order.customerId ? `<button class="row-action" type="button" data-action="record-delivery" data-index="${index}"${order.quantity ? "" : " disabled"}>تسجيل تسليم</button><button class="row-action order-close-action" type="button" data-action="complete-handover" data-index="${index}"${order.quantity ? "" : " disabled"}>تسوية التسليم وإغلاق الطلب</button>` : ""}${orderCanBeDeleted(order) ? `<button class="row-action order-delete-action" type="button" data-action="delete-order" data-order-id="${escapeHtml(order.id)}">حذف الموديل</button>` : '<span class="order-delete-protected" title="لا يمكن حذف طلب له تسليمات أو مصروفات تشغيل أو مبالغ مسجلة">محمي بسجل مالي / مصروفات / تسليم</span>'}</footer>` : ""}
   </article>`;
   };
@@ -2981,6 +3082,7 @@ function clientDetailsView(client, data) {
     <div class="client-profile-compact"><span>الهاتف: ${escapeHtml(client.phone || "—")}</span><span>كاش: ${escapeHtml(client.cash_phone || "—")}</span><span>إنستا: ${escapeHtml(client.instagram || "—")}</span><span>تاريخ الملف: ${formatDateTime(client.created_at)}</span></div>
     <div class="client-management-tabs" role="tablist" aria-label="تبويبات ملف العميل">
       <button type="button" role="tab" aria-selected="${activeClientProfileTab === "overview"}" class="client-management-tab${activeClientProfileTab === "overview" ? " active" : ""}" data-client-profile-tab="overview">الملف والحساب</button>
+      <button type="button" role="tab" aria-selected="${activeClientProfileTab === "waiting"}" class="client-management-tab${activeClientProfileTab === "waiting" ? " active" : ""}" data-client-profile-tab="waiting">الموديلات قيد الانتظار / لم تُقص بعد</button>
       <button type="button" role="tab" aria-selected="${activeClientProfileTab === "statement"}" class="client-management-tab${activeClientProfileTab === "statement" ? " active" : ""}" data-client-profile-tab="statement">كشف الحساب والسجل المالي</button>
     </div>
     <div data-client-profile-panel="overview"${activeClientProfileTab === "overview" ? "" : " hidden"}>
@@ -2992,13 +3094,22 @@ function clientDetailsView(client, data) {
     ${reviewedClientModelRequests.length ? panel("طلبات القص السابقة", table(["اسم الموديل","كود/رقم العميل","العدد","الصورة","الحالة","تاريخ الطلب"], clientRequestRows(reviewedClientModelRequests))) : ""}
     <div class="stats-grid client-finance-summary">${summary.latestSettlement ? stat("الرصيد المرحّل من آخر تصفية", money(summary.openingBalance), "قبل حركات الفترة الحالية") : ""}${stat("المتبقي من البضاعة بحالات التشغيل الأخرى", money(summary.pendingGoodsBalance), "بعد تخصيص الدفعات؛ لا يدخل في المستحقات")}${stat("المستحق للطلبات الجاهزة أو المسلّمة", money(summary.deliveredDue), "حسب حالة الطلب وبعد تخصيص الدفعات")}${stat("مصروفات وعهد العميل", money(summary.clientExpensesTotal))}${stat("خصومات التسوية", money(summary.accountAdjustmentsTotal), "خصومات غير نقدية")}${stat("إجمالي المدفوع", money(summary.paid))}${stat("الرصيد الإجمالي", money(summary.balance), summary.balance === 0 ? "تم السداد بالكامل" : summary.balance < 0 ? "رصيد دائن للعميل" : summary.deliveredDue > 0 ? "يوجد مستحق حسب حالة الطلب" : summary.hasUndeliveredGoods ? "يشمل بضاعة بحالات تشغيل أخرى" : "لا يوجد مستحق حالياً")}</div>
     </div>
+    <div data-client-profile-panel="waiting"${activeClientProfileTab === "waiting" ? "" : " hidden"}>
+      <section class="client-detail-section">${panel("الموديلات قيد الانتظار / لم تُقص بعد", waitingModels.length
+        ? `<div class="client-waiting-model-grid">${waitingModels.map((model) => `<article class="client-waiting-model-card">
+            ${modelImageMarkup(model.image, `صورة الموديل ${model.name || ""}`)}
+            <div><h3>${escapeHtml(model.name || "موديل بدون اسم")}</h3><p>كود الموديل: <strong>${escapeHtml(model.code || "—")}</strong></p>${statusTag("قيد الانتظار")}</div>
+          </article>`).join("")}</div>`
+        : '<div class="empty-state">لا توجد موديلات غير مقصوصة أو بانتظار قصة لهذا العميل.</div>',
+      "الموديلات الجديدة التي لم تُسجل لها قصة قص بعد.")}</section>
+    </div>
     <div data-client-profile-panel="statement"${activeClientProfileTab === "statement" ? "" : " hidden"}>
     <section class="client-detail-section">${panel("كشف الحساب والسجل المالي", `<p>يعرض ملخص رصيد كل طلب حسب حالته، ثم التسليمات والدفعات والمصروفات والخصومات والتسويات بترتيب زمني. تعديل أو حذف الدفعة الخاطئة يعيد احتساب حساب العميل دون إنشاء حركة صرف نقدية عكسية.</p>${orderLedgerSection}<form class="form-grid client-cash-form" data-client-cash-form="${escapeHtml(client.id)}"><div class="field"><label for="client-cash-category-${escapeHtml(client.id)}">بند المصروف / العهدة</label><input id="client-cash-category-${escapeHtml(client.id)}" name="category" maxlength="120" placeholder="مثل: سلفة، خيط، نقل" required></div><div class="field"><label for="client-cash-amount-${escapeHtml(client.id)}">المبلغ على حساب العميل (ج.م)</label><input id="client-cash-amount-${escapeHtml(client.id)}" name="amount" type="number" min="0.01" step="0.01" required></div><div class="field"><label for="client-cash-method-${escapeHtml(client.id)}">طريقة الصرف</label><input id="client-cash-method-${escapeHtml(client.id)}" name="method" value="نقدي" maxlength="80"></div><div class="field"><label for="client-cash-date-${escapeHtml(client.id)}">تاريخ الحركة</label><input id="client-cash-date-${escapeHtml(client.id)}" name="occurredAt" type="datetime-local" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}" required></div><div class="field wide"><label for="client-cash-description-${escapeHtml(client.id)}">البيان / التفاصيل</label><input id="client-cash-description-${escapeHtml(client.id)}" name="description" maxlength="500" required></div><div class="form-actions"><button class="button button-primary" type="submit">تسجيل المصروف على الحساب</button></div></form>${clientFinancialStatementMarkup(financialEntries)}`)}</section>
     <div class="modal-backdrop" data-client-payment-modal hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="client-payment-edit-title"><button class="modal-close" type="button" data-close-client-payment aria-label="إغلاق">×</button><h2 id="client-payment-edit-title">تعديل دفعة العميل</h2><form class="form-grid" data-client-payment-edit-form><input type="hidden" name="recordId"><label class="field"><span>المبلغ (ج.م)</span><input name="amount" type="number" min="0.01" step="0.01" required></label><label class="field"><span>التاريخ</span><input name="date" type="date" required></label><label class="field"><span>طريقة الدفع</span><select name="method"><option>تحويل بنكي</option><option>نقدي</option><option>محفظة إلكترونية</option></select></label><label class="field"><span>رقم الطلبية / المرجع</span><input name="reference" maxlength="160"></label><label class="field wide"><span>ملاحظات</span><input name="notes" maxlength="500"></label><div class="form-actions wide"><button class="button button-primary" type="submit">حفظ التعديل</button><button class="row-action" type="button" data-close-client-payment>إلغاء</button></div></form></section></div>
     </div>
     <div data-client-profile-panel="overview"${activeClientProfileTab === "overview" ? "" : " hidden"}>
     <section class="client-detail-section"><header class="section-heading"><div><h2>الموديلات التي تم تسعيرها</h2><p>يُحتسب المطلوب المالي على الكمية التي تم تسليمها.</p></div><button class="button button-secondary" type="button" data-open-order-for-client="${escapeHtml(client.id)}">＋ إضافة موديل للعميل</button></header>${pricedOrders.length ? `<div class="order-cards">${pricedOrders.map((order) => orderCard(order)).join("")}</div>` : '<div class="empty-state">لا توجد موديلات مسعّرة في الفترة الحالية.</div>'}</section>
-    <section class="client-detail-section"><header class="section-heading"><div><h2>موديلات لم تُسعّر بعد</h2><p>طلبات في القص أو الانتظار أو مراحل التشغيل الأخرى.</p></div></header>${unpricedOrders.length ? `<div class="order-cards">${unpricedOrders.map((order) => orderCard(order)).join("")}</div>` : '<div class="empty-state">لا توجد موديلات بانتظار التسعير.</div>'}</section>
+    <section class="client-detail-section"><header class="section-heading"><div><h2>موديلات لم تُسعّر بعد</h2><p>طلبات في القص أو مراحل التشغيل الأخرى.</p></div></header>${unpricedOrders.filter((order) => !waitingOrderIds.has(order.id)).length ? `<div class="order-cards">${unpricedOrders.filter((order) => !waitingOrderIds.has(order.id)).map((order) => orderCard(order)).join("")}</div>` : '<div class="empty-state">لا توجد موديلات بانتظار التسعير.</div>'}</section>
     <section class="client-detail-section">${panel("الموديلات المسلّمة", deliveries.length ? table(["الموديل","الكمية","سعر القطعة","القيمة المستحقة","المستلم","التاريخ"], deliveries.map((delivery) => { const order = data.models.find((item) => item.id === delivery.order_id); return `<tr><td>${escapeHtml(order?.name || "طلب مؤرشف")}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(delivery.quantity)} قطعة</td><td>${money(delivery.price_per_piece)}</td><td>${money(delivery.amount)}</td><td>${escapeHtml(delivery.recipient_name || "—")}</td><td>${formatDateTime(delivery.delivered_at)}</td></tr>`; })) : '<div class="empty-state">لا توجد تسليمات مسجلة لهذا العميل.</div>')}</section>
     <section class="client-detail-section">${panel("سجل القماش الداخل للعميل", clientFabrics.length ? table(["القماش / اللون","المتاح","الحركة","الكمية","التاريخ"], clientFabricTransactions.map((transaction) => { const fabric = clientFabrics.find((item) => item.id === transaction.fabric_id); return `<tr><td>${escapeHtml(fabric?.name || "—")} · ${escapeHtml(fabric?.color_name || "لون غير مسمى")}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(fabric?.quantity_available || 0)} ${escapeHtml(fabric?.unit || "")}</td><td>${escapeHtml(transaction.transaction_type)}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(transaction.quantity)} ${escapeHtml(fabric?.unit || "")}</td><td>${formatDateTime(transaction.created_at)}</td></tr>`; })) : '<div class="empty-state">لا يوجد قماش مرتبط بهذا العميل.</div>')}</section>
     <section class="client-detail-section">${panel("ملاحظات وتنبيهات خاصة بالعميل", `${clientNotes.length ? `<div class="client-note-list">${clientNotes.map((note) => `<article><p>${escapeHtml(note.note || "")}</p><time>${formatDateTime(note._createdAt || note.created_at)}</time></article>`).join("")}</div>` : '<div class="empty-state">لا توجد ملاحظات مسجلة.</div>'}<form class="client-note-form" data-client-note="${escapeHtml(client.id)}"><label for="client-note-${escapeHtml(client.id)}">إضافة ملاحظة أو تنبيه</label><textarea id="client-note-${escapeHtml(client.id)}" name="note" rows="3" required></textarea><button class="button button-secondary" type="submit">حفظ الملاحظة</button></form>`)}</section>
@@ -3141,9 +3252,7 @@ function modelDetailsModalView(order, showPricingBreakdown = false) {
       <div><span>المبلغ المستحق فعلياً</span><strong>${money(order.totalAmount)}</strong></div>
       <div><span>المدفوع</span><strong>${money(order.paidAmount)}</strong></div>
       <div><span>المتبقي الحالي</span><strong>${money(order.remainingAmount)}</strong></div>
-      <div><span>القماش / الفرشة</span><strong>${escapeHtml(order.fabric || "—")} · ${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(order.fabricQuantity)} ${escapeHtml(order.fabricUnit || "متر")} · ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.layerCount)} راقات</strong></div>
       <div><span>مسؤول القص</span><strong>${escapeHtml(order.cutterName || "—")}</strong></div>
-      <div><span>عدد الأتواب</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.boltCount || 0)}</strong></div>
       <div><span>أقسام الشغل</span><strong>${escapeHtml(workStageLabels(order.workStages).join(" · ") || "—")}</strong></div>
       <div><span>طريقة التسعير</span><strong>${order.pricingMode === "stages" ? "سعر مستقل لكل قسم" : "سعر إجمالي للقطعة"}</strong></div>
       ${pricingDetails}
@@ -3302,7 +3411,7 @@ function cuttingFabricLineMarkup(fabrics, typeKey, customerId) {
     && cuttingFabricTypeKey(fabric) === typeKey
   );
   const colorChoices = matchingFabrics.map((fabric) =>
-    `<option value="${escapeHtml(fabric.id)}" data-name="${escapeHtml(fabric.name)}" data-fabric-type="${escapeHtml(fabric.fabric_type || "")}" data-unit="${escapeHtml(fabric.unit)}" data-available="${escapeHtml(fabric.quantity_available)}" data-color="${escapeHtml(fabric.color_name || "")}">${escapeHtml(fabric.color_name || "لون غير مسمى")} · متاح ${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(fabric.quantity_available)} ${escapeHtml(fabric.unit)}</option>`
+    `<option value="${escapeHtml(fabric.id)}" data-name="${escapeHtml(fabric.name)}" data-fabric-type="${escapeHtml(fabric.fabric_type || "")}" data-unit="${escapeHtml(fabric.unit)}" data-available="${escapeHtml(fabric.quantity_available)}" data-color="${escapeHtml(fabric.color_name || "")}" data-color-hex="${escapeHtml(fabric.color_hex || "")}">${escapeHtml(fabric.color_name || "لون غير مسمى")} · متاح ${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(fabric.quantity_available)} ${escapeHtml(fabric.unit)}</option>`
   ).join("");
   return `<div class="cutting-fabric-line${isExternal ? " cutting-fabric-line-external" : ""}" data-cutting-fabric-line>
     ${isExternal
@@ -7380,6 +7489,7 @@ function bindCuttingActions(session) {
           colorName: external
             ? String(externalColor.value).trim()
             : selectedColor?.dataset.color || "",
+          colorHex: external ? "" : selectedColor?.dataset.colorHex || "",
           quantity: Number(line.querySelector("[data-fabric-line-quantity]").value),
           unit,
           source: external ? String(form.elements.externalFabricSource.value).trim() : ""

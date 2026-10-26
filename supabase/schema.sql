@@ -5265,6 +5265,7 @@ begin
       'name', fabric.name,
       'fabric_type', fabric.fabric_type,
       'color_name', fabric.color_name,
+      'color_hex', fabric.color_hex,
       'quantity', reservation.quantity,
       'unit', fabric.unit,
       'source', ''
