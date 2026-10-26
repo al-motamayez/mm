@@ -179,6 +179,7 @@ async function readSession() {
     role: account.role,
     username: account.username,
     fullName: account.name,
+    phone: account.phone || "",
     roleName: roleNames[account.role],
     jobTitle: account.job_title || "",
     canSubmitProduction: account.role === "worker" && account.can_submit_production === true
@@ -928,7 +929,7 @@ async function readAccounts(session) {
 async function findAccountByUsername(username) {
   let { data, error } = await supabaseClient
     .from("users")
-    .select("id, name, username, role, status, job_title, can_submit_production")
+    .select("id, name, username, phone, role, status, job_title, can_submit_production")
     .ilike("username", username)
     .maybeSingle();
   if (error?.code === "42703") {
@@ -2637,15 +2638,20 @@ function clientAccountCards(data) {
     const linkedUser = data.users.find((user) => user.id === client.user_id);
     const pipelineGroups = factoryOrderPipelineGroups(summary.orders)
       .filter((group) => group.key !== "unclassified" || group.orders.length);
+    const waitingModels = clientWaitingModelSummary(client, summary.orders, data).models;
     const unpricedOrders = summary.orders.filter((order) => order.pricePerPiece <= 0);
     const uncountedOrders = summary.orders.filter((order) => order.quantity <= 0);
     const modelMetric = (label, orders, id) => `<div class="model-preview"><span>${label}</span><button class="model-preview-trigger" type="button" aria-label="${orders.length} ${label}" aria-describedby="${id}"${orders.length === 1 ? ` data-open-model-id="${escapeHtml(orders[0].id)}"` : ""}>${orders.length}</button>${previewList(orders, id)}</div>`;
+    const waitingModelMetric = `<div class="model-preview"><span>قيد الانتظار / لم تُقص بعد</span><button class="model-preview-trigger" type="button" aria-label="${waitingModels.length} موديل قيد الانتظار" aria-describedby="waiting-${escapeHtml(client.id)}" data-open-client-details="${escapeHtml(client.id)}" data-client-details-tab="waiting">${waitingModels.length}</button><div class="model-preview-list" id="waiting-${escapeHtml(client.id)}" role="tooltip">${waitingModels.length
+      ? waitingModels.map((model) => `<button class="model-preview-item model-preview-link" type="button" data-open-client-details="${escapeHtml(client.id)}" data-client-details-tab="waiting"><strong>${escapeHtml(model.name || "موديل بدون اسم")}</strong><span>كود الموديل: ${escapeHtml(model.code || "—")}</span>${statusTag("قيد الانتظار")}</button>`).join("")
+      : "<span>لا توجد موديلات لم تُقص بعد.</span>"}</div></div>`;
     return `<article class="client-account-card">
       <header><div><h3>${escapeHtml(client.name)}</h3><p>${escapeHtml(client.phone || "بدون هاتف")}${linkedUser ? ` · ${escapeHtml(linkedUser.username)}` : " · ملف عميل بلا حساب دخول"}</p></div>${statusTag(linkedUser?.status === "suspended" ? "متوقف" : "نشط")}</header>
       <div class="client-balance-grid"><div><span>المتبقي من البضاعة بحالات التشغيل قبل جاهز للتسليم</span><strong>${money(summary.pendingGoodsBalance)}</strong></div><div><span>المستحق للطلبات الجاهزة للتسليم أو المسلّمة</span><strong>${money(summary.deliveredDue)}</strong></div><div><span>المدفوع</span><strong>${money(summary.paid)}</strong></div><div><span>إجمالي رصيد الحساب المتوقع</span><strong>${money(summary.balance)}</strong><small>${summary.balance === 0 ? "تم السداد بالكامل" : summary.balance < 0 ? "رصيد دائن بعد احتساب البضاعة غير المستحقة" : summary.deliveredDue > 0 ? "المستحق حسب حالة الطلب؛ وبضاعة التشغيل معروضة منفصلة" : summary.hasUndeliveredGoods ? "لا يوجد مستحق حسب الحالة؛ الرصيد يخص بضاعة تحت التسليم" : "مستحق حسب حالة الطلب"}</small></div></div>
       ${unpricedOrders.length ? '<p class="client-unpriced-alert" role="status">يوجد موديلات لم تحدد أسعارها بعد</p>' : ""}
       <div class="client-activity-grid">
         ${pipelineGroups.map((group) => modelMetric(group.label, group.orders, `pipeline-${group.key}-${escapeHtml(client.id)}`)).join("")}
+        ${waitingModelMetric}
         ${modelMetric("لم يُحدد سعرها", unpricedOrders, `unpriced-${escapeHtml(client.id)}`)}
         ${modelMetric("لم يُحدد عددها", uncountedOrders, `uncounted-${escapeHtml(client.id)}`)}
       </div>
@@ -2913,52 +2919,8 @@ function clientDetailsView(client, data) {
     story.source_order_id === order.id
     || story.approved_order_id === order.id
     || Boolean(order.factoryModelCode && story.factory_model_code === order.factoryModelCode);
-  const hasUnstartedCuttingStage = (order) =>
-    canonicalFactoryOrderStatus(order.storedStatus || order.status) === "قيد الانتظار"
-    && ["", "معلق", "قيد الانتظار", "بانتظار"].includes(order.cuttingStageStatus || "")
-    && Number(order.layerCount || order.cuttingPlys || 0) === 0
-    && Number(order.completedPieces || 0) === 0
-    && !order.cutterName;
-  const waitingOrderModels = summary.orders.filter((order) =>
-    !order.archivedAt
-    && hasUnstartedCuttingStage(order)
-    && !clientCuttingStories.some((story) => storyMatchesOrder(story, order))
-  );
-  const activeOrderCodes = new Set(summary.orders
-    .filter((order) => !order.archivedAt)
-    .map((order) => order.factoryModelCode)
-    .filter(Boolean));
-  const storyCatalogIds = new Set(clientCuttingStories.map((story) => story.catalog_model_id).filter(Boolean));
-  const storyModelCodes = new Set(clientCuttingStories.map((story) => story.factory_model_code).filter(Boolean));
-  const waitingCatalogModels = (data.modelCatalog || []).filter((model) =>
-    model.customer_id === client.id
-    && !model.archived_at
-    && !storyCatalogIds.has(model.id)
-    && !storyModelCodes.has(model.factory_model_code)
-    && !activeOrderCodes.has(model.factory_model_code)
-  );
-  const waitingCandidates = [
-    ...waitingOrderModels.map((order) => ({
-      key: order.factoryModelCode || order.modelNumber || order.id,
-      name: order.name,
-      code: order.factoryModelCode,
-      image: order.modelImageUrls || order.modelImageUrl
-    })),
-    ...waitingCatalogModels.map((model) => ({
-      key: model.factory_model_code || model.id,
-      name: model.model_name,
-      code: model.factory_model_code,
-      image: model.model_image_url || DEFAULT_MODEL_IMAGE_URL
-    })),
-    ...pendingClientModelRequests.map((request) => ({
-      key: request.model_number || request.model_name || request.id,
-      name: request.model_name,
-      code: request.model_number,
-      image: request.imageUrl
-    }))
-  ];
-  const waitingModels = [...new Map(waitingCandidates.map((model) => [model.key, model])).values()];
-  const waitingOrderIds = new Set(waitingOrderModels.map((order) => order.id));
+  const { models: waitingModels, orderIds: waitingOrderIds } =
+    clientWaitingModelSummary(client, summary.orders, data);
   const clientRequestRows = (requests) => requests.map((request) =>
     `<tr><td>${escapeHtml(request.model_name || "—")}</td><td>${escapeHtml(request.model_number || "—")}</td><td>${request.quantity ?? "—"}</td><td>${modelImageMarkup(request.imageUrl, `صورة الموديل ${request.model_name || ""}`) || "—"}</td><td>${statusTag(request.status === "pending" ? "بانتظار المراجعة" : request.status)}</td><td>${formatDateTime(request.created_at)}</td></tr>`
   );
@@ -3273,8 +3235,10 @@ function modelDetailsModalView(order, showPricingBreakdown = false) {
 function clientQuickDetailsModalView(client, data) {
   const summary = clientAccountSummary(client, data);
   const orders = summary.orders.slice(0, 8);
+  const waitingModels = clientWaitingModelSummary(client, summary.orders, data).models;
   const pipelineGroups = factoryOrderPipelineGroups(summary.orders)
     .filter((group) => group.key !== "unclassified" || group.orders.length);
+  const quickTabId = escapeHtml(client.id);
   return `<header class="modal-view-heading"><div><small>ملف العميل</small><h2 id="client-account-modal-title">${escapeHtml(client.name)}</h2><p>${escapeHtml(client.brand_name || "—")} · رقم العميل ${escapeHtml(client.client_number || "—")}</p></div></header>
     <div class="client-balance-primary"><span>${summary.deliveredDue > 0 ? "المستحق حسب حالة الطلب" : summary.creditBalance > 0 ? "الرصيد الدائن" : "المستحق حسب حالة الطلب"}</span><strong>${money(summary.deliveredDue > 0 ? summary.deliveredDue : summary.creditBalance)}</strong><small>${summary.deliveredDue > 0 ? "يشمل الطلبات الجاهزة للتسليم أو المسلّمة فقط" : summary.creditBalance > 0 ? "بعد تخصيص الدفعات للبضاعة تحت التسليم أولاً" : summary.hasUndeliveredGoods ? "لا يوجد مستحق حسب الحالة؛ المتبقي معروض في بضاعة تحت التسليم" : "لا يوجد مستحق حسب حالة الطلب حالياً"}</small></div>
     <div class="compact-detail-grid">
@@ -3288,8 +3252,16 @@ function clientQuickDetailsModalView(client, data) {
     <div class="compact-detail-grid">${pipelineGroups.map((group) =>
       `<div><span>${escapeHtml(group.label)}</span><strong>${group.orders.length}</strong></div>`
     ).join("")}</div>
-    <h3 class="modal-subheading">آخر الموديلات</h3>
-    ${orders.length ? `<div class="compact-model-list">${orders.map((order) => `<button type="button" class="compact-model-item" data-open-model-id="${escapeHtml(order.id)}"><strong>${escapeHtml(order.name || order.modelNumber || "موديل بدون اسم")}</strong><span>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity)} قطعة · ${money(order.pricePerPiece)}</span>${statusTag(order.displayStatus || order.status)}</button>`).join("")}</div>` : '<p class="empty-state">لا توجد موديلات حالية.</p>'}
+    <div class="client-quick-tabs" role="tablist" aria-label="موديلات العميل">
+      <button type="button" id="client-latest-tab-${quickTabId}" role="tab" aria-selected="true" aria-controls="client-latest-panel-${quickTabId}" data-client-quick-tab="latest">آخر الموديلات</button>
+      <button type="button" id="client-waiting-tab-${quickTabId}" role="tab" aria-selected="false" aria-controls="client-waiting-panel-${quickTabId}" data-client-quick-tab="waiting">قيد الانتظار (${waitingModels.length})</button>
+    </div>
+    <section id="client-latest-panel-${quickTabId}" role="tabpanel" aria-labelledby="client-latest-tab-${quickTabId}" data-client-quick-panel="latest">
+      ${orders.length ? `<div class="compact-model-list">${orders.map((order) => `<button type="button" class="compact-model-item" data-open-model-id="${escapeHtml(order.id)}"><strong>${escapeHtml(order.name || order.modelNumber || "موديل بدون اسم")}</strong><span>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity)} قطعة · ${money(order.pricePerPiece)}</span>${statusTag(order.displayStatus || order.status)}</button>`).join("")}</div>` : '<p class="empty-state">لا توجد موديلات حالية.</p>'}
+    </section>
+    <section id="client-waiting-panel-${quickTabId}" role="tabpanel" aria-labelledby="client-waiting-tab-${quickTabId}" data-client-quick-panel="waiting" hidden>
+      ${waitingModels.length ? `<div class="client-waiting-model-list">${waitingModels.map((model) => `<div class="client-waiting-model">${modelImageMarkup(model.image, `صورة الموديل ${model.name || ""}`, "client-waiting-thumbnail")}<div><strong>${escapeHtml(model.name || "موديل بدون اسم")}</strong><span>كود الموديل: ${escapeHtml(model.code || "—")}</span></div>${statusTag("قيد الانتظار")}</div>`).join("")}</div>` : '<p class="empty-state">لا توجد موديلات لم تُقص بعد.</p>'}
+    </section>
     <div class="form-actions"><button class="button button-primary" type="button" data-open-client-profile="${escapeHtml(client.id)}">فتح الملف الكامل</button><button class="button button-secondary" type="button" data-quick-client-payment="${escapeHtml(client.id)}">إضافة دفعة</button><button class="button button-secondary" type="button" data-edit-customer="${escapeHtml(client.id)}">تعديل ملف العميل</button></div>`;
 }
 
@@ -4586,7 +4558,7 @@ function workerView(data, session) {
     </article>`
   );
   const personalAccount = `<section id="personal-account" class="dashboard-section">
-    <header class="worker-account-heading"><div><p class="eyebrow">حساب العامل</p><h2>مرحباً، ${escapeHtml(workerProfile.employeeName || session.fullName)}</h2><p>${escapeHtml(workerProfile.jobTitle || session.jobTitle || "العامل")} · ملخص الرواتب والحضور للشهر الحالي</p></div><span class="worker-account-month">${escapeHtml(workerMonth)}</span></header>
+    <header class="worker-account-heading"><div><p class="eyebrow">حساب العامل</p><h2>مرحباً، ${escapeHtml(session.fullName)}</h2><p>${escapeHtml(workerProfile.jobTitle || session.jobTitle || "العامل")} · ${escapeHtml(session.phone || "الهاتف غير مسجل")} · ملخص الرواتب والحضور للشهر الحالي</p></div><span class="worker-account-month">${escapeHtml(workerMonth)}</span></header>
     <div class="stats-grid worker-finance-stats">
       ${stat("المستحقات الحالية", workerAccrual ? money(workerAccrual.earned) : data.personalPayroll[0] ? money(formatAmount(data.personalPayroll[0])) : "—", "الأجر المحتسب حتى اليوم")}
       ${stat("إجمالي السلف", money(workerAccrual?.advances ?? data.personalAdvances.reduce((sum, item) => sum + formatAmount(item), 0)), "مبالغ مستحقة")}
@@ -4883,17 +4855,19 @@ function workforceSettings(data) {
 
 function workforceEmployees(data) {
   return data.workforceProfiles
-    .filter((profile) => profile.workerId && profile.employeeName)
+    .filter((profile) => profile.workerId && profile.employeeName && !profile.deletedAt)
     .map((profile) => {
       const linkedUserId = workforceLinkedAccountId({ id: profile.workerId }, data);
-      const account = data.users.find((user) => user.id === linkedUserId && user.status === "active");
+      const account = data.users.find((user) => user.id === linkedUserId);
       const roleKey = profile.roleKey || account?.roleKey || "worker";
       return {
         ...profile,
         id: profile.workerId,
         name: profile.employeeName,
         username: account?.username || profile.username || "—",
-        phone: account?.phone || profile.phone || "",
+        phone: profile.phone || "",
+        registeredName: account?.name || profile.registeredName || "",
+        registeredPhone: account?.phone || profile.registeredPhone || "",
         roleKey,
         role: roleNames[roleKey] || roleKey,
         roleLabel: roleNames[roleKey] || roleKey,
@@ -4919,6 +4893,8 @@ function workforceEmployeeProfilePayload(worker, profile, data) {
     employeeName: worker.name,
     username: worker.username,
     phone: worker.phone || "",
+    registeredName: worker.registeredName || profile.registeredName || "",
+    registeredPhone: worker.registeredPhone || profile.registeredPhone || "",
     roleKey: worker.roleKey,
     jobTitle: worker.jobTitle || account?.jobTitle || "",
     linkedUserId: workforceLinkedAccountId(worker, data)
@@ -4934,6 +4910,62 @@ function workforceAccountCanBeLinked(account) {
 
 function workforceRecordOwnerId(worker, data) {
   return workforceLinkedAccountId(worker, data);
+}
+
+function clientWaitingModelSummary(client, orders, data) {
+  const stories = (data.cuttingStories || []).filter((story) => story.customer_id === client.id);
+  const storyMatchesOrder = (story, order) =>
+    story.source_order_id === order.id
+    || story.approved_order_id === order.id
+    || Boolean(order.factoryModelCode && story.factory_model_code === order.factoryModelCode);
+  const waitingOrders = orders.filter((order) =>
+    !order.archivedAt
+    && canonicalFactoryOrderStatus(order.storedStatus || order.status) === "قيد الانتظار"
+    && ["", "معلق", "قيد الانتظار", "بانتظار"].includes(order.cuttingStageStatus || "")
+    && Number(order.layerCount || order.cuttingPlys || 0) === 0
+    && Number(order.completedPieces || 0) === 0
+    && !order.cutterName
+    && !stories.some((story) => storyMatchesOrder(story, order))
+  );
+  const activeOrderCodes = new Set(orders.filter((order) => !order.archivedAt)
+    .map((order) => order.factoryModelCode).filter(Boolean));
+  const storyCatalogIds = new Set(stories.map((story) => story.catalog_model_id).filter(Boolean));
+  const storyModelCodes = new Set(stories.map((story) => story.factory_model_code).filter(Boolean));
+  const catalogModels = (data.modelCatalog || []).filter((model) =>
+    model.customer_id === client.id
+    && !model.archived_at
+    && !storyCatalogIds.has(model.id)
+    && !storyModelCodes.has(model.factory_model_code)
+    && !activeOrderCodes.has(model.factory_model_code)
+  );
+  const pendingRequests = (data.clientModelRequests || []).filter((request) =>
+    request.client_id === client.id && request.status === "pending"
+  );
+  const entries = [
+    ...waitingOrders.map((order) => ({
+      key: order.factoryModelCode || order.modelNumber || order.id,
+      name: order.name,
+      code: order.factoryModelCode,
+      image: order.modelImageUrls || order.modelImageUrl,
+      orderId: order.id
+    })),
+    ...catalogModels.map((model) => ({
+      key: model.factory_model_code || model.id,
+      name: model.model_name,
+      code: model.factory_model_code,
+      image: model.model_image_url || DEFAULT_MODEL_IMAGE_URL
+    })),
+    ...pendingRequests.map((request) => ({
+      key: request.model_number || request.model_name || request.id,
+      name: request.model_name,
+      code: request.model_number,
+      image: request.imageUrl
+    }))
+  ];
+  return {
+    models: [...new Map(entries.map((entry) => [entry.key, entry])).values()],
+    orderIds: new Set(waitingOrders.map((order) => order.id))
+  };
 }
 
 function showWorkforceLateDecisionModal(root, worker, date, delay) {
@@ -5296,12 +5328,14 @@ function workforceView(data) {
     .join("");
   const attendanceRows = workforceAttendanceGrid(data, employees, settings);
   const employeeRows = employees.map((worker) => `<tr>
-    <td><strong>${escapeHtml(worker.name)}</strong></td>
+    <td><strong>${escapeHtml(worker.name)}</strong><small class="workforce-identity-source">الاسم الأساسي المعتمد</small></td>
+    <td>${escapeHtml(worker.registeredName || "—")}<small class="workforce-identity-source">اسم حساب التسجيل</small></td>
+    <td>${escapeHtml(worker.phone || "—")}<small class="workforce-identity-source">الهاتف الأساسي المعتمد</small></td>
+    <td>${escapeHtml(worker.registeredPhone || "—")}<small class="workforce-identity-source">هاتف حساب التسجيل</small></td>
     <td>${escapeHtml(worker.jobTitle || "غير محدد")}</td>
     <td>${escapeHtml(worker.roleLabel)}</td>
     <td>${escapeHtml(worker.username)}</td>
-    <td>${escapeHtml(worker.phone || "—")}</td>
-    <td><button type="button" class="row-action" data-workforce-employee="${escapeHtml(worker.id)}">فتح ملف العامل</button></td>
+    <td><button type="button" class="row-action" data-workforce-employee="${escapeHtml(worker.id)}">فتح ملف العامل</button> <button type="button" class="row-action order-delete-action" data-delete-workforce-employee="${escapeHtml(worker.id)}">حذف الملف</button></td>
   </tr>`).join("");
   const selectedEmployee = employees.find((worker) => worker.id === selectedWorkforceEmployeeId);
   const selectedEmployeeProfile = selectedEmployee ? workforceProfile(data, selectedEmployee.id) : null;
@@ -5399,7 +5433,7 @@ function workforceView(data) {
       <button class="modal-close" type="button" data-close-workforce-profile aria-label="إغلاق">×</button>
       <header class="workforce-profile-heading"><div><h2 id="workforce-profile-title">كشف العامل: ${escapeHtml(selectedEmployee.name)}</h2>
       <p>${escapeHtml(selectedEmployee.jobTitle || "مسمى وظيفي غير محدد")} · ${escapeHtml(selectedEmployee.roleLabel)}</p></div>
-      <button type="button" class="button button-secondary" data-print-workforce-profile>طباعة كشف العامل</button></header>
+      <div class="workforce-profile-heading-actions"><button type="button" class="button button-secondary" data-print-workforce-profile>طباعة كشف العامل</button><button type="button" class="row-action order-delete-action" data-delete-workforce-employee="${escapeHtml(selectedEmployee.id)}">حذف ملف العامل</button></div></header>
       <div class="workforce-profile-tabs" role="tablist" aria-label="أقسام ملف العامل">
         <button type="button" role="tab" class="workforce-profile-tab${selectedWorkforceProfileTab === "finance" ? " active" : ""}" aria-selected="${selectedWorkforceProfileTab === "finance"}" data-workforce-profile-tab="finance">المستحقات والماليات</button>
         <button type="button" role="tab" class="workforce-profile-tab${selectedWorkforceProfileTab === "personal" ? " active" : ""}" aria-selected="${selectedWorkforceProfileTab === "personal"}" data-workforce-profile-tab="personal">البيانات الشخصية</button>
@@ -5451,11 +5485,13 @@ function workforceView(data) {
       <div class="workforce-profile-tab-panel" data-workforce-profile-panel="personal"${selectedWorkforceProfileTab === "personal" ? "" : " hidden"}>
         <form class="workforce-personal-form workforce-profile-section" data-workforce-personal-form="${escapeHtml(selectedEmployee.id)}">
           <h3>بيانات العامل والعمل</h3><div class="workforce-profile-fields">
-            <label class="field"><span>الاسم</span><input name="employeeName" value="${escapeHtml(selectedEmployee.name)}" disabled></label>
+            <label class="field"><span>الاسم الأساسي المعتمد لدى الإدارة</span><input name="employeeName" value="${escapeHtml(selectedEmployee.name)}" required maxlength="120"></label>
+            <label class="field"><span>اسم حساب التسجيل الأصلي</span><input value="${escapeHtml(selectedEmployee.registeredName || "—")}" readonly aria-readonly="true"></label>
             <label class="field"><span>اسم المستخدم</span><input name="username" value="${escapeHtml(selectedEmployee.username)}" disabled></label>
             <label class="field"><span>الدور الوظيفي المسجل</span><input name="role" value="${escapeHtml(selectedEmployee.roleLabel)}" disabled></label>
             <label class="field"><span>المسمى الوظيفي الفعلي</span><select name="jobTitle" required>${employeeJobTitleOptions}</select></label>
-            <label class="field"><span>الهاتف</span><input name="phone" value="${escapeHtml(selectedEmployee.phone || "—")}" disabled></label>
+            <label class="field"><span>الهاتف الأساسي المعتمد لدى الإدارة</span><input name="phone" type="tel" value="${escapeHtml(selectedEmployee.phone || "")}" maxlength="40"></label>
+            <label class="field"><span>هاتف حساب التسجيل الأصلي</span><input value="${escapeHtml(selectedEmployee.registeredPhone || "—")}" readonly aria-readonly="true"></label>
             <label class="field"><span>تاريخ التعيين</span><input name="hireDate" type="date" value="${escapeHtml(selectedEmployeeProfile.hireDate || "")}"></label>
             <label class="field"><span>الرقم القومي</span><input name="nationalId" value="${escapeHtml(selectedEmployeeProfile.nationalId || "")}" maxlength="32"></label>
             <label class="field"><span>العنوان</span><input name="address" value="${escapeHtml(selectedEmployeeProfile.address || "")}" maxlength="240"></label>
@@ -5586,9 +5622,9 @@ function workforceView(data) {
     <div class="workforce-panel" data-workforce-panel="employees"${activeWorkforceTab === "employees" ? "" : " hidden"}>
       <div class="workforce-employee-toolbar"><div><h2>سجل العاملين والموظفين</h2><p>إدارة الملفات الوظيفية والأجور وربط حسابات الدخول.</p></div><button type="button" class="button button-primary workforce-add-employee" data-add-workforce-employee>＋ إضافة عامل جديد</button></div>
       ${panel("سجل العاملين والموظفين", employees.length
-        ? table(["الاسم","المسمى الوظيفي الفعلي","الدور المسجل","اسم المستخدم","الهاتف","السجل"], employeeRows)
+        ? table(["الاسم المعتمد","اسم التسجيل","الهاتف المعتمد","هاتف التسجيل","المسمى الوظيفي الفعلي","الدور المسجل","اسم المستخدم","إجراء"], employeeRows)
         : '<div class="empty-state">لا توجد ملفات عاملين حتى الآن. ابدأ بإنشاء ملف عامل جديد.</div>',
-      "المسمى الوظيفي والدور يعرضان كما هما مسجلان في بيانات الحساب؛ افتح الملف للاطلاع على الحضور والحساب والجزاءات.")}
+      "الاسم والهاتف المعتمدان تديرهما الإدارة، وتظهر بيانات التسجيل الأصلية للمطابقة والمراجعة؛ حذف الملف لا يحذف السجلات المالية أو سجل حساب الدخول.")}
     </div>
     <div class="workforce-panel" data-workforce-panel="attendance"${activeWorkforceTab === "attendance" ? "" : " hidden"}>
       <div class="clients-toolbar"><div><h2>جدول الحضور والغياب الشهري</h2><p>اضغط الحضور لتسجيل وقت بداية الدوام، واضغط مرة أخرى لتعديله. يبدأ الانصراف بموعد نهاية الوردية المجدول، ويمكن تعديله مع اختيار الخصم أو العفو عند الخروج مبكراً.</p></div><label class="field workforce-month-picker"><span>الشهر</span><input type="month" data-workforce-month value="${escapeHtml(selectedWorkforceMonth)}"></label></div>
@@ -5660,7 +5696,6 @@ function bindWorkforceActions(session) {
         if (account) {
           const { error: accountError } = await supabaseClient.from("users")
             .update({
-              name,
               role: roleKey,
               status: "active",
               job_title: form.elements.jobTitle.value,
@@ -5688,7 +5723,9 @@ function bindWorkforceActions(session) {
           workerId,
           employeeName: name,
           username: account?.username || "—",
-          phone: account?.phone || form.elements.phone.value.trim(),
+          phone: form.elements.phone.value.trim(),
+          registeredName: account?.name || "",
+          registeredPhone: account?.phone || "",
           roleKey,
           jobTitle: form.elements.jobTitle.value,
           linkedUserId: account?.id || null,
@@ -5729,6 +5766,33 @@ function bindWorkforceActions(session) {
     selectedWorkforceEmployeeId = button.dataset.workforceEmployee;
     selectedWorkforceProfileTab = "finance";
     render(session, dashboardData, dashboardData.pendingAccounts || []);
+  }));
+  root.querySelectorAll("[data-delete-workforce-employee]").forEach((button) => button.addEventListener("click", async () => {
+    const workerId = button.dataset.deleteWorkforceEmployee;
+    const worker = workforceEmployees(dashboardData).find((entry) => entry.id === workerId);
+    const profile = worker ? workforceProfile(dashboardData, workerId) : null;
+    if (!worker || !profile?._recordId) {
+      window.factoryUI.toast("تعذر العثور على ملف العامل المراد حذفه.", "error");
+      return;
+    }
+    if (!await window.factoryUI.confirmAction({
+      title: "حذف ملف العامل",
+      message: `سيُحذف ملف ${worker.name} من قائمة العاملين. ستظل سجلات الحضور والرواتب والسلف محفوظة، ولن يُحذف حساب تسجيل الدخول المرتبط.`,
+      confirmLabel: "حذف الملف"
+    })) return;
+    button.disabled = true;
+    try {
+      await saveFlexibleRecord("workforce_profiles", {
+        ...profile,
+        deletedAt: new Date().toISOString()
+      }, profile._recordId, workforceRecordOwnerId(worker, dashboardData));
+      if (selectedWorkforceEmployeeId === workerId) selectedWorkforceEmployeeId = "";
+      await refresh();
+      window.factoryUI.toast("تم حذف ملف العامل من القائمة مع الاحتفاظ بالسجلات التاريخية وحساب الدخول.");
+    } catch (error) {
+      reportDashboardFailure(session, "تعذر حذف ملف العامل", error);
+      button.disabled = false;
+    }
   }));
   root.querySelector("[data-close-workforce-profile]")?.addEventListener("click", () => {
     selectedWorkforceEmployeeId = "";
@@ -5778,11 +5842,18 @@ function bindWorkforceActions(session) {
     const worker = workforceEmployees(dashboardData).find((entry) => entry.id === workerId);
     if (!worker) return;
     const existing = workforceProfile(dashboardData, workerId);
+    const employeeName = form.elements.employeeName.value.trim();
+    if (!employeeName) {
+      window.factoryUI.toast("أدخل الاسم الأساسي المعتمد للعامل.", "error");
+      return;
+    }
     const submit = form.querySelector('[type="submit"]');
     submit.disabled = true;
     try {
       await saveFlexibleRecord("workforce_profiles", {
         ...workforceEmployeeProfilePayload(worker, existing, dashboardData),
+        employeeName,
+        phone: form.elements.phone.value.trim(),
         nationalId: form.elements.nationalId.value.trim(),
         address: form.elements.address.value.trim(),
         emergencyContact: form.elements.emergencyContact.value.trim(),
@@ -5804,7 +5875,7 @@ function bindWorkforceActions(session) {
         if (titleError) throw titleError;
       }
       await refresh();
-      window.factoryUI.toast("تم حفظ البيانات الشخصية والوظيفية.");
+      window.factoryUI.toast("تم حفظ البيانات الأساسية المعتمدة والبيانات الوظيفية.");
     } catch (error) {
       reportDashboardFailure(session, "تعذر حفظ ملف العامل", error);
     } finally {
@@ -6794,7 +6865,7 @@ function render(session, data, accounts) {
   document.querySelector("#app").innerHTML = `
     <div class="app-shell${collapsedClass}">
       <button class="sidebar-backdrop" type="button" data-sidebar-close aria-label="إغلاق القائمة الجانبية"></button>
-      <aside class="sidebar" id="sidebar"><a class="brand" href="../index.html"><img class="brand-logo" src="../assets/al-motamayez-logo.png" alt="AL-MOTAMAYEZ logo"><span class="brand-copy"><strong>AL-MOTAMAYEZ</strong></span></a><nav aria-label="القائمة الرئيسية"><p class="side-label">القائمة الرئيسية</p>${navigation}</nav><div class="sidebar-bottom"><div class="profile-chip"><span class="avatar">${username.slice(0, 1)}</span><div class="profile-details"><strong>${username}</strong><span>${escapeHtml(session.roleName)}</span></div></div><button class="logout-button" id="logout" type="button">↪ تسجيل الخروج</button>${developerFooterMarkup()}</div></aside>
+      <aside class="sidebar" id="sidebar"><a class="brand" href="../index.html"><img class="brand-logo" src="../assets/al-motamayez-logo.png" alt="AL-MOTAMAYEZ logo"><span class="brand-copy"><strong>AL-MOTAMAYEZ</strong></span></a><nav aria-label="القائمة الرئيسية"><p class="side-label">القائمة الرئيسية</p>${navigation}</nav><div class="sidebar-bottom"><div class="profile-chip"><span class="avatar">${escapeHtml(username.slice(0, 1))}</span><div class="profile-details"><strong>${escapeHtml(username)}</strong><span>${escapeHtml(session.roleName)}</span>${["worker", "cutting", "sewing"].includes(session.role) ? `<small>${escapeHtml(session.fullName)} · ${escapeHtml(session.phone || "الهاتف غير مسجل")}</small>` : ""}</div></div><button class="logout-button" id="logout" type="button">↪ تسجيل الخروج</button>${developerFooterMarkup()}</div></aside>
       <main class="main-content"><header class="topbar"><div class="topbar-leading"><button class="sidebar-toggle" type="button" data-sidebar-toggle aria-controls="sidebar" aria-expanded="true" aria-label="طي القائمة الجانبية"><span aria-hidden="true">☰</span></button><div class="topbar-title"><h1>${info.title}</h1><p>${info.description}</p></div></div><div class="header-brand">${session.role === "admin" ? `<button class="online-indicator${onlineUserCount ? " online" : ""}" data-online-indicator type="button" title="عرض الحسابات المتصلة"><span class="online-indicator-dot"></span><span>متصلون الآن: <strong data-online-count>${onlineUserCount}</strong></span></button>` : ""}<div class="notification-control"><button class="live-notification-button" type="button" data-live-notifications aria-label="إشعارات تحديثات البرنامج" aria-expanded="false"><span aria-hidden="true">🔔</span><span class="live-notification-badge" data-live-badge aria-live="polite" hidden></span></button><section class="notification-dropdown" data-notification-dropdown hidden aria-label="إشعارات تحديثات البرنامج"><header><strong>تحديثات البرنامج</strong><button type="button" class="notification-mark-read" data-mark-notifications-read>تعليم الكل كمقروء</button></header><div class="notification-list" data-notification-list>${notificationListMarkup()}</div></section></div><img class="header-logo" src="../assets/al-motamayez-logo.png" alt="AL-MOTAMAYEZ logo"><div class="brand-copy"><strong>AL-MOTAMAYEZ</strong></div><span class="date-label">${new Intl.DateTimeFormat("ar-EG-u-nu-latn", { dateStyle: "full" }).format(new Date())}</span></div></header>
     ${data.orderReadWarning ? `<div class="notice" role="alert">${escapeHtml(data.orderReadWarning)}</div>` : ""}
     ${content}
@@ -10046,7 +10117,25 @@ function bindActions(session) {
         window.factoryUI.toast("تعذر العثور على ملف العميل.", "error");
         return;
       }
+      if (clientDetailsButton.dataset.clientDetailsTab) {
+        selectedClientId = client.id;
+        activeClientProfileTab = clientDetailsButton.dataset.clientDetailsTab;
+        clientManagementTab = "profiles";
+        render(session, dashboardData, dashboardData.pendingAccounts || []);
+        activateDashboardView("clients");
+        return;
+      }
       clientAccountModal.querySelector("#client-account-modal-content").innerHTML = clientQuickDetailsModalView(client, dashboardData);
+      const quickTabs = clientAccountModal.querySelectorAll("[data-client-quick-tab]");
+      const quickPanels = clientAccountModal.querySelectorAll("[data-client-quick-panel]");
+      quickTabs.forEach((tab) => {
+        tab.addEventListener("click", () => {
+          quickTabs.forEach((item) => item.setAttribute("aria-selected", String(item === tab)));
+          quickPanels.forEach((panel) => {
+            panel.hidden = panel.dataset.clientQuickPanel !== tab.dataset.clientQuickTab;
+          });
+        });
+      });
       const quickPayment = clientAccountModal.querySelector("[data-quick-client-payment]");
       quickPayment.addEventListener("click", () => {
         clientAccountModal.hidden = true;

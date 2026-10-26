@@ -6884,6 +6884,9 @@ begin
   order by coalesce(payload ->> 'linkedUserId' = staff_account.id::text, false) desc, created_at
   limit 1
   for update;
+  if found and nullif(existing_profile.payload ->> 'deletedAt', '') is not null then
+    return;
+  end if;
   if not found and exists (
     select 1
     from public.factory_records
@@ -6896,9 +6899,11 @@ begin
   profile_payload := jsonb_build_object(
     'workerId', coalesce(nullif(existing_profile.payload ->> 'workerId', ''), profile_worker_id::text),
     'linkedUserId', staff_account.id,
-    'employeeName', staff_account.name,
+    'employeeName', coalesce(nullif(existing_profile.payload ->> 'employeeName', ''), staff_account.name),
     'username', staff_account.username,
-    'phone', coalesce(staff_account.phone, ''),
+    'phone', coalesce(existing_profile.payload ->> 'phone', staff_account.phone, ''),
+    'registeredName', coalesce(staff_account.name, existing_profile.payload ->> 'registeredName', ''),
+    'registeredPhone', coalesce(staff_account.phone, existing_profile.payload ->> 'registeredPhone', ''),
     'roleKey', staff_account.role,
     'jobTitle', coalesce(nullif(existing_profile.payload ->> 'jobTitle', ''), staff_account.job_title, 'عامل إنتاج')
   );
