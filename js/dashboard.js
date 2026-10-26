@@ -182,6 +182,8 @@ async function readSession() {
     username: account.username,
     fullName: account.name,
     phone: account.phone || "",
+    registrationName: account.registration_name || "",
+    registrationPhone: account.registration_phone || "",
     roleName: roleNames[account.role],
     jobTitle: account.job_title || "",
     canSubmitProduction: ["worker", "cutting", "sewing"].includes(account.role)
@@ -863,13 +865,13 @@ async function readDashboardData(session) {
 async function readUsers() {
   let { data, error } = await supabaseClient
     .from("users")
-    .select("id, name, username, phone, role, status, job_title, can_submit_production, created_at")
+    .select("id, name, username, phone, registration_name, registration_phone, role, status, job_title, can_submit_production, created_at")
     .order("created_at", { ascending: false });
   usersTableHasStatus = !error;
   if (error?.code === "42703") {
     ({ data, error } = await supabaseClient
       .from("users")
-      .select("id, name, username, phone, role, status, created_at")
+      .select("id, name, username, phone, role, status, job_title, can_submit_production, created_at")
       .order("created_at", { ascending: false }));
     usersTableHasStatus = !error;
   }
@@ -897,6 +899,8 @@ async function readUsers() {
       name: account.name,
       username: account.username,
       phone: account.phone || "",
+      registrationName: account.registration_name || account.name || "",
+      registrationPhone: account.registration_phone || account.phone || "",
       role: roleNames[account.role] || account.role,
       roleKey: account.role,
       status: account.status || "active",
@@ -909,7 +913,7 @@ async function readAccounts(session) {
   if (session.role !== "admin") return [];
   let { data, error } = await supabaseClient
     .from("users")
-    .select("id, name, username, phone, role, status, created_at")
+    .select("id, name, username, phone, registration_name, registration_phone, role, status, created_at")
     .or("status.eq.pending,role.eq.pending")
     .order("created_at", { ascending: false });
   usersTableHasStatus = !error;
@@ -940,6 +944,8 @@ async function readAccounts(session) {
   if (error) throw error;
   return data.map((account) => ({
     ...account,
+    registrationName: account.registration_name || account.name || "",
+    registrationPhone: account.registration_phone || account.phone || "",
     status: account.status === "pending" || account.role === "pending" ? "pending" : account.status
   }));
 }
@@ -947,7 +953,7 @@ async function readAccounts(session) {
 async function findAccountByUsername(username) {
   let { data, error } = await supabaseClient
     .from("users")
-    .select("id, name, username, phone, role, status, job_title, can_submit_production")
+    .select("id, name, username, phone, registration_name, registration_phone, role, status, job_title, can_submit_production")
     .ilike("username", username)
     .maybeSingle();
   if (error?.code === "42703") {
@@ -3116,7 +3122,7 @@ function pendingAccountRows(accounts, clients) {
   ).join("");
   if (!pending.length) return '<div class="empty-state">لا توجد طلبات تسجيل بانتظار الموافقة.</div>';
   return `<div class="pending-approval-list">${pending.map((account) => `<article class="pending-approval-card" data-pending-account="${escapeHtml(account.id)}">
-    <header class="pending-approval-heading"><div><h3>${escapeHtml(account.name || "حساب جديد")}</h3><p>${escapeHtml(account.username)}${account.phone ? ` · ${escapeHtml(account.phone)}` : ""}</p></div><div class="pending-approval-date">${formatDateTime(account.created_at)}</div></header>
+    <header class="pending-approval-heading"><div><h3>${escapeHtml(account.name || "حساب جديد")}</h3><p>بيانات التسجيل الشخصي · ${escapeHtml(account.username)}${account.phone ? ` · ${escapeHtml(account.phone)}` : ""}</p></div><div class="pending-approval-date">${formatDateTime(account.created_at)}</div></header>
     <label class="field pending-role-field"><span>الخطوة 1 · نوع الحساب</span><select data-pending-account-type="${escapeHtml(account.id)}"><option value="">اختر نوع الحساب</option><option value="client">عميل</option><option value="worker">عامل</option><option value="supervisor">مشرف / موظف</option></select></label>
     <section class="pending-approval-options" data-pending-options="client" hidden><h4>الخطوة 2 · اعتماد العميل</h4>
       ${availableClients.length ? `<label class="field"><span>ملف عميل مسجل مسبقاً</span><select data-pending-client-map="${escapeHtml(account.id)}"><option value="">اختر ملف العميل</option>${clientOptions}</select></label><button class="button button-primary" type="button" data-action="approve-client-existing" data-account-id="${escapeHtml(account.id)}">ربط الحساب بالعميل</button>` : '<p class="pending-approval-note">لا توجد ملفات عملاء غير مرتبطة حالياً؛ يمكنك اعتماد ملف جديد.</p>'}
@@ -4735,7 +4741,7 @@ function workerView(data, session) {
     </article>`
   );
   const personalAccount = `<section id="personal-account" class="dashboard-section">
-    <header class="worker-account-heading"><div><p class="eyebrow">حساب العامل</p><h2>مرحباً، ${escapeHtml(session.fullName)}</h2><p>${escapeHtml(workerProfile.jobTitle || session.jobTitle || "العامل")} · ${escapeHtml(session.phone || "الهاتف غير مسجل")} · ملخص الرواتب والحضور للشهر الحالي</p></div><span class="worker-account-month">${escapeHtml(workerMonth)}</span></header>
+    <header class="worker-account-heading"><div><p class="eyebrow">حساب العامل</p><h2>مرحباً، ${escapeHtml(workerProfile.employeeName || session.fullName)}</h2><p>${escapeHtml(workerProfile.jobTitle || session.jobTitle || "العامل")} · الاسم المسجل شخصياً: ${escapeHtml(session.registrationName || session.fullName)} · هاتف التسجيل: ${escapeHtml(session.registrationPhone || session.phone || "غير مسجل")} · ملخص الرواتب والحضور للشهر الحالي</p></div><span class="worker-account-month">${escapeHtml(workerMonth)}</span></header>
     <div class="stats-grid worker-finance-stats">
       ${stat("المستحقات الحالية", workerAccrual ? money(workerAccrual.earned) : data.personalPayroll[0] ? money(formatAmount(data.personalPayroll[0])) : "—", "الأجر المحتسب حتى اليوم")}
       ${stat("إجمالي السلف", money(workerAccrual?.advances ?? data.personalAdvances.reduce((sum, item) => sum + formatAmount(item), 0)), "مبالغ مستحقة")}
@@ -5039,8 +5045,8 @@ function workforceEmployees(data) {
       const linkedUserId = workforceLinkedAccountId({ id: profile.workerId }, data);
       const account = data.users.find((user) => user.id === linkedUserId);
       const roleKey = profile.roleKey || account?.roleKey || "worker";
-      const registeredName = String(account?.name || profile.registeredName || "").trim();
-      const registeredPhone = String(account?.phone || profile.registeredPhone || "").trim();
+      const registeredName = String(account?.registrationName || profile.registeredName || account?.name || "").trim();
+      const registeredPhone = String(account?.registrationPhone || profile.registeredPhone || account?.phone || "").trim();
       const employeeName = String(profile.employeeName || "").trim();
       return {
         ...profile,
@@ -5885,6 +5891,10 @@ function bindWorkforceActions(session) {
         if (account) {
           const { error: accountError } = await supabaseClient.from("users")
             .update({
+              name,
+              phone: form.elements.phone.value.trim(),
+              registration_name: account.registrationName || account.name || "",
+              registration_phone: account.registrationPhone || account.phone || "",
               role: roleKey,
               status: "active",
               job_title: form.elements.jobTitle.value,
@@ -5913,8 +5923,8 @@ function bindWorkforceActions(session) {
           employeeName: name,
           username: account?.username || "—",
           phone: form.elements.phone.value.trim(),
-          registeredName: account?.name || "",
-          registeredPhone: account?.phone || "",
+          registeredName: account?.registrationName || account?.name || "",
+          registeredPhone: account?.registrationPhone || account?.phone || "",
           roleKey,
           jobTitle: form.elements.jobTitle.value,
           linkedUserId: account?.id || null,
@@ -6054,14 +6064,18 @@ function bindWorkforceActions(session) {
         employmentNotes: form.elements.employmentNotes.value.trim()
       }, existing._recordId || null, workforceLinkedAccountId(worker, dashboardData));
       const linkedAccountId = workforceLinkedAccountId(worker, dashboardData);
-      const linkedAccount = dashboardData.users.find((account) => account.id === linkedAccountId);
-      if (linkedAccountId && form.elements.jobTitle.value !== linkedAccount?.jobTitle) {
-        const { error: titleError } = await supabaseClient.from("users")
-          .update({ job_title: form.elements.jobTitle.value, updated_at: new Date().toISOString() })
+      if (linkedAccountId) {
+        const { error: accountError } = await supabaseClient.from("users")
+          .update({
+            name: employeeName,
+            phone: form.elements.phone.value.trim(),
+            job_title: form.elements.jobTitle.value,
+            updated_at: new Date().toISOString()
+          })
           .eq("id", linkedAccountId)
           .select("id")
           .single();
-        if (titleError) throw titleError;
+        if (accountError) throw accountError;
       }
       await refresh();
       window.factoryUI.toast("تم حفظ البيانات الأساسية المعتمدة والبيانات الوظيفية.");

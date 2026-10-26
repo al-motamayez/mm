@@ -39,6 +39,10 @@ create table if not exists public.users (
 
 alter table public.users add column if not exists phone text;
 alter table public.users add column if not exists email text;
+alter table public.users
+  add column if not exists registration_name text not null default '',
+  add column if not exists registration_phone text not null default '';
+
 alter table public.users drop constraint if exists users_status_check;
 alter table public.users add constraint users_status_check
   check (status in ('pending', 'active', 'suspended'));
@@ -646,8 +650,12 @@ begin
     raise exception 'This username is reserved.';
   end if;
 
-  insert into public.users (id, name, username, email, phone, role, status)
-  values (new.id, user_name, user_username, user_email, user_phone, null, 'pending');
+  insert into public.users (
+    id, name, username, email, phone, registration_name, registration_phone, role, status
+  )
+  values (
+    new.id, user_name, user_username, user_email, user_phone, user_name, coalesce(user_phone, ''), null, 'pending'
+  );
   return new;
 end;
 $$;
@@ -699,6 +707,22 @@ from auth.users as auth_user
 where account.id = auth_user.id
   and account.email is distinct from auth_user.email;
 
+update public.users as account
+set registration_name = coalesce(
+      nullif(trim(account.registration_name), ''),
+      nullif(trim(auth_user.raw_user_meta_data ->> 'full_name'), ''),
+      nullif(trim(auth_user.raw_user_meta_data ->> 'name'), ''),
+      account.name
+    ),
+    registration_phone = coalesce(
+      nullif(trim(account.registration_phone), ''),
+      nullif(trim(auth_user.raw_user_meta_data ->> 'phone'), ''),
+      account.phone,
+      ''
+    )
+from auth.users as auth_user
+where account.id = auth_user.id;
+
 alter table public.users enable row level security;
 
 drop policy if exists "Users read own profile or admins read all" on public.users;
@@ -734,7 +758,7 @@ drop policy if exists "Admins delete non-admin accounts" on public.users;
 revoke all on public.users from anon, authenticated;
 grant select, update on public.users to authenticated;
 revoke delete on public.users from authenticated;
-grant insert (id, name, username, email, phone, role, status) on public.users to authenticated;
+grant insert (id, name, username, email, phone, registration_name, registration_phone, role, status) on public.users to authenticated;
 revoke all on function public.is_active_factory_admin() from public, anon, authenticated;
 grant execute on function public.is_active_factory_admin() to authenticated;
 revoke all on function public.ensure_factory_admin_profile() from public, anon, authenticated;
@@ -3588,6 +3612,8 @@ as $$
 declare
   staff_profile public.users%rowtype;
   pending_profile public.users%rowtype;
+  workforce_profile_id uuid;
+  workforce_profile_payload jsonb;
 begin
   if not public.is_active_factory_admin() then
     raise exception 'Only an active factory admin may link staff accounts.';
@@ -3620,6 +3646,19 @@ begin
     raise exception 'The new login is no longer pending.';
   end if;
 
+  select id, payload
+    into workforce_profile_id, workforce_profile_payload
+  from public.factory_records
+  where collection = 'workforce_profiles'
+    and (
+      payload ->> 'linkedUserId' = requested_profile_user_id::text
+      or payload ->> 'workerId' = requested_profile_user_id::text
+    )
+    and coalesce(nullif(payload ->> 'deletedAt', ''), '') = ''
+  order by (payload ->> 'linkedUserId' = requested_profile_user_id::text) desc, created_at
+  limit 1
+  for update;
+
   update public.production_stages
   set worker_id = requested_pending_user_id,
       updated_at = now()
@@ -3639,8 +3678,44 @@ begin
   set worker_id = requested_pending_user_id
   where worker_id = requested_profile_user_id;
 
+  if workforce_profile_id is not null then
+    update public.factory_records
+    set owner_id = requested_pending_user_id,
+        payload = payload || jsonb_build_object(
+          'linkedUserId', requested_pending_user_id,
+          'registeredName', coalesce(
+            nullif(trim(pending_profile.registration_name), ''),
+            pending_profile.name
+          ),
+          'registeredPhone', coalesce(
+            nullif(trim(pending_profile.registration_phone), ''),
+            pending_profile.phone,
+            ''
+          )
+        ),
+        updated_at = now()
+    where id = workforce_profile_id;
+  end if;
+
   update public.users
-  set name = staff_profile.name,
+  set name = coalesce(
+        nullif(trim(workforce_profile_payload ->> 'employeeName'), ''),
+        staff_profile.name
+      ),
+      phone = coalesce(
+        nullif(trim(workforce_profile_payload ->> 'phone'), ''),
+        staff_profile.phone,
+        ''
+      ),
+      registration_name = coalesce(
+        nullif(trim(pending_profile.registration_name), ''),
+        pending_profile.name
+      ),
+      registration_phone = coalesce(
+        nullif(trim(pending_profile.registration_phone), ''),
+        pending_profile.phone,
+        ''
+      ),
       role = staff_profile.role,
       status = 'active',
       job_title = staff_profile.job_title,
@@ -6902,8 +6977,18 @@ begin
     'employeeName', coalesce(nullif(existing_profile.payload ->> 'employeeName', ''), staff_account.name),
     'username', staff_account.username,
     'phone', coalesce(existing_profile.payload ->> 'phone', staff_account.phone, ''),
-    'registeredName', coalesce(staff_account.name, existing_profile.payload ->> 'registeredName', ''),
-    'registeredPhone', coalesce(staff_account.phone, existing_profile.payload ->> 'registeredPhone', ''),
+    'registeredName', coalesce(
+      nullif(trim(staff_account.registration_name), ''),
+      nullif(existing_profile.payload ->> 'registeredName', ''),
+      staff_account.name,
+      ''
+    ),
+    'registeredPhone', coalesce(
+      nullif(trim(staff_account.registration_phone), ''),
+      nullif(existing_profile.payload ->> 'registeredPhone', ''),
+      staff_account.phone,
+      ''
+    ),
     'roleKey', staff_account.role,
     'jobTitle', coalesce(nullif(existing_profile.payload ->> 'jobTitle', ''), staff_account.job_title, 'عامل إنتاج')
   );
@@ -6935,7 +7020,7 @@ $$;
 
 drop trigger if exists sync_factory_workforce_profile on public.users;
 create trigger sync_factory_workforce_profile
-  after insert or update of name, username, phone, role, status, job_title
+  after insert or update of name, username, phone, registration_name, registration_phone, role, status, job_title
   on public.users
   for each row
   execute function public.sync_factory_workforce_profile_trigger();
