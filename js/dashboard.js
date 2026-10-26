@@ -9622,7 +9622,6 @@ function bindActions(session) {
   const updateProductionPathFields = () => {
     const readySewing = orderForm.elements.productionType.value === "ready_sewing";
     const cuttingStage = orderForm.querySelector('[name="workStage"][value="cutting"]');
-    orderForm.elements.productionType.disabled = Boolean(orderForm.elements.editIndex.value);
     cuttingStage.disabled = readySewing;
     if (readySewing) {
       cuttingStage.checked = false;
@@ -10362,14 +10361,32 @@ function bindActions(session) {
     const currentStoredStatus = existingOrder?.storedStatus || existingOrder?.status || "";
     const isWorkflowManagedOrder = existingOrder && isFactoryOrderWorkflowManaged(existingOrder);
     const requestedStatus = String(formData.get("status") || currentStoredStatus);
+    const productionType = String(formData.get("productionType") || existingOrder?.productionType || "full_cutting");
+    const workStages = [...form.querySelectorAll('[name="workStage"]:checked')].map((input) => input.value);
+    const cuttingStageIsUnstarted = existingOrder
+      && ["", "معلق", "قيد الانتظار", "بانتظار"].includes(existingOrder.cuttingStageStatus || "")
+      && !existingOrder.fabric
+      && !existingOrder.fabricId
+      && !Number(existingOrder.cuttingPlys || existingOrder.layerCount || 0)
+      && !Number(existingOrder.fabricQuantity || 0)
+      && !Number(existingOrder.boltCount || 0)
+      && !existingOrder.cutterName
+      && !existingOrder.cuttingNotes;
+    const directSewingEntry = Boolean(existingOrder
+      && requestedStatus === "في انتظار الخياطة"
+      && productionType === "ready_sewing"
+      && workStages.includes("sewing")
+      && !workStages.includes("cutting")
+      && cuttingStageIsUnstarted);
     if (existingOrder
         && canonicalFactoryOrderStatus(requestedStatus) !== canonicalFactoryOrderStatus(existingOrder.status)
         && (INITIAL_READY_STAGE_BY_STATUS[requestedStatus]
-          || WORKFLOW_MANAGED_FACTORY_ORDER_STATUSES.includes(canonicalFactoryOrderStatus(requestedStatus)))) {
+          || WORKFLOW_MANAGED_FACTORY_ORDER_STATUSES.includes(canonicalFactoryOrderStatus(requestedStatus)))
+        && !directSewingEntry) {
       window.factoryUI.toast("لا يمكن نقل الموديل إلى مرحلة تشغيل من نموذج التعديل؛ استخدم أزرار سير العمل في شاشة القص أو الخياطة.", "error");
       return;
     }
-    const statusForSave = existingOrder && (isWorkflowManagedOrder
+    const statusForSave = existingOrder && (directSewingEntry || isWorkflowManagedOrder
       || canonicalFactoryOrderStatus(requestedStatus) === existingOrder.status)
       ? currentStoredStatus || requestedStatus
       : requestedStatus;
@@ -10378,8 +10395,6 @@ function bindActions(session) {
     const operationalExpenses = Number(formData.get("operationalExpenses") || 0);
     const modelName = String(formData.get("name")).trim();
     const customerId = String(formData.get("customerId"));
-    const workStages = [...form.querySelectorAll('[name="workStage"]:checked')].map((input) => input.value);
-    const productionType = String(formData.get("productionType") || existingOrder?.productionType || "full_cutting");
     const initialReadyStage = INITIAL_READY_STAGE_BY_STATUS[requestedStatus];
     const pricingMode = String(formData.get("pricingMode"));
     const stagePrices = JSON.parse(String(formData.get("stagePrices") || "{}"));
@@ -10495,6 +10510,16 @@ function bindActions(session) {
           modelImageUrl: savedImageUrls[0] || "",
           modelImageUrl2: savedImageUrls[1] || ""
         });
+      }
+      if (directSewingEntry) {
+        const { error } = await supabaseClient.rpc("transition_factory_sewing_stage", {
+          requested_order_id: savedOrderId,
+          requested_action: "make_available"
+        });
+        if (error?.code === "PGRST202") {
+          throw new Error("دالة انتقال مراحل الخياطة غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+        }
+        if (error) throw error;
       }
       for (const [index, previousUrl] of previousImageUrls.entries()) {
         if (previousUrl && previousUrl !== savedImageUrls[index]) {

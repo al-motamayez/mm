@@ -7491,7 +7491,16 @@ begin
       and stage_name in ('cutting', 'قص', 'تقطيع')
       and status in ('مكتمل', 'تم القص')
     for update;
-    if not found then
+    if not found and not (
+      current_order.production_type = 'ready_sewing'
+      and not coalesce('cutting' = any(current_order.work_stages), false)
+      and not exists (
+        select 1
+        from public.production_stages
+        where order_id = requested_order_id
+          and stage_name in ('cutting', 'قص', 'تقطيع')
+      )
+    ) then
       raise exception 'Finish cutting before making this order available for sewing.';
     end if;
     if current_sewing_stage.status in ('متاح للخياطة', 'قيد الخياطة', 'مكتمل')
