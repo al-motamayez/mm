@@ -949,6 +949,10 @@ function canonicalFactoryOrderStatus(status) {
   return aliases[normalizedStatus] || englishAliases[normalizedStatus.toLocaleLowerCase()] || normalizedStatus || "قيد الانتظار";
 }
 
+function factoryOrderDeliveredStatus(status) {
+  return canonicalFactoryOrderStatus(status) === "تم التسليم";
+}
+
 function factoryOrderIsReceivable(order) {
   const status = effectiveFactoryOrderStatus(order).status;
   return ["جاهز للتسليم", "تم التسليم"].includes(canonicalFactoryOrderStatus(status));
