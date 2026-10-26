@@ -19,6 +19,7 @@ let onlineUsers = [];
 let activeFinanceTab = "payments";
 let activeAdminCuttingTab = "active";
 let activeWorkforceTab = "employees";
+let activeSewingDashboardTab = "workflow";
 let selectedWorkforceEmployeeId = "";
 let selectedWorkforceProfileTab = "finance";
 let showNewWorkforceEmployeeModal = false;
@@ -4062,12 +4063,29 @@ function sewingView(data) {
   const available = data.sewing.filter((item) => !item.workflowArchivedAt && item.stageStatus === "متاح للخياطة");
   const inProgress = data.sewing.filter((item) => !item.workflowArchivedAt && item.stageStatus === "قيد الخياطة");
   const completed = data.sewing.filter((item) => !item.workflowArchivedAt && item.stageStatus === "مكتمل");
-  const pipelineGroups = factoryOrderPipelineGroups(data.models.filter((order) => !order.archivedAt && !order.workflowArchivedAt))
+  const activeOrders = data.models.filter((order) => !order.archivedAt && !order.workflowArchivedAt);
+  const pipelineGroups = factoryOrderPipelineGroups(activeOrders)
     .filter((group) => group.key !== "before_cutting" && (group.key !== "unclassified" || group.orders.length));
-  return `<div class="stats-grid">${pipelineGroups.map((group) => stat(group.label, group.orders.length)).join("")}</div>
+  const notStartedOrders = activeOrders.filter((order) =>
+    ["before_cutting", "waiting_sewing", "unclassified"].includes(factoryOrderPipelineCategory(order))
+    && !["قيد الخياطة", "قيد التنفيذ", "مكتمل"].includes(order.sewingStageStatus)
+  );
+  const sewingWorkflow = `<div class="stats-grid">${pipelineGroups.map((group) => stat(group.label, group.orders.length)).join("")}</div>
     ${panel("قصّات متاحة للبدء", sewingOrderRows(available, "بدء الخياطة", "start", false), "لا يبدأ العمل إلا بعد استلام المشرف للقصّة")}
     ${panel("قصّات قيد الخياطة الفعلية", sewingOrderRows(inProgress, "إنهاء الخياطة", "finish", false))}
     ${panel("قصّات مكتملة الخياطة", sewingOrderRows(completed, "", "", false), "تم تسليمها للمرحلة التالية")}`;
+  const modelMonitoring = notStartedOrders.length
+    ? `<div class="sewing-model-monitor-grid">${notStartedOrders.map((order) => `<article class="sewing-model-monitor-card">
+        ${modelImageMarkup(order.modelImageUrls || order.modelImageUrl)}
+        <div class="sewing-model-monitor-info"><h3>${escapeHtml(order.name || "موديل بدون اسم")}</h3><p>كود الموديل: <strong>${escapeHtml(order.factoryModelCode || "—")}</strong></p><span class="status">${escapeHtml(order.displayStatus || order.status || "قيد الإنشاء")}</span></div>
+      </article>`).join("")}</div>`
+    : '<div class="empty-state">لا توجد موديلات بانتظار بدء الخياطة.</div>';
+  return `<div class="client-management-tabs sewing-dashboard-tabs" role="tablist" aria-label="شاشة الخياطة">
+      <button type="button" role="tab" aria-selected="${activeSewingDashboardTab === "workflow"}" class="client-management-tab${activeSewingDashboardTab === "workflow" ? " active" : ""}" data-sewing-dashboard-tab="workflow">الخياطة</button>
+      <button type="button" role="tab" aria-selected="${activeSewingDashboardTab === "models"}" class="client-management-tab${activeSewingDashboardTab === "models" ? " active" : ""}" data-sewing-dashboard-tab="models">متابعة الموديلات</button>
+    </div>
+    <div data-sewing-dashboard-panel="workflow"${activeSewingDashboardTab === "workflow" ? "" : " hidden"}>${sewingWorkflow}</div>
+    <div data-sewing-dashboard-panel="models"${activeSewingDashboardTab === "models" ? "" : " hidden"}>${modelMonitoring}</div>`;
 }
 
 function adminSewingView(data) {
@@ -9210,6 +9228,17 @@ function bindActions(session) {
     return;
   }
   if (session.role === "sewing") {
+    document.querySelectorAll("[data-sewing-dashboard-tab]").forEach((button) => button.addEventListener("click", () => {
+      activeSewingDashboardTab = button.dataset.sewingDashboardTab;
+      document.querySelectorAll("[data-sewing-dashboard-tab]").forEach((tab) => {
+        const selected = tab.dataset.sewingDashboardTab === activeSewingDashboardTab;
+        tab.classList.toggle("active", selected);
+        tab.setAttribute("aria-selected", String(selected));
+      });
+      document.querySelectorAll("[data-sewing-dashboard-panel]").forEach((panel) => {
+        panel.hidden = panel.dataset.sewingDashboardPanel !== activeSewingDashboardTab;
+      });
+    }));
     bindSewingStageActions(session);
     return;
   }
