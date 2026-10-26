@@ -1475,6 +1475,7 @@ declare
   current_price_per_piece numeric;
   current_status text;
   current_total_pieces integer;
+  current_original_total_pieces integer;
   current_workflow_archived_at timestamptz;
   matched_client_id uuid;
   resolved_model_name text;
@@ -1795,8 +1796,9 @@ begin
         line_name = nullif(trim(requested_line_name), '')
     where order_id = saved_order_id;
   else
-    select customer_id, price_per_piece, status, total_pieces, workflow_archived_at
-      into current_customer_id, current_price_per_piece, current_status, current_total_pieces, current_workflow_archived_at
+    select customer_id, price_per_piece, status, total_pieces, original_total_pieces, workflow_archived_at
+      into current_customer_id, current_price_per_piece, current_status, current_total_pieces,
+        current_original_total_pieces, current_workflow_archived_at
     from public.orders
     where id = requested_order_id
     for update;
@@ -1836,6 +1838,29 @@ begin
     )
        and requested_status is distinct from current_status then
       raise exception 'Production workflow statuses can only be changed through their stage controls.';
+    end if;
+    if (requested_quantity is distinct from current_total_pieces
+        or requested_original_quantity is distinct from current_original_total_pieces)
+       and (
+         current_status in (
+           'قيد الفرش', 'تم الفرش', 'جاهز للقص', 'تم القص',
+           'في انتظار الخياطة', 'جاري الخياطة', 'تمت الخياطة',
+           'جاري التشطيب', 'تم التشطيب', 'جاري المكواة', 'تم الكي',
+           'جاري الطباعة', 'تمت الطباعة', 'جاري التكييس', 'تم التكييس',
+           'جاري الفرز', 'تم الفرز', 'مكتمل', 'جاهز للتسليم'
+         )
+         or exists (
+           select 1
+           from public.production_stages as stage
+           where stage.order_id = requested_order_id
+             and stage.stage_name in ('cutting', 'sewing', 'finishing', 'ironing', 'printing', 'packaging', 'sorting')
+             and (
+               stage.completed_quantity > 0
+               or stage.status not in ('معلق', 'قيد الانتظار', 'بانتظار')
+             )
+         )
+       ) then
+      raise exception 'Model quantities cannot be changed after production has started.';
     end if;
     if exists (
       select 1 from public.orders
@@ -5724,6 +5749,20 @@ begin
      or current_order.status in ('مكتمل', 'تم التسليم') then
     raise exception 'This order is not accepting live cutting updates.';
   end if;
+  if current_order.status in (
+       'في انتظار الخياطة', 'جاري الخياطة', 'تمت الخياطة',
+       'جاري التشطيب', 'تم التشطيب', 'جاري المكواة', 'تم الكي',
+       'جاري الطباعة', 'تمت الطباعة', 'جاري التكييس', 'تم التكييس',
+       'جاري الفرز', 'تم الفرز', 'جاهز للتسليم'
+     )
+     or exists (
+       select 1 from public.production_stages as stage
+       where stage.order_id = requested_order_id
+         and stage.stage_name = 'sewing'
+         and stage.status in ('متاح للخياطة', 'قيد الخياطة', 'قيد التنفيذ', 'مكتمل')
+     ) then
+    raise exception 'Cutting quantities cannot be changed after the order enters sewing.';
+  end if;
 
   select breakdown.normalized_sizes, breakdown.normalized_colors,
          breakdown.total_pieces, breakdown.total_plys
@@ -5799,6 +5838,20 @@ begin
      or current_order.workflow_archived_at is not null
      or current_order.status in ('مكتمل', 'تم التسليم') then
     raise exception 'The active factory order was not found.';
+  end if;
+  if current_order.status in (
+       'في انتظار الخياطة', 'جاري الخياطة', 'تمت الخياطة',
+       'جاري التشطيب', 'تم التشطيب', 'جاري المكواة', 'تم الكي',
+       'جاري الطباعة', 'تمت الطباعة', 'جاري التكييس', 'تم التكييس',
+       'جاري الفرز', 'تم الفرز', 'جاهز للتسليم'
+     )
+     or exists (
+       select 1 from public.production_stages as stage
+       where stage.order_id = requested_order_id
+         and stage.stage_name = 'sewing'
+         and stage.status in ('متاح للخياطة', 'قيد الخياطة', 'قيد التنفيذ', 'مكتمل')
+     ) then
+    raise exception 'Cutting quantities cannot be changed after the order enters sewing.';
   end if;
 
   select layer_count, color_ply_data
@@ -5895,6 +5948,20 @@ begin
      or current_order.workflow_archived_at is not null
      or current_order.status in ('مكتمل', 'تم التسليم') then
     raise exception 'The active factory order was not found.';
+  end if;
+  if current_order.status in (
+       'في انتظار الخياطة', 'جاري الخياطة', 'تمت الخياطة',
+       'جاري التشطيب', 'تم التشطيب', 'جاري المكواة', 'تم الكي',
+       'جاري الطباعة', 'تمت الطباعة', 'جاري التكييس', 'تم التكييس',
+       'جاري الفرز', 'تم الفرز', 'جاهز للتسليم'
+     )
+     or exists (
+       select 1 from public.production_stages as stage
+       where stage.order_id = requested_order_id
+         and stage.stage_name = 'sewing'
+         and stage.status in ('متاح للخياطة', 'قيد الخياطة', 'قيد التنفيذ', 'مكتمل')
+     ) then
+    raise exception 'Cutting quantities cannot be changed after the order enters sewing.';
   end if;
 
   select *
@@ -6115,6 +6182,21 @@ begin
      or current_order.archived_at is not null
      or current_order.status = 'تم التسليم' then
     raise exception 'Delivered or archived orders cannot have cutting quantities changed.';
+  end if;
+  if current_order.status in (
+       'في انتظار الخياطة', 'جاري الخياطة', 'تمت الخياطة',
+       'جاري التشطيب', 'تم التشطيب', 'جاري المكواة', 'تم الكي',
+       'جاري الطباعة', 'تمت الطباعة', 'جاري التكييس', 'تم التكييس',
+       'جاري الفرز', 'تم الفرز', 'مكتمل', 'جاهز للتسليم'
+     )
+     or exists (
+       select 1
+       from public.production_stages as stage
+       where stage.order_id = requested_order_id
+         and stage.stage_name = 'sewing'
+         and stage.status in ('متاح للخياطة', 'قيد الخياطة', 'قيد التنفيذ', 'مكتمل')
+     ) then
+    raise exception 'Cutting quantities cannot be changed after the order enters sewing.';
   end if;
 
   select *
@@ -7396,6 +7478,9 @@ begin
   if not found
      or current_stage.status not in ('متاح للخياطة', 'قيد الخياطة', 'قيد التنفيذ') then
     raise exception 'Only an available or active sewing stage can be edited.';
+  end if;
+  if requested_target_quantity is distinct from current_stage.target_quantity then
+    raise exception 'The sewing quantity is fixed once the order is available for sewing.';
   end if;
   if requested_target_quantity < current_stage.completed_quantity then
     raise exception 'The sewing target quantity cannot be less than the completed quantity.';

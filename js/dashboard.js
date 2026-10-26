@@ -119,6 +119,15 @@ function isFactoryOrderWorkflowManaged(order) {
     || ["متاح للخياطة", "قيد الخياطة", "قيد التنفيذ", "مكتمل"].includes(order.sewingStageStatus || "");
 }
 
+function isFactoryOrderQuantityLocked(order) {
+  const status = canonicalFactoryOrderStatus(order.storedStatus || order.status);
+  const cuttingStatus = order.cuttingStageStatus || "";
+  return WORKFLOW_MANAGED_FACTORY_ORDER_STATUSES.includes(status)
+    || ["قيد الفرش", "تم الفرش", "جاهز للقص", "تم القص"].includes(status)
+    || !["", "معلق", "قيد الانتظار", "بانتظار"].includes(cuttingStatus)
+    || ["متاح للخياطة", "قيد الخياطة", "قيد التنفيذ", "مكتمل"].includes(order.sewingStageStatus || "");
+}
+
 function factoryOrderStatusForSave(order, requestedStatus) {
   if (order && isFactoryOrderWorkflowManaged(order)) {
     return order.storedStatus || order.status;
@@ -3414,13 +3423,13 @@ function workerPermissionsView(users) {
   const rows = workers.map((worker) => `<tr data-worker-permissions="${escapeHtml(worker.id)}">
     <td>${escapeHtml(worker.name)}</td><td>${escapeHtml(worker.username)}</td>
     <td><select name="jobTitle" aria-label="الدور أو المسمى الوظيفي للعامل">${WORKER_JOB_TITLES.map((title) => `<option value="${escapeHtml(title)}" ${title === (worker.jobTitle || "غير محدد") ? "selected" : ""}>${escapeHtml(title)}</option>`).join("")}</select></td>
-    <td><label class="permission-toggle"><input name="canSubmitProduction" type="checkbox" ${worker.canSubmitProduction ? "checked" : ""}><span>إتاحة تسليم طلبية / إنتاج</span></label></td>
+    <td><label class="permission-toggle"><input name="canSubmitProduction" type="checkbox" ${worker.canSubmitProduction ? "checked" : ""}><span>إذن تسليم القصات / تسليمات الأعداد</span></label></td>
     <td><button class="row-action" type="button" data-save-worker-permissions="${escapeHtml(worker.id)}">حفظ الصلاحيات</button></td>
   </tr>`);
-  return panel("أدوار العمال وصلاحياتهم", workers.length
-    ? table(["العامل","اسم المستخدم","المسمى الوظيفي","الصلاحية","إجراء"], rows)
+  return panel("إعدادات المستخدمين والصلاحيات · تسليم القصات والأعداد", workers.length
+    ? table(["العامل","اسم المستخدم","المسمى الوظيفي","إذن تسليم القصات / تسليمات الأعداد","إجراء"], rows)
     : '<div class="empty-state">لا توجد حسابات عمال مفعّلة لإدارة صلاحياتها.</div>',
-  "تعديل المسمى يحدد تخصص العامل داخل دور العامل. تفعيل الإذن يتيح إرسال التسليمات للمراجعة فقط، ولا يسمح باعتمادها أو ربطها بعميل.");
+  "هذا الإذن مستقل لكل عامل، ويُظهر له شاشة تسليم القصات والأعداد ويسمح بإرسالها للمراجعة فقط. العاملون والأقسام غير المصرح لهم لا تظهر لهم الشاشة ولا يمكنهم إرسال التسليمات؛ الاعتماد وربط العميل يظلان للإدارة.");
 }
 
 function workerProductionReviewView(data) {
@@ -3521,7 +3530,7 @@ function adminView(data, accounts) {
           <div class="field model-name-field"><label for="model-name">اسم الموديل</label><input id="model-name" name="name"></div>
           <div class="field"><label for="model-system-code">كود الموديل بالنظام</label><input id="model-system-code" name="factoryModelCode" readonly placeholder="يُنشأ تلقائياً بعد الحفظ"></div>
           <div class="field"><label for="model-client-code">كود/رقم الموديل للعميل</label><input id="model-client-code" name="clientModelCode" maxlength="120" autocomplete="off"></div>
-          <div class="field model-quantity-field"><label for="model-quantity">العدد الكلي</label><input id="model-quantity" name="quantity" type="number" min="0" step="1" placeholder="أدخل العدد أو اتركه حتى انتهاء القص"><small>يمكن إدخال العدد الآن أو تأجيله؛ عند اختيار الألوان والمقاسات يوزع النظام العدد تلقائياً.</small></div>
+          <div class="field model-quantity-field"><label for="model-quantity">العدد الكلي</label><input id="model-quantity" name="quantity" type="number" min="0" step="1" placeholder="أدخل العدد أو اتركه حتى انتهاء القص"><small data-quantity-lock-note hidden>تم تثبيت الأعداد بعد بدء مراحل الإنتاج ولا يمكن تعديلها.</small><small data-quantity-entry-note>يمكن إدخال العدد الآن أو تأجيله؛ عند اختيار الألوان والمقاسات يوزع النظام العدد تلقائياً.</small></div>
           <div class="field" data-original-quantity-field hidden><label for="model-original-quantity">العدد المطلوب الأصلي</label><input id="model-original-quantity" name="originalQuantity" type="number" min="0" step="1"></div>
         </div></section>
         <section class="form-section"><h3>التفاصيل التشغيلية <span>اختياري</span></h3><div class="form-section-grid">
@@ -4077,7 +4086,8 @@ function sewingOrderRows(orders, actionLabel = "", action = "", compact = false)
         <h2>تعديل بيانات الخياطة · ${escapeHtml(item.model)}</h2>
         <form class="modal-form sewing-editor-form" data-sewing-edit-order="${escapeHtml(item.order)}">
           <label for="sewing-target-${escapeHtml(item.order)}">الكمية المستهدفة للخياطة</label>
-          <input id="sewing-target-${escapeHtml(item.order)}" name="targetQuantity" type="number" min="0" max="2147483647" step="1" value="${item.target}" required>
+          <input id="sewing-target-${escapeHtml(item.order)}" name="targetQuantity" type="number" min="0" max="2147483647" step="1" value="${item.target}" readonly aria-readonly="true" required>
+          <small>العدد ثابت بعد إتاحة القصة للخياطة.</small>
           <label for="sewing-notes-${escapeHtml(item.order)}">تعليمات الخياطة</label>
           <textarea id="sewing-notes-${escapeHtml(item.order)}" name="technicalNotes" rows="4" maxlength="2000">${escapeHtml(item.technicalNotes || "")}</textarea>
           <div class="form-actions"><button class="button button-primary" type="submit">حفظ التعديلات</button><button class="row-action" type="button" data-close-sewing-editor>إلغاء</button></div>
@@ -9110,7 +9120,7 @@ function bindWorkerPermissionActions(session) {
       if (error) throw error;
       if (!data) throw new Error("لم يتم العثور على حساب العامل.");
       await refreshDashboard(session);
-      window.factoryUI.toast("تم تحديث مسمى العامل وصلاحيات تسليم الإنتاج.");
+      window.factoryUI.toast("تم تحديث المسمى وإذن تسليم القصات والأعداد.");
     } catch (error) {
       button.disabled = false;
       reportDashboardFailure(session, "تعذر تحديث صلاحيات العامل", error);
@@ -9608,6 +9618,27 @@ function bindActions(session) {
     form.elements[config.fields[0]].focus();
   }));
   const orderForm = document.querySelector("#model-form");
+  const setOrderQuantityEditingLocked = (locked) => {
+    orderForm.elements.quantity.readOnly = locked;
+    orderForm.elements.quantity.setAttribute("aria-readonly", String(locked));
+    orderForm.querySelector("[data-quantity-lock-note]").hidden = !locked;
+    orderForm.querySelector("[data-quantity-entry-note]").hidden = locked;
+    const controls = orderForm.querySelectorAll([
+      "[data-size-picker] button", "[data-size-picker] select", "[data-size-picker] input:not([type='hidden'])",
+      "[data-color-picker] button", "[data-color-picker] input:not([type='hidden'])"
+    ].join(", "));
+    controls.forEach((control) => {
+      if (locked) {
+        if (!control.hasAttribute("data-quantity-lock-disabled")) {
+          control.dataset.quantityLockDisabled = String(control.disabled);
+        }
+        control.disabled = true;
+      } else if (control.hasAttribute("data-quantity-lock-disabled")) {
+        control.disabled = control.dataset.quantityLockDisabled === "true";
+        delete control.dataset.quantityLockDisabled;
+      }
+    });
+  };
   const updateOrderConditionalFields = () => {
     const isDelivered = orderForm.elements.status.value === "تم التسليم";
     const isEditing = Boolean(orderForm.elements.editIndex.value);
@@ -9737,6 +9768,7 @@ function bindActions(session) {
   };
   const closeOrderModal = () => {
     orderModal.hidden = true;
+    setOrderQuantityEditingLocked(false);
     removeWorkflowStatusOptions();
     orderForm.reset();
     updateProductionPathFields();
@@ -9764,6 +9796,7 @@ function bindActions(session) {
       window.factoryUI.toast("هذا الطلب غير متاح للتعديل.", "error");
       return;
     }
+    setOrderQuantityEditingLocked(false);
     resetModelImageSlots();
     removeWorkflowStatusOptions();
     orderForm.reset();
@@ -9798,6 +9831,7 @@ function bindActions(session) {
     setSizePicker(orderForm.querySelector("[data-size-picker]"), cuttingSizePickerValue(currentOrder.sizes, currentOrder.colorPlyData));
     setColorPicker(orderForm.querySelector("[data-color-picker]"), currentOrder.colors, currentOrder.colorNames);
     renderModelAllocation(orderForm, currentOrder.colorSizeDistribution);
+    setOrderQuantityEditingLocked(isFactoryOrderQuantityLocked(currentOrder));
     orderForm.querySelector("[data-cutting-pricing-details]").innerHTML = cuttingDetailsMarkup(currentOrder);
     const cuttingEditor = orderForm.parentElement.querySelector("[data-order-cutting-editor]");
     if (currentOrder.cuttingStageStatus) {
@@ -10363,9 +10397,12 @@ function bindActions(session) {
     const submitButton = form.querySelector('[type="submit"]');
     const editIndex = String(formData.get("editIndex") || "");
     const existingOrder = editIndex ? dashboardData.models[Number(editIndex)] : null;
+    const quantityLocked = Boolean(existingOrder && isFactoryOrderQuantityLocked(existingOrder));
     const quantityValue = String(formData.get("quantity")).trim();
-    const sizeQuantity = sizePickerTotal(form);
-    const quantity = quantityValue ? Number(quantityValue) : sizeQuantity;
+    const sizeQuantity = quantityLocked ? Number(existingOrder.quantity) : sizePickerTotal(form);
+    const quantity = quantityLocked
+      ? Number(existingOrder.quantity)
+      : quantityValue ? Number(quantityValue) : sizeQuantity;
     const deliveredPieces = Number(formData.get("deliveredPieces"));
     const currentStoredStatus = existingOrder?.storedStatus || existingOrder?.status || "";
     const isWorkflowManagedOrder = existingOrder && isFactoryOrderWorkflowManaged(existingOrder);
@@ -10412,9 +10449,11 @@ function bindActions(session) {
       window.factoryUI.toast("أدخل العدد الكلي والعدد المسلّم لإضافة موديل بحالة تم التسليم.", "error");
       return;
     }
-    const requestedOriginalQuantity = existingOrder && LOCKED_FACTORY_ORDER_STATUSES.includes(existingOrder.status)
-      ? Number(form.elements.originalQuantity.value)
-      : Number(existingOrder?.originalQuantity ?? quantity);
+    const requestedOriginalQuantity = quantityLocked
+      ? Number(existingOrder.originalQuantity)
+      : existingOrder && LOCKED_FACTORY_ORDER_STATUSES.includes(existingOrder.status)
+        ? Number(form.elements.originalQuantity.value)
+        : Number(existingOrder?.originalQuantity ?? quantity);
     if (!Number.isSafeInteger(requestedOriginalQuantity) || requestedOriginalQuantity < 0) {
       window.factoryUI.toast("أدخل العدد المطلوب الأصلي كعدد صحيح غير سالب.", "error");
       return;
@@ -10487,10 +10526,10 @@ function bindActions(session) {
         workStages,
         pricingMode,
         stagePrices: pricingMode === "stages" ? stagePrices : {},
-        colors,
-        colorNames,
-        colorSizeDistribution,
-        sizes: String(formData.get("sizes") || "").trim(),
+        colors: quantityLocked ? existingOrder.colors : colors,
+        colorNames: quantityLocked ? existingOrder.colorNames : colorNames,
+        colorSizeDistribution: quantityLocked ? existingOrder.colorSizeDistribution : colorSizeDistribution,
+        sizes: quantityLocked ? existingOrder.sizes : String(formData.get("sizes") || "").trim(),
         modelImageUrl: modelImageSlots[0].file ? modelImageSlots[0].originalUrl : modelImageSlots[0].url,
         modelImageUrl2: modelImageSlots[1].file ? modelImageSlots[1].originalUrl : modelImageSlots[1].url,
         expectedDeliveryDate: String(formData.get("expectedDeliveryDate") || "")
