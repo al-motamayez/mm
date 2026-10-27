@@ -905,7 +905,19 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .order-card-details dt { color: var(--muted); font-size: 11px; }
 .order-card-details dd { overflow-wrap: anywhere; margin: 4px 0 0; color: #34453e; font-size: 13px; font-weight: 600; }
 .order-card-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 17px; padding-top: 13px; border-top: 1px solid #edf1ed; }
-.client-order-card .order-progress { margin-top: 20px; }
+.client-order-cards { grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 1fr)); }
+.client-order-card { display: grid; align-content: start; gap: 12px; padding: 14px; }
+.client-order-card .order-card-heading { align-items: center; justify-content: flex-start; padding-bottom: 10px; }
+.client-order-card .model-image-trigger { flex: 0 0 62px; width: 62px; height: 70px; overflow: hidden; border-radius: 8px; }
+.client-order-card .model-thumbnail { width: 100%; height: 100%; object-fit: cover; }
+.client-order-card .order-card-heading h3 { font-size: 15px; }
+.client-order-card-summary { display: flex; align-items: baseline; gap: 8px; color: var(--muted); font-size: 12px; }
+.client-order-card-summary strong { color: var(--green-dark); font-size: 19px; }
+.client-order-card-colors { display: grid; gap: 5px; color: var(--muted); font-size: 11px; }
+.client-order-card > .button { justify-self: start; min-height: 38px; }
+.client-financial-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.client-ledger-tabs { margin-top: 4px; }
+.client-ledger-panel[hidden] { display: none; }
 .empty-state { padding: 28px; color: var(--muted); text-align: center; font-size: 13px; }
 .row-action { padding: 5px 9px; border: 1px solid #e4e9e5; border-radius: 7px; color: #56645d; background: #fff; font-size: 11px; }
 .row-action:hover { border-color: #abc6b7; color: var(--green); }
@@ -1022,6 +1034,7 @@ input, select, .modal-form textarea { color: #1d3028; font-size: 16px; }
   .incoming-fabric-color-row { grid-template-columns: minmax(100px, 1fr) 64px minmax(85px, .7fr) minmax(80px, .6fr) auto; }
 }
 @media (max-width: 650px) {
+  .client-financial-summary { grid-template-columns: minmax(0, 1fr); }
   .login-layout { grid-template-columns: 1fr; }
   .login-intro { min-height: 330px; gap: 12px; padding: 28px 26px; }
   .login-logo { width: 130px; height: 135px; }
