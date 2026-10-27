@@ -2281,6 +2281,22 @@ create table if not exists public.factory_order_expenses (
   created_at timestamptz not null default now()
 );
 
+create table if not exists public.factory_account_expenses (
+  id uuid primary key default gen_random_uuid(),
+  customer_id uuid not null references public.factory_clients (id) on delete cascade,
+  category text not null check (length(trim(category)) between 1 and 120),
+  description text not null check (length(trim(description)) between 1 and 500),
+  amount numeric(14, 2) not null check (amount > 0),
+  charge_to_customer boolean not null default true,
+  cash_withdrawn boolean not null default false,
+  occurred_at timestamptz not null default now(),
+  created_by uuid references auth.users (id) on delete set null,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists factory_account_expenses_customer_date_idx
+  on public.factory_account_expenses (customer_id, occurred_at desc);
+
 alter table public.factory_order_expenses
   add column if not exists expense_type text not null default 'customer_cash';
 alter table public.factory_order_expenses
@@ -2503,6 +2519,86 @@ begin
   returning id into saved_transaction_id;
 
   return saved_transaction_id;
+end;
+$$;
+
+create or replace function public.save_factory_account_expense(
+  requested_customer_id uuid,
+  requested_category text,
+  requested_description text,
+  requested_amount numeric,
+  requested_charge_to_customer boolean,
+  requested_cash_withdrawn boolean,
+  requested_payment_method text,
+  requested_occurred_at timestamptz
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  saved_expense_id uuid;
+begin
+  if not public.is_active_factory_admin() then
+    raise exception 'Only active admins can record account expenses.';
+  end if;
+  if requested_customer_id is null
+     or not exists (
+       select 1 from public.factory_clients where id = requested_customer_id
+     )
+     or length(trim(coalesce(requested_category, ''))) not between 1 and 120
+     or length(trim(coalesce(requested_description, ''))) not between 1 and 500
+     or requested_amount is null
+     or requested_amount <= 0
+     or requested_amount > 999999999999.99
+     or requested_charge_to_customer is null
+     or requested_cash_withdrawn is null
+     or requested_occurred_at is null
+     or exists (
+       select 1
+       from public.factory_clients
+       where id = requested_customer_id
+         and account_period_started_at is not null
+         and requested_occurred_at < account_period_started_at
+     ) then
+    raise exception 'Enter a valid account expense, amount, and date.';
+  end if;
+
+  insert into public.factory_account_expenses (
+    customer_id, category, description, amount, charge_to_customer,
+    cash_withdrawn, occurred_at, created_by
+  )
+  values (
+    requested_customer_id,
+    trim(requested_category),
+    trim(requested_description),
+    round(requested_amount, 2),
+    requested_charge_to_customer,
+    requested_cash_withdrawn,
+    requested_occurred_at,
+    auth.uid()
+  )
+  returning id into saved_expense_id;
+
+  if requested_cash_withdrawn then
+    insert into public.factory_cash_transactions (
+      customer_id, direction, category, description, amount,
+      payment_method, occurred_at, created_by
+    )
+    values (
+      case when requested_charge_to_customer then requested_customer_id else null end,
+      'expense',
+      trim(requested_category),
+      trim(requested_description),
+      round(requested_amount, 2),
+      coalesce(nullif(trim(requested_payment_method), ''), 'غير محدد'),
+      requested_occurred_at,
+      auth.uid()
+    );
+  end if;
+
+  return saved_expense_id;
 end;
 $$;
 
@@ -3814,6 +3910,7 @@ begin
   delete from public.factory_worker_production_submissions where id is not null;
   delete from public.factory_fabric_transactions where id is not null;
   delete from public.factory_deliveries where id is not null;
+  delete from public.factory_account_expenses where id is not null;
   delete from public.factory_cash_transactions where id is not null;
   delete from public.factory_records where id is not null;
   delete from public.factory_cutting_requests where id is not null;
@@ -6725,6 +6822,17 @@ begin
       matched_client.account_period_started_at is null
       or occurred_at >= matched_client.account_period_started_at
     );
+  client_expenses_total := client_expenses_total + coalesce((
+    select round(sum(amount), 2)
+    from public.factory_account_expenses
+    where customer_id = matched_client.id
+      and charge_to_customer
+      and not cash_withdrawn
+      and (
+        matched_client.account_period_started_at is null
+        or occurred_at >= matched_client.account_period_started_at
+      )
+  ), 0);
 
   select coalesce(sum(round((payload ->> 'amount')::numeric, 2)), 0)
     into payments_total
@@ -7399,6 +7507,21 @@ create policy "Admins read factory cash transactions"
   on public.factory_cash_transactions for select to authenticated
   using (public.is_active_factory_admin());
 grant select on public.factory_cash_transactions to authenticated;
+alter table public.factory_account_expenses enable row level security;
+revoke all on public.factory_account_expenses from public, anon, authenticated;
+drop policy if exists "Admins read factory account expenses" on public.factory_account_expenses;
+create policy "Admins read factory account expenses"
+  on public.factory_account_expenses for select to authenticated
+  using (public.is_active_factory_admin());
+drop policy if exists "Clients read charged account expenses" on public.factory_account_expenses;
+create policy "Clients read charged account expenses"
+  on public.factory_account_expenses for select to authenticated
+  using (
+    charge_to_customer
+    and public.has_active_factory_role(array['client'])
+    and public.owns_factory_client_profile(customer_id)
+  );
+grant select on public.factory_account_expenses to authenticated;
 alter table public.factory_order_expenses enable row level security;
 revoke all on public.factory_order_expenses from public, anon, authenticated;
 drop policy if exists "Admins read factory order expenses" on public.factory_order_expenses;
@@ -7993,6 +8116,8 @@ grant execute on function public.ensure_factory_workforce_profile(uuid) to authe
 revoke all on function public.sync_factory_workforce_profile_trigger() from public, anon, authenticated;
 revoke all on function public.save_factory_cash_transaction(text, text, text, numeric, text, timestamptz, uuid) from public, anon, authenticated;
 grant execute on function public.save_factory_cash_transaction(text, text, text, numeric, text, timestamptz, uuid) to authenticated;
+revoke all on function public.save_factory_account_expense(uuid, text, text, numeric, boolean, boolean, text, timestamptz) from public, anon, authenticated;
+grant execute on function public.save_factory_account_expense(uuid, text, text, numeric, boolean, boolean, text, timestamptz) to authenticated;
 
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 values ('factory-model-images', 'factory-model-images', true, 26214400, null)
@@ -8144,6 +8269,7 @@ begin
       'factory_fabrics',
       'factory_fabric_transactions',
       'factory_cash_transactions',
+      'factory_account_expenses',
       'users',
       'factory_clients',
       'factory_records',

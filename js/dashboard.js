@@ -201,6 +201,7 @@ function emptyDashboardData() {
     fabricTransactions: [],
     authEvents: [],
     cashTransactions: [],
+    accountExpenses: [],
     clientFabricStock: [],
     payments: [],
     accountAdjustments: [],
@@ -369,6 +370,11 @@ async function readDashboardData(session) {
     : session.role === "client"
       ? supabaseClient.rpc("read_factory_client_cash_transactions")
       : Promise.resolve({ data: [], error: null });
+  const accountExpensesPromise = ["admin", "client"].includes(session.role)
+    ? supabaseClient.from("factory_account_expenses")
+      .select("id, customer_id, category, description, amount, charge_to_customer, cash_withdrawn, occurred_at, created_at")
+      .order("occurred_at", { ascending: false })
+    : Promise.resolve({ data: [], error: null });
   const clientFabricStockPromise = session.role === "client"
     ? supabaseClient.rpc("read_factory_client_fabric_stock")
     : Promise.resolve({ data: [], error: null });
@@ -412,13 +418,14 @@ async function readDashboardData(session) {
   const accountAdjustmentsPromise = ["admin", "client"].includes(session.role)
     ? readFlexibleRecords("account_adjustments")
     : Promise.resolve([]);
-  const [payments, leaves, tasks, settlements, deliveriesResult, cashTransactionsResult, clientFabricStockResult, personalAttendance, personalAdvances, personalPayroll, workerAdvances, workerPayroll, workerExpenses, fabricsResult, fabricTransactionsResult, fabricReservationsResult, authEventsResult, productionSubmissionsResult, finishedGoodsResult, clientModelRequestsResult, cuttingStoriesResult, cuttingRequestsResult, modelCatalogResult, workforceRecordsResult, accountAdjustments] = await Promise.all([
+  const [payments, leaves, tasks, settlements, deliveriesResult, cashTransactionsResult, accountExpensesResult, clientFabricStockResult, personalAttendance, personalAdvances, personalPayroll, workerAdvances, workerPayroll, workerExpenses, fabricsResult, fabricTransactionsResult, fabricReservationsResult, authEventsResult, productionSubmissionsResult, finishedGoodsResult, clientModelRequestsResult, cuttingStoriesResult, cuttingRequestsResult, modelCatalogResult, workforceRecordsResult, accountAdjustments] = await Promise.all([
     readFlexibleRecords("payments"),
     readFlexibleRecords("leaves"),
     readFlexibleRecords("tasks"),
     readFlexibleRecords("settlements"),
     deliveriesPromise,
     cashTransactionsPromise,
+    accountExpensesPromise,
     clientFabricStockPromise,
     ["cutting", "sewing", "worker"].includes(session.role) ? readFlexibleRecords("attendance") : Promise.resolve([]),
     ["cutting", "sewing", "worker"].includes(session.role) ? readFlexibleRecords("advances") : Promise.resolve([]),
@@ -446,6 +453,10 @@ async function readDashboardData(session) {
     throw new Error("دالة قراءة مصروفات حساب العميل غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
   }
   if (cashTransactionsResult.error) throw cashTransactionsResult.error;
+  if (["42P01", "PGRST205"].includes(accountExpensesResult.error?.code)) {
+    throw new Error("سجل مصروفات الحساب غير موجود. شغّل أحدث نسخة من supabase/schema.sql في SQL Editor.");
+  }
+  if (accountExpensesResult.error) throw accountExpensesResult.error;
   if (session.role === "client" && clientFabricStockResult.error?.code === "PGRST202") {
     throw new Error("دالة قراءة مخزون قماش العميل غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
   }
@@ -491,6 +502,7 @@ async function readDashboardData(session) {
   data.settlements = settlements;
   data.deliveries = deliveriesResult.data || [];
   data.cashTransactions = cashTransactionsResult.data || [];
+  data.accountExpenses = accountExpensesResult.data || [];
   data.clientFabricStock = clientFabricStockResult.data || [];
   data.fabrics = fabricsResult.data || [];
   data.fabricTransactions = fabricTransactionsResult.data || [];
@@ -2606,6 +2618,16 @@ function clientAccountSummary(client, data) {
     && entry.direction === "expense"
     && inCurrentPeriod(entry.occurred_at)
   );
+  const accountExpenses = (data.accountExpenses || []).filter((entry) =>
+    entry.customer_id === client.id
+    && entry.charge_to_customer
+    && !entry.cash_withdrawn
+    && inCurrentPeriod(entry.occurred_at)
+  ).map((entry) => ({
+    direction: "expense",
+    amount: entry.amount,
+    occurred_at: entry.occurred_at
+  }));
   const accountAdjustments = data.accountAdjustments.filter((adjustment) =>
     adjustment.customerId === client.id
     && inCurrentPeriod(adjustment._createdAt || adjustment.created_at)
@@ -2617,7 +2639,7 @@ function clientAccountSummary(client, data) {
     settlements,
     latestSettlement,
     payments,
-    cashTransactions,
+    cashTransactions: [...cashTransactions, ...accountExpenses],
     accountAdjustments
   });
 }
@@ -3002,6 +3024,7 @@ function clientDetailsView(client, data) {
     : '<div class="empty-state">لا يوجد قماش متاح مسجل لهذا العميل حالياً.</div>')}</section>`;
   const payments = data.payments.filter((payment) => payment.customerId === client.id);
   const clientCashTransactions = data.cashTransactions.filter((entry) => entry.customer_id === client.id);
+  const clientAccountExpenses = (data.accountExpenses || []).filter((entry) => entry.customer_id === client.id);
   const clientAdjustments = data.accountAdjustments.filter((entry) => entry.customerId === client.id);
   const financialEntries = [
     ...deliveries.map((delivery) => {
@@ -3038,6 +3061,16 @@ function clientDetailsView(client, data) {
       date: entry.occurred_at,
       cashTransaction: entry,
       cashPeriodStart: client.account_period_started_at
+    })),
+    ...clientAccountExpenses.filter((entry) => !entry.cash_withdrawn).map((entry) => ({
+      type: entry.charge_to_customer ? "مصروف على حساب العميل" : "مصروف إداري على المصنع",
+      reference: entry.category || "مصروف",
+      detail: entry.charge_to_customer
+        ? entry.description || "—"
+        : `${entry.description || "—"} · قيمة المصروف الإداري: ${money(entry.amount)} (غير محمّل على العميل)`,
+      amount: entry.charge_to_customer ? Number(entry.amount) : 0,
+      date: entry.occurred_at,
+      accountExpense: entry
     })),
     ...clientAdjustments.map((entry) => ({
       type: "خصم تسوية غير نقدي",
@@ -3091,9 +3124,10 @@ function clientDetailsView(client, data) {
     : "لا يوجد حساب دخول مرتبط بملف العميل."}</p>${linkOptions
       ? `<div class="client-account-link-controls"><label class="field"><span>اختر حساباً معلقاً أو حساب عميل موجوداً</span><select data-client-link-account="${escapeHtml(client.id)}"><option value="">اختر الحساب</option>${linkOptions}</select></label><button class="button button-secondary" type="button" data-action="link-client-account" data-customer-id="${escapeHtml(client.id)}">ربط بحساب تسجيل الدخول</button></div>`
       : '<div class="empty-state">لا توجد حسابات معلقة أو حسابات عملاء متاحة للربط.</div>'}`, "يؤدي ربط حساب معلق إلى اعتماده كعميل وربطه بهذا الملف.")}</section>`;
-  return `<div class="clients-toolbar client-detail-toolbar"><div><h2>${escapeHtml(client.name)} · تفاصيل الحساب والعمولة</h2><p>كود العميل: ${escapeHtml(client.code_letter || "—")} · ${escapeHtml(client.brand_name || "لا يوجد اسم محل/براند")} · رقم العميل: ${escapeHtml(client.client_number || "—")} · واتساب: ${escapeHtml(client.whatsapp || "—")}</p></div><div class="client-detail-actions"><button class="button button-primary" type="button" data-quick-client-payment="${escapeHtml(client.id)}">＋ إضافة دفعة</button><button class="button button-secondary" type="button" data-open-account-adjustment>خصم التسوية / الكسور</button><button class="button button-secondary" type="button" data-print-account>طباعة كشف الحساب</button><button class="button button-secondary" type="button" data-print-selected-models>طباعة الموديلات المحددة</button><button class="row-action" type="button" data-return-clients>العودة للعملاء</button></div></div>
+  return `<div class="clients-toolbar client-detail-toolbar"><div><h2>${escapeHtml(client.name)} · تفاصيل الحساب والعمولة</h2><p>كود العميل: ${escapeHtml(client.code_letter || "—")} · ${escapeHtml(client.brand_name || "لا يوجد اسم محل/براند")} · رقم العميل: ${escapeHtml(client.client_number || "—")} · واتساب: ${escapeHtml(client.whatsapp || "—")}</p></div><div class="client-detail-actions"><button class="button button-primary" type="button" data-add-client-expense="${escapeHtml(client.id)}">＋ إضافة مصروف</button><button class="button button-primary" type="button" data-quick-client-payment="${escapeHtml(client.id)}">＋ إضافة دفعة</button><button class="button button-secondary" type="button" data-open-account-adjustment>خصم التسوية / الكسور</button><button class="button button-secondary" type="button" data-print-account>طباعة كشف الحساب</button><button class="button button-secondary" type="button" data-print-selected-models>طباعة الموديلات المحددة</button><button class="row-action" type="button" data-return-clients>العودة للعملاء</button></div></div>
     <div class="modal-backdrop" data-account-adjustment-modal hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="account-adjustment-title"><button class="modal-close" type="button" data-close-account-adjustment aria-label="إغلاق">×</button><h2 id="account-adjustment-title">إضافة خصم / تسوية حساب</h2><p>يُخصم القيد من رصيد العميل فقط، ولا يُسجّل كحركة نقدية بالخزنة.</p><form class="form-grid" data-account-adjustment-form="${escapeHtml(client.id)}"><label class="field"><span>مبلغ الخصم (ج.م)</span><input name="amount" type="number" min="0.01" step="0.01" required></label><label class="field"><span>سبب الخصم / البيان</span><select name="reason" required><option value="">اختر سبب التسوية</option><option>تنزيل كسور/فكة</option><option>خصم خطأ تشغيلي</option><option>إشعار خصم تسوية</option></select></label><label class="field wide"><span>تفاصيل إضافية (اختياري)</span><textarea name="notes" rows="2" maxlength="500"></textarea></label><div class="form-actions wide"><button class="button button-primary" type="submit">حفظ الخصم على الحساب</button><button class="row-action" type="button" data-close-account-adjustment>إلغاء</button></div></form></section></div>
     <div class="client-profile-compact"><span>الهاتف: ${escapeHtml(client.phone || "—")}</span><span>كاش: ${escapeHtml(client.cash_phone || "—")}</span><span>إنستا: ${escapeHtml(client.instagram || "—")}</span><span>تاريخ الملف: ${formatDateTime(client.created_at)}</span></div>
+    <div class="modal-backdrop" data-client-expense-modal hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="client-expense-title"><button class="modal-close" type="button" data-close-client-expense aria-label="إغلاق">×</button><h2 id="client-expense-title">إضافة مصروف للعميل</h2><p>حدد هل يُحمّل المبلغ على حساب العميل، وهل تم سحبه فعلياً من الخزنة.</p><form class="form-grid" data-client-expense-form="${escapeHtml(client.id)}"><label class="field"><span>بند المصروف</span><input name="category" maxlength="120" placeholder="مثل: نقل، خامات، تشغيل" required></label><label class="field"><span>قيمة المصروف (ج.م)</span><input name="amount" type="number" min="0.01" max="999999999999.99" step="0.01" required></label><label class="field wide"><span>الوصف / التفاصيل</span><textarea name="description" rows="3" maxlength="500" required></textarea></label><label class="field"><span>تاريخ المصروف</span><input name="occurredAt" type="datetime-local" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}" required></label><label class="field"><span>طريقة السحب من الخزنة (إن وُجد)</span><input name="paymentMethod" value="نقدي" maxlength="80"></label><label class="field wide checkbox-field"><input type="checkbox" name="chargeToCustomer" checked><span>على العميل — يُضاف إلى رصيده ويظهر في بوابته</span></label><label class="field wide checkbox-field"><input type="checkbox" name="cashWithdrawn"><span>سحب فعلي من الخزنة — يؤثر على النقدية</span></label><div class="form-actions wide"><button class="button button-primary" type="submit">حفظ المصروف وتحديث الحساب</button><button class="row-action" type="button" data-close-client-expense>إلغاء</button></div></form></section></div>
     <div class="client-management-tabs" role="tablist" aria-label="تبويبات ملف العميل">
       <button type="button" role="tab" aria-selected="${activeClientProfileTab === "overview"}" class="client-management-tab${activeClientProfileTab === "overview" ? " active" : ""}" data-client-profile-tab="overview">الملف والحساب</button>
       <button type="button" role="tab" aria-selected="${activeClientProfileTab === "waiting"}" class="client-management-tab${activeClientProfileTab === "waiting" ? " active" : ""}" data-client-profile-tab="waiting">الموديلات قيد الانتظار / لم تُقص بعد</button>
@@ -3118,7 +3152,7 @@ function clientDetailsView(client, data) {
       "الموديلات الجديدة التي لم تُسجل لها قصة قص بعد.")}</section>
     </div>
     <div data-client-profile-panel="statement"${activeClientProfileTab === "statement" ? "" : " hidden"}>
-    <section class="client-detail-section">${panel("كشف الحساب والسجل المالي", `<p>يعرض ملخص رصيد كل طلب حسب حالته، ثم التسليمات والدفعات والمصروفات والخصومات والتسويات بترتيب زمني. تعديل أو حذف الدفعة الخاطئة يعيد احتساب حساب العميل دون إنشاء حركة صرف نقدية عكسية.</p>${orderLedgerSection}<form class="form-grid client-cash-form" data-client-cash-form="${escapeHtml(client.id)}"><div class="field"><label for="client-cash-category-${escapeHtml(client.id)}">بند المصروف / العهدة</label><input id="client-cash-category-${escapeHtml(client.id)}" name="category" maxlength="120" placeholder="مثل: سلفة، خيط، نقل" required></div><div class="field"><label for="client-cash-amount-${escapeHtml(client.id)}">المبلغ على حساب العميل (ج.م)</label><input id="client-cash-amount-${escapeHtml(client.id)}" name="amount" type="number" min="0.01" step="0.01" required></div><div class="field"><label for="client-cash-method-${escapeHtml(client.id)}">طريقة الصرف</label><input id="client-cash-method-${escapeHtml(client.id)}" name="method" value="نقدي" maxlength="80"></div><div class="field"><label for="client-cash-date-${escapeHtml(client.id)}">تاريخ الحركة</label><input id="client-cash-date-${escapeHtml(client.id)}" name="occurredAt" type="datetime-local" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}" required></div><div class="field wide"><label for="client-cash-description-${escapeHtml(client.id)}">البيان / التفاصيل</label><input id="client-cash-description-${escapeHtml(client.id)}" name="description" maxlength="500" required></div><div class="form-actions"><button class="button button-primary" type="submit">تسجيل المصروف على الحساب</button></div></form>${clientFinancialStatementMarkup(financialEntries)}`)}</section>
+    <section class="client-detail-section">${panel("كشف الحساب والسجل المالي", `<p>يعرض ملخص رصيد كل طلب حسب حالته، ثم التسليمات والدفعات والمصروفات والخصومات والتسويات بترتيب زمني.</p>${orderLedgerSection}${clientFinancialStatementMarkup(financialEntries)}`)}</section>
     <div class="modal-backdrop" data-client-payment-modal hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="client-payment-edit-title"><button class="modal-close" type="button" data-close-client-payment aria-label="إغلاق">×</button><h2 id="client-payment-edit-title">تعديل دفعة العميل</h2><form class="form-grid" data-client-payment-edit-form><input type="hidden" name="recordId"><label class="field"><span>المبلغ (ج.م)</span><input name="amount" type="number" min="0.01" step="0.01" required></label><label class="field"><span>التاريخ</span><input name="date" type="date" required></label><label class="field"><span>طريقة الدفع</span><select name="method"><option>تحويل بنكي</option><option>نقدي</option><option>محفظة إلكترونية</option></select></label><label class="field"><span>رقم الطلبية / المرجع</span><input name="reference" maxlength="160"></label><label class="field wide"><span>ملاحظات</span><input name="notes" maxlength="500"></label><div class="form-actions wide"><button class="button button-primary" type="submit">حفظ التعديل</button><button class="row-action" type="button" data-close-client-payment>إلغاء</button></div></form></section></div>
     </div>
     <div data-client-profile-panel="overview"${activeClientProfileTab === "overview" ? "" : " hidden"}>
@@ -4841,6 +4875,16 @@ function clientView(data, session) {
   const currentPeriodExpenses = data.cashTransactions.filter((entry) =>
     entry.direction === "expense" && inCurrentPeriod(entry.occurred_at)
   );
+  const nonCashClientExpenses = (data.accountExpenses || []).filter((entry) =>
+    entry.charge_to_customer
+    && !entry.cash_withdrawn
+    && inCurrentPeriod(entry.occurred_at)
+  );
+  currentPeriodExpenses.push(...nonCashClientExpenses.map((entry) => ({
+    direction: "expense",
+    amount: entry.amount,
+    occurred_at: entry.occurred_at
+  })));
   const ledger = calculateClientAccountLedger({
     clientName: session.fullName,
     orders: currentOrders,
@@ -4883,6 +4927,10 @@ function clientView(data, session) {
     ...data.cashTransactions.filter((entry) => entry.direction === "expense").map((entry) => ({
       date: entry.occurred_at,
       html: `<tr><td>مصروف تشغيل / عهدة</td><td>${escapeHtml(entry.category || "—")}</td><td>${escapeHtml(entry.description || "—")}</td><td>${money(entry.amount)}</td><td>${escapeHtml(entry.payment_method || "غير محددة")}</td><td>${formatDateTime(entry.occurred_at)}</td></tr>`
+    })),
+    ...nonCashClientExpenses.map((entry) => ({
+      date: entry.occurred_at,
+      html: `<tr><td>مصروف على حساب العميل</td><td>${escapeHtml(entry.category || "—")}</td><td>${escapeHtml(entry.description || "—")}</td><td>${money(entry.amount)}</td><td>قيد حسابي</td><td>${formatDateTime(entry.occurred_at)}</td></tr>`
     })),
     ...allClientAccountAdjustments.map((entry) => {
       const date = entry._createdAt || entry.created_at || entry.date;
@@ -7367,7 +7415,9 @@ function subscribeToFactoryUpdates(session) {
       }
     });
   if (["admin", "client"].includes(session.role)) {
-    channel = channel.on("postgres_changes", { event: "*", schema: "public", table: "factory_finished_goods" }, (payload) => scheduleRealtimeRefresh(session, "مخزون الإنتاج المستلم", payload));
+    channel = channel
+      .on("postgres_changes", { event: "*", schema: "public", table: "factory_finished_goods" }, (payload) => scheduleRealtimeRefresh(session, "مخزون الإنتاج المستلم", payload))
+      .on("postgres_changes", { event: "*", schema: "public", table: "factory_account_expenses" }, (payload) => scheduleRealtimeRefresh(session, "مصروفات الحساب", payload));
   }
   if (["admin", "cutting"].includes(session.role)) {
     channel = channel.on("postgres_changes", { event: "*", schema: "public", table: "factory_fabrics" }, (payload) => scheduleRealtimeRefresh(session, "مخزون القماش", payload));
@@ -8699,34 +8749,55 @@ function bindClientDetailActions(session) {
     const client = dashboardData.clients.find((entry) => entry.id === selectedClientId);
     printDocument("فاتورة الموديلات", selectedOrders.map((order) => modelPrintMarkup(order, client?.name)).join(""));
   }));
-  document.querySelectorAll("[data-client-cash-form]").forEach((form) => form.addEventListener("submit", async (event) => {
+  document.querySelectorAll("[data-add-client-expense]").forEach((button) => button.addEventListener("click", () => {
+    const modal = document.querySelector("#client-details [data-client-expense-modal]");
+    if (modal) {
+      modal.hidden = false;
+      modal.querySelector('[name="category"]').focus();
+    }
+  }));
+  document.querySelectorAll("#client-details [data-close-client-expense]").forEach((button) => button.addEventListener("click", () => {
+    const modal = button.closest("[data-client-expense-modal]");
+    if (modal) modal.hidden = true;
+  }));
+  document.querySelectorAll("#client-details [data-client-expense-modal]").forEach((modal) => modal.addEventListener("click", (event) => {
+    if (event.target === modal) modal.hidden = true;
+  }));
+  document.querySelectorAll("#client-details [data-client-expense-form]").forEach((form) => form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const values = new FormData(form);
     const occurredAt = new Date(String(values.get("occurredAt") || ""));
     const amount = Number(values.get("amount"));
-    if (Number.isNaN(occurredAt.getTime()) || !Number.isFinite(amount) || amount <= 0) {
-      window.factoryUI.toast("أدخل مبلغًا موجبًا وتاريخًا صحيحًا للحركة.", "error");
+    const category = String(values.get("category") || "").trim();
+    const description = String(values.get("description") || "").trim();
+    if (!Number.isFinite(amount) || amount <= 0 || !category || !description || Number.isNaN(occurredAt.getTime())) {
+      window.factoryUI.toast("أدخل بنداً ووصفاً ومبلغاً موجباً وتاريخاً صحيحاً للمصروف.", "error");
       return;
     }
     const button = form.querySelector('[type="submit"]');
     button.disabled = true;
+    let expenseSaved = false;
     try {
-      const { error } = await supabaseClient.rpc("save_factory_cash_transaction", {
-        requested_direction: "expense",
-        requested_category: String(values.get("category")).trim(),
-        requested_description: String(values.get("description")).trim(),
+      const { error } = await supabaseClient.rpc("save_factory_account_expense", {
+        requested_customer_id: form.dataset.clientExpenseForm,
+        requested_category: category,
+        requested_description: description,
         requested_amount: amount,
-        requested_payment_method: String(values.get("method") || "نقدي").trim(),
-        requested_occurred_at: occurredAt.toISOString(),
-        requested_customer_id: form.dataset.clientCashForm
+        requested_charge_to_customer: values.has("chargeToCustomer"),
+        requested_cash_withdrawn: values.has("cashWithdrawn"),
+        requested_payment_method: String(values.get("paymentMethod") || "نقدي").trim(),
+        requested_occurred_at: occurredAt.toISOString()
       });
-      if (error?.code === "PGRST202") throw new Error("دالة تسجيل الحركة النقدية المرتبطة بالعميل غير محدثة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+      if (error?.code === "PGRST202") throw new Error("دالة إضافة مصروف الحساب غير موجودة. شغّل أحدث نسخة من supabase/schema.sql في SQL Editor.");
       if (error) throw error;
+      expenseSaved = true;
       await refreshDashboard(session);
-      window.factoryUI.toast("تم تسجيل المصروف وربطه بحساب العميل وسجل الخزينة.");
+      window.factoryUI.toast("تم حفظ المصروف وتحديث حساب العميل والخزنة حسب الاختيارات.");
     } catch (error) {
       button.disabled = false;
-      reportDashboardFailure(session, "تعذر تسجيل حركة العميل", error);
+      reportDashboardFailure(session, expenseSaved
+        ? "تم حفظ المصروف، لكن تعذر تحديث شاشة العميل"
+        : "تعذر حفظ مصروف الحساب", error);
     }
   }));
   document.querySelectorAll(".client-note-form").forEach((form) => form.addEventListener("submit", async (event) => {

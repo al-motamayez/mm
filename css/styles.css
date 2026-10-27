@@ -321,6 +321,9 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .model-preview-list > span { color: #34483f; font-size: 13px; }
 .client-detail-toolbar { margin-bottom: 18px; }
 .client-detail-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.field.checkbox-field { display: flex; align-items: center; gap: 10px; }
+.field.checkbox-field input { width: auto; min-width: 18px; margin: 0; }
+.field.checkbox-field span { margin: 0; }
 .client-detail-section, .client-detail-section > .panel { width: 100%; }
 .client-detail-section { max-width: none; }
 .client-profile-compact { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
