@@ -588,6 +588,14 @@ async function readDashboardData(session) {
     }
     if (orderExpensesError) throw orderExpensesError;
     data.orderExpenses = orderExpenses || [];
+  } else if (session.role === "client") {
+    const { data: orderExpenses, error: orderExpensesError } = await supabaseClient
+      .rpc("read_factory_client_order_expenses");
+    if (orderExpensesError?.code === "PGRST202") {
+      throw new Error("دالة قراءة مصروفات الموديلات للعميل غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+    }
+    if (orderExpensesError) throw orderExpensesError;
+    data.orderExpenses = orderExpenses || [];
   }
 
   if (session.role === "admin") {
@@ -2349,10 +2357,16 @@ function clientOrderCards(orders) {
 
 function clientOrderDetailsMarkup(order) {
   const quantityFormat = new Intl.NumberFormat("ar-EG-u-nu-latn");
+  const clientExpenses = (order.expenseEntries || []).filter((entry) => entry.expense_type === "customer_cash");
   return `<header class="production-details-heading">${modelImageMarkup(order.modelImageUrls || order.modelImageUrl)}<div><small>تفاصيل الموديل</small><h2>${escapeHtml(order.name || "موديل بدون اسم")}</h2><p>كود الموديل بالنظام: ${escapeHtml(order.factoryModelCode || "—")} · كود/رقم الموديل للعميل: ${escapeHtml(order.clientModelCode || order.modelNumber || "—")}</p></div>${statusTag(order.displayStatus || order.status)}</header>
     <dl class="sewing-order-facts"><div><dt>العدد الأصلي</dt><dd>${quantityFormat.format(order.originalQuantity || 0)} قطعة</dd></div><div><dt>العدد بعد القص</dt><dd>${order.quantity ? `${quantityFormat.format(order.quantity)} قطعة` : "بانتظار الحصر"}</dd></div><div><dt>الكمية المنجزة</dt><dd>${quantityFormat.format(order.completedPieces || 0)} قطعة</dd></div><div><dt>الكمية المسلّمة</dt><dd>${quantityFormat.format(order.deliveredPieces || 0)} قطعة</dd></div><div><dt>المتبقي</dt><dd>${order.quantity ? `${quantityFormat.format(order.remainingPieces || 0)} قطعة` : "بانتظار الحصر"}</dd></div><div><dt>التسليم المتوقع</dt><dd>${formatDateOnly(order.expectedDeliveryDate)}</dd></div></dl>
     <h3 class="modal-subheading">توزيع المقاسات والألوان</h3>${modelSizeColorCardsMarkup(order)}
     ${cuttingDetailsMarkup(order)}
+    <h3 class="modal-subheading">مصروفات هذا الموديل على حسابك</h3>${clientExpenses.length
+      ? table(["بيان المصروف","القيمة","التاريخ"], clientExpenses.map((entry) =>
+        `<tr><td>${escapeHtml(entry.description || "مصروف موديل")}</td><td>${money(entry.amount)}</td><td>${formatDateTime(entry.created_at)}</td></tr>`
+      ))
+      : '<div class="empty-state">لا توجد مصروفات محمّلة على حسابك لهذا الموديل.</div>'}
     ${order.technicalNotes ? `<p class="cutting-details-notes"><strong>تعليمات التشغيل:</strong> ${escapeHtml(order.technicalNotes)}</p>` : ""}
     ${orderProgress(order.status, order.workStages)}`;
 }
@@ -3065,7 +3079,7 @@ function clientDetailsView(client, data) {
     </dl>
     <h4 class="modal-subheading">توزيع المقاسات والألوان</h4>${modelSizeColorCardsMarkup(order)}
     ${cuttingDetailsMarkup({ ...order, fabricLines: cuttingStory?.fabric_lines || [] })}
-    ${!archived ? `<footer class="order-card-actions"><button class="row-action" type="button" data-edit-client-order="${escapeHtml(order.id)}">تعديل السعر أو بيانات الموديل</button>${locked ? '<span class="status">تم التسليم / مغلق</span>' : order.customerId ? `<button class="row-action" type="button" data-action="record-delivery" data-index="${index}"${order.quantity ? "" : " disabled"}>تسجيل تسليم</button><button class="row-action order-close-action" type="button" data-action="complete-handover" data-index="${index}"${order.quantity ? "" : " disabled"}>تسوية التسليم وإغلاق الطلب</button>` : ""}${orderCanBeDeleted(order) ? `<button class="row-action order-delete-action" type="button" data-action="delete-order" data-order-id="${escapeHtml(order.id)}">حذف الموديل</button>` : '<span class="order-delete-protected" title="لا يمكن حذف طلب له تسليمات أو مصروفات تشغيل أو مبالغ مسجلة">محمي بسجل مالي / مصروفات / تسليم</span>'}</footer>` : ""}
+    ${!archived ? `<footer class="order-card-actions"><button class="row-action" type="button" data-add-model-expense="${escapeHtml(order.id)}">＋ إضافة مصروف</button><button class="row-action" type="button" data-edit-client-order="${escapeHtml(order.id)}">تعديل السعر أو بيانات الموديل</button>${locked ? '<span class="status">تم التسليم / مغلق</span>' : order.customerId ? `<button class="row-action" type="button" data-action="record-delivery" data-index="${index}"${order.quantity ? "" : " disabled"}>تسجيل تسليم</button><button class="row-action order-close-action" type="button" data-action="complete-handover" data-index="${index}"${order.quantity ? "" : " disabled"}>تسوية التسليم وإغلاق الطلب</button>` : ""}${orderCanBeDeleted(order) ? `<button class="row-action order-delete-action" type="button" data-action="delete-order" data-order-id="${escapeHtml(order.id)}">حذف الموديل</button>` : '<span class="order-delete-protected" title="لا يمكن حذف طلب له تسليمات أو مصروفات تشغيل أو مبالغ مسجلة">محمي بسجل مالي / مصروفات / تسليم</span>'}</footer>` : ""}
   </article>`;
   };
   const clientNotes = data.clientNotes.filter((note) => note.customerId === client.id);
@@ -3753,7 +3767,6 @@ function adminView(data, accounts) {
         ${panel("إدارة الموديلات والطلبيات", orderCards(activeOrders, true))}
       </div>
       <div data-orders-tab-panel="status"${activeOrdersTab === "status" ? "" : " hidden"}>${modelStatusReviewView(data)}</div>
-      <div class="modal-backdrop" id="model-expense-modal" hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="model-expense-title"><button class="modal-close" type="button" data-close-model-expense aria-label="إغلاق">×</button><h2 id="model-expense-title">إضافة مصروف خارجي للموديل</h2><p data-model-expense-name></p><form class="modal-form" data-model-expense-form><input type="hidden" name="orderId"><label for="model-expense-description">بيان المصروف الخارجي</label><input id="model-expense-description" name="description" maxlength="240" required><label for="model-expense-type">نوع المصروف والأثر المالي</label><select id="model-expense-type" name="expenseType" required><option value="customer_cash">مصروف على العميل ومسحوب من الخزنة</option><option value="treasury_only">مصروف مسحوب من الخزنة فقط (تكلفة تشغيلية)</option><option value="included_in_price">مصروف مدمج ضمن سعر القطعة</option></select><small class="model-expense-impact-hint">تُسجّل جميع الأنواع كحركة خروج نقدي؛ ويُضاف النوع الأول فقط إلى حساب العميل.</small><label for="model-expense-amount">قيمة المصروف (ج.م)</label><input id="model-expense-amount" name="amount" type="number" min="0.01" max="999999999999.99" step="0.01" required><div class="form-actions"><button class="button button-primary" type="submit">حفظ المصروف</button><button class="row-action" type="button" data-close-model-expense>إلغاء</button></div></form></section></div>
       <div class="modal-backdrop" id="order-modal" hidden><section class="modal-card order-modal-card" role="dialog" aria-modal="true" aria-labelledby="order-modal-title"><button class="modal-close" type="button" data-close-order aria-label="إغلاق">×</button><h2 id="order-modal-title">إضافة موديل / طلبية</h2><p>يمكن ترك العدد فارغًا حتى انتهاء الفرش والقص، ثم إدخال العدد الفعلي عند تعديل الطلب.</p>            <form id="model-form" class="order-form modal-form" novalidate><input type="hidden" name="editIndex" value=""><input type="hidden" name="savedOrderId" value="">
         <section class="form-section"><h3>المعلومات الأساسية <span>إجباري</span></h3><div class="form-section-grid">
           <input type="hidden" name="customerId">
@@ -7082,6 +7095,7 @@ function render(session, data, accounts) {
       <main class="main-content"><header class="topbar"><div class="topbar-leading"><button class="sidebar-toggle" type="button" data-sidebar-toggle aria-controls="sidebar" aria-expanded="true" aria-label="طي القائمة الجانبية"><span aria-hidden="true">☰</span></button><div class="topbar-title"><h1>${info.title}</h1><p>${info.description}</p></div></div><div class="header-brand">${session.role === "admin" ? `<button class="online-indicator${onlineUserCount ? " online" : ""}" data-online-indicator type="button" title="عرض الحسابات المتصلة"><span class="online-indicator-dot"></span><span>متصلون الآن: <strong data-online-count>${onlineUserCount}</strong></span></button>` : ""}<div class="notification-control"><button class="live-notification-button" type="button" data-live-notifications aria-label="إشعارات تحديثات البرنامج" aria-expanded="false"><span aria-hidden="true">🔔</span><span class="live-notification-badge" data-live-badge aria-live="polite" hidden></span></button><section class="notification-dropdown" data-notification-dropdown hidden aria-label="إشعارات تحديثات البرنامج"><header><strong>تحديثات البرنامج</strong><button type="button" class="notification-mark-read" data-mark-notifications-read>تعليم الكل كمقروء</button></header><div class="notification-list" data-notification-list>${notificationListMarkup()}</div></section></div><img class="header-logo" src="../assets/al-motamayez-logo.png" alt="AL-MOTAMAYEZ logo"><div class="brand-copy"><strong>AL-MOTAMAYEZ</strong></div><span class="date-label">${new Intl.DateTimeFormat("ar-EG-u-nu-latn", { dateStyle: "full" }).format(new Date())}</span></div></header>
     ${data.orderReadWarning ? `<div class="notice" role="alert">${escapeHtml(data.orderReadWarning)}</div>` : ""}
     ${content}
+      ${session.role === "admin" ? '<div class="modal-backdrop" id="model-expense-modal" hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="model-expense-title"><button class="modal-close" type="button" data-close-model-expense aria-label="إغلاق">×</button><h2 id="model-expense-title">إضافة مصروف للموديل</h2><p data-model-expense-name></p><form class="modal-form" data-model-expense-form><input type="hidden" name="orderId"><label for="model-expense-description">بيان المصروف</label><input id="model-expense-description" name="description" maxlength="240" required><label class="field model-expense-customer-toggle"><input type="checkbox" name="billToCustomer" checked><span>تحميل هذا المصروف على حساب العميل وإظهاره في بوابته</span></label><label for="model-expense-type">نوع المصروف عند عدم تحميله على العميل</label><select id="model-expense-type" name="expenseType" required><option value="treasury_only">مصروف تشغيلي من الخزنة فقط</option><option value="included_in_price">مصروف مدمج ضمن سعر القطعة</option></select><small class="model-expense-impact-hint">عند تفعيل الخيار يُضاف المصروف لحساب العميل. عند إلغاء التفعيل يبقى للإدارة ولا يظهر في بوابة العميل.</small><label for="model-expense-amount">قيمة المصروف (ج.م)</label><input id="model-expense-amount" name="amount" type="number" min="0.01" max="999999999999.99" step="0.01" required><div class="form-actions"><button class="button button-primary" type="submit">حفظ المصروف</button><button class="row-action" type="button" data-close-model-expense>إلغاء</button></div></form></section></div>' : ""}
       ${session.role === "admin" ? '<div class="modal-backdrop" data-online-users-modal hidden><section class="modal-card compact-view-modal" role="dialog" aria-modal="true" aria-labelledby="online-users-title"><button class="modal-close" type="button" data-close-online-users aria-label="إغلاق">×</button><h2 id="online-users-title">المتصلون الآن</h2><div class="online-users-list" data-online-users-list></div><div class="form-actions"><button class="row-action" type="button" data-close-online-users>إغلاق</button></div></section></div>' : ""}
       </main>
     </div>
@@ -11518,7 +11532,13 @@ function bindModelExpenseActions(session) {
     modal.hidden = true;
     form.reset();
     form.elements.orderId.value = "";
+    syncCustomerCharge();
   };
+  const syncCustomerCharge = () => {
+    form.elements.expenseType.disabled = form.elements.billToCustomer.checked;
+  };
+  form.elements.billToCustomer.addEventListener("change", syncCustomerCharge);
+  syncCustomerCharge();
   document.querySelector("#app").addEventListener("click", (event) => {
     const button = event.target.closest("[data-add-model-expense]");
     if (!button) return;
@@ -11530,6 +11550,7 @@ function bindModelExpenseActions(session) {
     form.reset();
     form.elements.orderId.value = order.id;
     modal.querySelector("[data-model-expense-name]").textContent = `${order.name} · ${order.factoryModelCode || "دون كود بالنظام"}`;
+    syncCustomerCharge();
     modal.hidden = false;
     form.elements.description.focus();
   });
@@ -11542,7 +11563,9 @@ function bindModelExpenseActions(session) {
     const orderId = form.elements.orderId.value;
     const description = String(form.elements.description.value).trim();
     const amount = Number(form.elements.amount.value);
-    const expenseType = form.elements.expenseType.value;
+    const expenseType = form.elements.billToCustomer.checked
+      ? "customer_cash"
+      : form.elements.expenseType.value;
     if (!orderId || !description || !Number.isFinite(amount) || amount <= 0
       || !["customer_cash", "treasury_only", "included_in_price"].includes(expenseType)) {
       window.factoryUI.toast("أدخل بيان المصروف ونوعه وقيمة صحيحة أكبر من صفر.", "error");

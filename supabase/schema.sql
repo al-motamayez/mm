@@ -2341,6 +2341,43 @@ begin
 end;
 $$;
 
+create or replace function public.read_factory_client_order_expenses()
+returns table (
+  id uuid,
+  order_id uuid,
+  description text,
+  amount numeric,
+  expense_type text,
+  created_at timestamptz
+)
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+begin
+  if not public.has_active_factory_role(array['client']) then
+    raise exception 'Only active clients can read customer-billed model expenses.';
+  end if;
+
+  return query
+    select expense.id,
+           expense.order_id,
+           expense.description,
+           expense.amount,
+           expense.expense_type,
+           expense.created_at
+    from public.factory_order_expenses as expense
+    join public.orders as factory_order on factory_order.id = expense.order_id
+    where expense.expense_type = 'customer_cash'
+      and (
+        factory_order.client_id = auth.uid()
+        or public.owns_factory_client_profile(factory_order.customer_id)
+      )
+    order by expense.created_at desc;
+end;
+$$;
+
 drop function if exists public.admin_add_factory_order_expense(uuid, text, numeric);
 create or replace function public.admin_add_factory_order_expense(
   requested_order_id uuid,
@@ -7858,6 +7895,8 @@ revoke all on function public.read_factory_orders_admin() from public, anon, aut
 grant execute on function public.read_factory_orders_admin() to authenticated;
 revoke all on function public.read_factory_order_expenses_admin() from public, anon, authenticated;
 grant execute on function public.read_factory_order_expenses_admin() to authenticated;
+revoke all on function public.read_factory_client_order_expenses() from public, anon, authenticated;
+grant execute on function public.read_factory_client_order_expenses() to authenticated;
 revoke all on function public.admin_add_factory_order_expense(uuid, text, numeric, text) from public, anon, authenticated;
 grant execute on function public.admin_add_factory_order_expense(uuid, text, numeric, text) to authenticated;
 revoke all on function public.read_factory_orders_client() from public, anon, authenticated;

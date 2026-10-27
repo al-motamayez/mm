@@ -865,6 +865,10 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .model-image-lightbox-card img { display: block; width: auto; height: auto; max-width: calc(100vw - 40px); max-height: calc(94vh - 56px); max-height: calc(94dvh - 56px); border: 0; border-radius: 0; background: transparent; object-fit: contain; }
 .modal-form { display: grid; gap: 10px; }
 .model-expense-impact-hint { color: var(--muted); font-size: 12px; line-height: 1.7; }
+.model-expense-customer-toggle { display: flex; align-items: center; gap: 10px; padding: 11px 12px; border: 1px solid #dfe8e1; border-radius: 9px; background: #f7faf7; }
+.model-expense-customer-toggle input { flex: 0 0 auto; width: 18px; min-height: 18px; height: 18px; margin: 0; accent-color: var(--green); }
+.model-expense-customer-toggle span { line-height: 1.6; }
+.modal-form select:disabled { color: var(--muted); background: #f2f4f2; cursor: not-allowed; }
 .modal-form label { margin-top: 5px; color: #465651; font-size: 13px; font-weight: 600; }
 .order-modal-card .work-stage-options label { margin: 0; font-size: 12px; }
 .modal-form textarea { min-height: 88px; padding: 11px 13px; border: 1px solid #dfe6e1; border-radius: 9px; font: inherit; resize: vertical; }
