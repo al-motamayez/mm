@@ -2340,7 +2340,7 @@ function clientOrderCards(orders) {
   if (!orders.length) return '<div class="empty-state">لا توجد طلبيات لعرضها حاليًا.</div>';
   const quantityFormat = new Intl.NumberFormat("ar-EG-u-nu-latn");
   return `<div class="order-cards client-order-cards">${orders.map((item) => `<article class="order-card client-order-card">
-    <header class="order-card-heading">${modelImageMarkup(item.modelImageUrls || item.modelImageUrl)}<div><p class="order-card-label">كود الموديل: ${escapeHtml(item.factoryModelCode || item.clientModelCode || item.modelNumber || "—")}</p><h3>${escapeHtml(item.name || "موديل بدون اسم")}</h3></div></header>
+    <header class="order-card-heading">${modelImageMarkup(item.modelImageUrls || item.modelImageUrl)}<div><p class="order-card-label">كود الموديل: ${escapeHtml(item.factoryModelCode || item.clientModelCode || item.modelNumber || "—")}</p><h3>${escapeHtml(item.name || "موديل بدون اسم")}</h3></div>${statusTag(item.displayStatus || item.status || "قيد الانتظار")}</header>
     <div class="client-order-card-summary"><strong>${item.quantity ? quantityFormat.format(item.quantity) : item.originalQuantity ? quantityFormat.format(item.originalQuantity) : "بانتظار الحصر"}</strong><span>إجمالي العدد</span></div>
     <div class="client-order-card-colors"><span>الألوان</span>${colorSummaryMarkup(item.colors, item.colorNames, item.colorPlyData)}</div>
     ${productionDetailsButton("client-order", item)}
@@ -4804,6 +4804,11 @@ function clientView(data, session) {
   const latestSettlement = settlements[0] || null;
   const currentOrders = data.models.filter((item) => !item.archivedAt);
   const archivedOrders = data.models.filter((item) => item.archivedAt);
+  const productionOrders = currentOrders.filter((order) => {
+    const status = canonicalFactoryOrderStatus(order.status || order.displayStatus || "قيد الانتظار");
+    return status !== "قيد الانتظار" && status !== "تم التسليم";
+  });
+  const allClientOrders = [...currentOrders, ...archivedOrders];
   const allClientPayments = data.payments.filter((item) =>
     item.clientId === session.accountId
     || item._ownerId === session.accountId
@@ -4856,7 +4861,7 @@ function clientView(data, session) {
   const deliveryRows = clientDeliveries.map((entry) => {
     const order = clientOrdersById.get(entry.order_id);
     const amount = Number(entry.amount ?? Number(entry.quantity || 0) * Number(entry.price_per_piece || 0));
-    return `<tr><td>${modelImageMarkup(order?.modelImageUrls || order?.modelImageUrl, `صورة ${order?.name || "الموديل"}`) || "—"}</td><td>${escapeHtml(order?.name || "طلبية مؤرشفة")}</td><td>${escapeHtml(order?.factoryModelCode || order?.clientModelCode || order?.modelNumber || "—")}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(Number(entry.quantity || 0))}</td><td>${money(entry.price_per_piece)}</td><td>${money(amount)}</td><td>${formatDateTime(entry.delivered_at)}</td></tr>`;
+    return `<tr><td>${modelImageMarkup(order?.modelImageUrls || order?.modelImageUrl, `صورة ${order?.name || "الموديل"}`) || "—"}</td><td>${escapeHtml(order?.name || "طلبية مؤرشفة")}</td><td>${escapeHtml(order?.factoryModelCode || order?.clientModelCode || order?.modelNumber || "—")}</td><td>${statusTag(order?.displayStatus || order?.status || "تم التسليم")}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(Number(entry.quantity || 0))}</td><td>${money(entry.price_per_piece)}</td><td>${money(amount)}</td><td>${formatDateTime(entry.delivered_at)}</td></tr>`;
   });
   const paymentRowsForClient = allClientPayments.map((entry) =>
     `<tr><td>${formatDateTime(entry._createdAt || entry.created_at || entry.date)}</td><td>${money(entry.amount)}</td><td>${escapeHtml(entry.method || "غير محددة")}</td><td>${escapeHtml(entry.reference || entry.orderReference || "—")}</td><td>${escapeHtml(entry.notes || "—")}</td></tr>`
@@ -4880,7 +4885,7 @@ function clientView(data, session) {
     <button id="client-ledger-tab-operations" type="button" class="client-management-tab" role="tab" aria-selected="false" aria-controls="client-ledger-operations" data-client-ledger-tab="operations">مصاريف وبنود التشغيل</button>
   </div>
   <section id="client-ledger-deliveries" class="client-ledger-panel" role="tabpanel" aria-labelledby="client-ledger-tab-deliveries">${panel("التسليمات", deliveryRows.length
-    ? table(["صورة الموديل","الموديل","الكود","العدد المسلّم","سعر القطعة","الإجمالي","التاريخ"], deliveryRows)
+    ? table(["صورة الموديل","الموديل","الكود","الحالة","العدد المسلّم","سعر القطعة","الإجمالي","التاريخ"], deliveryRows)
     : '<div class="empty-state">لا توجد تسليمات مسجلة.</div>')}</section>
   <section id="client-ledger-payments" class="client-ledger-panel" role="tabpanel" aria-labelledby="client-ledger-tab-payments" hidden>${panel("الدفعات النقدية", paymentRowsForClient.length
     ? table(["التاريخ","المبلغ","طريقة الدفع","المرجع","ملاحظات"], paymentRowsForClient)
@@ -4927,7 +4932,13 @@ function clientView(data, session) {
       ? table(["اسم الموديل","كود/رقم الموديل للعميل","العدد","الصورة","الحالة","تاريخ الإرسال"], requestRows(pendingClientModelRequests))
       : '<div class="empty-state">لا توجد موديلات مطلوبة للقص بانتظار المراجعة.</div>', "هذه الطلبات منفصلة عن الموديلات والطلبيات؛ لا تدخل سجل الإنتاج أو حساب البضاعة حتى اعتمادها وقصها فعلياً.")}
     ${reviewedClientModelRequests.length ? panel("طلبات القص السابقة", table(["اسم الموديل","كود/رقم الموديل للعميل","العدد","الصورة","الحالة","تاريخ الإرسال"], requestRows(reviewedClientModelRequests))) : ""}</section>`;
-  return `<section id="dashboard" class="dashboard-section"><article class="client-balance-spotlight ${balanceState}" role="status" aria-live="polite"><span>${deliveredDue > 0 ? "المستحق حسب حالة الطلب" : accountCreditBalance > 0 ? "الرصيد الدائن" : "المستحق حسب حالة الطلب"}</span><strong>${money(deliveredDue > 0 ? deliveredDue : accountCreditBalance)}</strong><small>${balanceCaption}</small></article><div class="stats-grid">${stat("موديلاتي الحالية", currentOrders.length, "ضمن الفترة الحالية")}${latestSettlement ? stat("الرصيد المرحّل من آخر تصفية", money(openingBalance), "قبل حركات الفترة الحالية") : ""}${stat("المتبقي من البضاعة بحالات التشغيل الأخرى", money(pendingGoodsBalance), "بعد الدفعات؛ جميع الحالات ما عدا الجاهز للتسليم وتم التسليم")}${stat("المستحق للطلبات الجاهزة أو المسلّمة", money(deliveredDue), "حسب حالة الطلب")}${stat("مصروفات وعهد على الحساب", money(clientExpensesTotal))}${stat("إجمالي المدفوع", money(totalPaid))}${stat("إجمالي رصيد الحساب المتوقع", money(remaining), remaining === 0 ? "تم السداد بالكامل" : remaining < 0 ? "رصيد دائن بعد احتساب البضاعة بحالات التشغيل الأخرى" : deliveredDue > 0 ? `المستحق حسب الحالة ${money(deliveredDue)}، والبضاعة بحالات التشغيل الأخرى ${money(pendingGoodsBalance)}` : pendingGoodsBalance > 0 ? "لا يوجد مستحق حسب الحالة؛ الرصيد خاص ببضاعة بحالات تشغيل أخرى" : "لا يوجد مستحق حسب حالة الطلب")}</div></section><section id="orders" class="dashboard-section">${panel("موديلاتي والطلبيات الحالية", clientOrderCards(currentOrders))}${archivedOrders.length ? panel("الطلبات المؤرشفة", clientOrderCards(archivedOrders)) : ""}</section>${clientModelRequestSection}<section id="finished-goods" class="dashboard-section">${panel("المخزني · مخزون الإنتاج المستلم", table(["الموديل","الكمية","الألوان","الصورة","العامل","تاريخ الاستلام"], finishedGoodsRows))}</section>${fabricSection}<section id="finance" class="dashboard-section">${panel("ملخص الحساب المالي", financialSummary, "تُحدّث القيم مع إعادة تحميل بيانات البوابة، ويظل حساب المديونية خاضعاً لتسليم البضاعة.")}${panel("السجل المالي", financialTabs)}</section>`;
+  const clientOrdersSection = `<section id="orders" class="dashboard-section">${panel("موديلاتي والطلبيات", `<div class="client-order-tabs" role="tablist" aria-label="عرض موديلاتي">
+    <button id="client-orders-tab-production" type="button" class="client-management-tab active" role="tab" aria-selected="true" aria-controls="client-orders-panel-production" data-client-orders-tab="production">تحت الإنتاج / في المصنع (${productionOrders.length})</button>
+    <button id="client-orders-tab-all" type="button" class="client-management-tab" role="tab" aria-selected="false" aria-controls="client-orders-panel-all" data-client-orders-tab="all">كل الموديلات (${allClientOrders.length})</button>
+  </div>
+  <section id="client-orders-panel-production" class="client-orders-panel" role="tabpanel" aria-labelledby="client-orders-tab-production">${clientOrderCards(productionOrders)}</section>
+  <section id="client-orders-panel-all" class="client-orders-panel" role="tabpanel" aria-labelledby="client-orders-tab-all" hidden>${clientOrderCards(allClientOrders)}</section>`)}</section>`;
+  return `<section id="dashboard" class="dashboard-section"><article class="client-balance-spotlight ${balanceState}" role="status" aria-live="polite"><span>${deliveredDue > 0 ? "المستحق حسب حالة الطلب" : accountCreditBalance > 0 ? "الرصيد الدائن" : "المستحق حسب حالة الطلب"}</span><strong>${money(deliveredDue > 0 ? deliveredDue : accountCreditBalance)}</strong><small>${balanceCaption}</small></article><div class="stats-grid">${stat("موديلاتي الحالية", currentOrders.length, "ضمن الفترة الحالية")}${latestSettlement ? stat("الرصيد المرحّل من آخر تصفية", money(openingBalance), "قبل حركات الفترة الحالية") : ""}${stat("المتبقي من البضاعة بحالات التشغيل الأخرى", money(pendingGoodsBalance), "بعد الدفعات؛ جميع الحالات ما عدا الجاهز للتسليم وتم التسليم")}${stat("المستحق للطلبات الجاهزة أو المسلّمة", money(deliveredDue), "حسب حالة الطلب")}${stat("مصروفات وعهد على الحساب", money(clientExpensesTotal))}${stat("إجمالي المدفوع", money(totalPaid))}${stat("إجمالي رصيد الحساب المتوقع", money(remaining), remaining === 0 ? "تم السداد بالكامل" : remaining < 0 ? "رصيد دائن بعد احتساب البضاعة بحالات التشغيل الأخرى" : deliveredDue > 0 ? `المستحق حسب الحالة ${money(deliveredDue)}، والبضاعة بحالات التشغيل الأخرى ${money(pendingGoodsBalance)}` : pendingGoodsBalance > 0 ? "لا يوجد مستحق حسب الحالة؛ الرصيد خاص ببضاعة بحالات تشغيل أخرى" : "لا يوجد مستحق حسب حالة الطلب")}</div></section>${clientOrdersSection}${clientModelRequestSection}<section id="finished-goods" class="dashboard-section">${panel("المخزني · مخزون الإنتاج المستلم", table(["الموديل","الكمية","الألوان","الصورة","العامل","تاريخ الاستلام"], finishedGoodsRows))}</section>${fabricSection}<section id="finance" class="dashboard-section">${panel("ملخص الحساب المالي", financialSummary, "تُحدّث القيم مع إعادة تحميل بيانات البوابة، ويظل حساب المديونية خاضعاً لتسليم البضاعة.")}${panel("السجل المالي", financialTabs)}</section>`;
 }
 
 function clientModelRequestsAdminView(data) {
@@ -9706,6 +9717,17 @@ function bindActions(session) {
     });
     document.querySelectorAll(".client-ledger-panel").forEach((panel) => {
       panel.hidden = panel.id !== `client-ledger-${activeTab}`;
+    });
+  }));
+  document.querySelectorAll("[data-client-orders-tab]").forEach((button) => button.addEventListener("click", () => {
+    const activeTab = button.dataset.clientOrdersTab;
+    document.querySelectorAll("[data-client-orders-tab]").forEach((tab) => {
+      const selected = tab.dataset.clientOrdersTab === activeTab;
+      tab.classList.toggle("active", selected);
+      tab.setAttribute("aria-selected", String(selected));
+    });
+    document.querySelectorAll(".client-orders-panel").forEach((panel) => {
+      panel.hidden = panel.id !== `client-orders-panel-${activeTab}`;
     });
   }));
   document.querySelector("#logout").addEventListener("click", async () => {

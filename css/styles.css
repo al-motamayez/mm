@@ -911,6 +911,9 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .client-order-card .model-image-trigger { flex: 0 0 62px; width: 62px; height: 70px; overflow: hidden; border-radius: 8px; }
 .client-order-card .model-thumbnail { width: 100%; height: 100%; object-fit: cover; }
 .client-order-card .order-card-heading h3 { font-size: 15px; }
+.client-order-card .order-card-heading > .status { flex: 0 0 auto; max-width: 46%; white-space: normal; text-align: center; }
+.client-order-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.client-orders-panel[hidden] { display: none; }
 .client-order-card-summary { display: flex; align-items: baseline; gap: 8px; color: var(--muted); font-size: 12px; }
 .client-order-card-summary strong { color: var(--green-dark); font-size: 19px; }
 .client-order-card-colors { display: grid; gap: 5px; color: var(--muted); font-size: 11px; }
