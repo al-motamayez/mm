@@ -429,13 +429,6 @@ set search_path = public
 as $$
 begin
   if new.role = 'client' and new.status = 'active' then
-    if tg_op = 'UPDATE' then
-      update public.factory_clients
-      set name = case when name = old.name then new.name else name end,
-          phone = case when phone = coalesce(old.phone, '') then coalesce(new.phone, '') else phone end,
-          updated_at = now()
-      where user_id = new.id;
-    end if;
     if not exists (
       select 1 from public.factory_clients where user_id = new.id
     ) then
@@ -458,10 +451,7 @@ select account.id, account.name, coalesce(account.phone, '')
 from public.users as account
 where account.role = 'client'
   and account.status = 'active'
-on conflict (user_id) do update
-  set name = excluded.name,
-      phone = excluded.phone,
-      updated_at = now();
+on conflict (user_id) do nothing;
 
 create or replace function public.admin_link_factory_client_account(
   requested_customer_id uuid,

@@ -2957,7 +2957,12 @@ function clientDetailsView(client, data) {
   const clientRequestRows = (requests) => requests.map((request) =>
     `<tr><td>${escapeHtml(request.model_name || "—")}</td><td>${escapeHtml(request.model_number || "—")}</td><td>${request.quantity ?? "—"}</td><td>${modelImageMarkup(request.imageUrl, `صورة الموديل ${request.model_name || ""}`) || "—"}</td><td>${statusTag(request.status === "pending" ? "بانتظار المراجعة" : request.status)}</td><td>${formatDateTime(request.created_at)}</td></tr>`
   );
-  const deliveries = data.deliveries.filter((delivery) => delivery.customer_id === client.id);
+  const clientOrdersById = new Map(data.models
+    .filter((order) => order.customerId === client.id)
+    .map((order) => [order.id, order]));
+  const deliveries = data.deliveries.filter((delivery) =>
+    delivery.customer_id === client.id || clientOrdersById.has(delivery.order_id)
+  );
   const clientFabrics = data.fabrics.filter((fabric) => fabric.customer_id === client.id);
   const clientFabricIds = new Set(clientFabrics.map((fabric) => fabric.id));
   const clientFabricTransactions = data.fabricTransactions.filter((transaction) => clientFabricIds.has(transaction.fabric_id));
@@ -3105,7 +3110,7 @@ function clientDetailsView(client, data) {
     <div data-client-profile-panel="overview"${activeClientProfileTab === "overview" ? "" : " hidden"}>
     <section class="client-detail-section"><header class="section-heading"><div><h2>الموديلات التي تم تسعيرها</h2><p>يُحتسب المطلوب المالي على الكمية التي تم تسليمها.</p></div><button class="button button-secondary" type="button" data-open-order-for-client="${escapeHtml(client.id)}">＋ إضافة موديل للعميل</button></header>${pricedOrders.length ? `<div class="order-cards">${pricedOrders.map((order) => orderCard(order)).join("")}</div>` : '<div class="empty-state">لا توجد موديلات مسعّرة في الفترة الحالية.</div>'}</section>
     <section class="client-detail-section"><header class="section-heading"><div><h2>موديلات لم تُسعّر بعد</h2><p>طلبات في القص أو مراحل التشغيل الأخرى.</p></div></header>${unpricedOrders.filter((order) => !waitingOrderIds.has(order.id)).length ? `<div class="order-cards">${unpricedOrders.filter((order) => !waitingOrderIds.has(order.id)).map((order) => orderCard(order)).join("")}</div>` : '<div class="empty-state">لا توجد موديلات بانتظار التسعير.</div>'}</section>
-    <section class="client-detail-section">${panel("الموديلات المسلّمة", deliveries.length ? table(["الموديل","الكمية","سعر القطعة","القيمة المستحقة","المستلم","التاريخ"], deliveries.map((delivery) => { const order = data.models.find((item) => item.id === delivery.order_id); return `<tr><td>${escapeHtml(order?.name || "طلب مؤرشف")}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(delivery.quantity)} قطعة</td><td>${money(delivery.price_per_piece)}</td><td>${money(delivery.amount)}</td><td>${escapeHtml(delivery.recipient_name || "—")}</td><td>${formatDateTime(delivery.delivered_at)}</td></tr>`; })) : '<div class="empty-state">لا توجد تسليمات مسجلة لهذا العميل.</div>')}</section>
+    <section class="client-detail-section">${panel("الموديلات المسلّمة", deliveries.length ? table(["الصورة","الموديل","كود الموديل","الكمية","سعر القطعة","القيمة المستحقة","المستلم","التاريخ"], deliveries.map((delivery) => { const order = clientOrdersById.get(delivery.order_id); return `<tr><td>${modelImageMarkup(order?.modelImageUrls || order?.modelImageUrl, `صورة ${order?.name || "الموديل"}`) || "—"}</td><td>${escapeHtml(order?.name || "طلب مؤرشف")}</td><td>${escapeHtml(order?.factoryModelCode || order?.clientModelCode || order?.modelNumber || "—")}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(delivery.quantity)} قطعة</td><td>${money(delivery.price_per_piece)}</td><td>${money(delivery.amount ?? Number(delivery.quantity || 0) * Number(delivery.price_per_piece || 0))}</td><td>${escapeHtml(delivery.recipient_name || "—")}</td><td>${formatDateTime(delivery.delivered_at)}</td></tr>`; })) : '<div class="empty-state">لا توجد تسليمات مسجلة لهذا العميل.</div>')}</section>
     <section class="client-detail-section">${panel("سجل القماش الداخل للعميل", clientFabrics.length ? table(["القماش / اللون","المتاح","الحركة","الكمية","التاريخ"], clientFabricTransactions.map((transaction) => { const fabric = clientFabrics.find((item) => item.id === transaction.fabric_id); return `<tr><td>${escapeHtml(fabric?.name || "—")} · ${escapeHtml(fabric?.color_name || "لون غير مسمى")}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(fabric?.quantity_available || 0)} ${escapeHtml(fabric?.unit || "")}</td><td>${escapeHtml(transaction.transaction_type)}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(transaction.quantity)} ${escapeHtml(fabric?.unit || "")}</td><td>${formatDateTime(transaction.created_at)}</td></tr>`; })) : '<div class="empty-state">لا يوجد قماش مرتبط بهذا العميل.</div>')}</section>
     <section class="client-detail-section">${panel("ملاحظات وتنبيهات خاصة بالعميل", `${clientNotes.length ? `<div class="client-note-list">${clientNotes.map((note) => `<article><p>${escapeHtml(note.note || "")}</p><time>${formatDateTime(note._createdAt || note.created_at)}</time></article>`).join("")}</div>` : '<div class="empty-state">لا توجد ملاحظات مسجلة.</div>'}<form class="client-note-form" data-client-note="${escapeHtml(client.id)}"><label for="client-note-${escapeHtml(client.id)}">إضافة ملاحظة أو تنبيه</label><textarea id="client-note-${escapeHtml(client.id)}" name="note" rows="3" required></textarea><button class="button button-secondary" type="submit">حفظ الملاحظة</button></form>`)}</section>
     <section class="client-detail-section"><header class="section-heading"><div><h2>الفترات المالية السابقة</h2><p>الأوامر والتسليمات محفوظة في الأرشيف ولا تُحذف عند التصفية.</p></div><button class="button button-primary" type="button" data-settle-client="${escapeHtml(client.id)}">تصفية الحساب وترحيل الرصيد</button></header>
@@ -4846,10 +4851,8 @@ function clientView(data, session) {
         ? "لا توجد مديونية مستحقة؛ المتبقي خاص ببضاعة لم تُسلّم بعد"
         : "الحساب متوازن ولا يوجد مبلغ مستحق";
   const clientOrdersById = new Map(currentOrders.concat(archivedOrders).map((order) => [order.id, order]));
-  const clientDeliveries = data.deliveries.filter((entry) =>
-    entry.customer_id === session.accountId
-    || clientOrdersById.get(entry.order_id)?.customerId === session.accountId
-  );
+  const clientOrderIds = new Set(clientOrdersById.keys());
+  const clientDeliveries = data.deliveries.filter((entry) => clientOrderIds.has(entry.order_id));
   const deliveryRows = clientDeliveries.map((entry) => {
     const order = clientOrdersById.get(entry.order_id);
     const amount = Number(entry.amount ?? Number(entry.quantity || 0) * Number(entry.price_per_piece || 0));
