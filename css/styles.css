@@ -570,6 +570,16 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .cutting-story-card .form-actions { margin-top: 0; }
 .workforce-tabs { margin-bottom: 16px; }
 .workforce-panel { min-width: 0; }
+.workforce-date-toolbar { display:grid; grid-template-columns:auto minmax(240px, 1fr) auto; align-items:center; gap:12px; margin-bottom:12px; padding:12px 14px; border:1px solid var(--line); border-radius:12px; background:linear-gradient(135deg,#f7faf8,#fff); }
+.workforce-date-arrows { display:flex; gap:6px; align-items:center; }
+.workforce-date-display { text-align:center; min-width:0; }
+.workforce-date-display strong { display:block; color:var(--green-dark); font-size:15px; }
+.workforce-date-display small { display:block; margin-top:3px; color:var(--muted); direction:ltr; }
+.workforce-alert { display:flex; align-items:center; gap:10px; margin:0 0 12px; padding:10px 12px; border-radius:10px; }
+.workforce-alert-warning { border:1px solid #e7c66a; background:#fff8dc; color:#654d0b; }
+.workforce-alert span { flex:1; }
+.workforce-rollover-modal { width:min(620px,92vw); }
+@media (max-width:700px) { .workforce-date-toolbar { grid-template-columns:1fr; } .workforce-date-arrows { justify-content:center; flex-wrap:wrap; } .workforce-alert { align-items:flex-start; flex-wrap:wrap; } }
 .workforce-month-picker { width: min(230px, 100%); margin: 0; }
 .workforce-matrix-scroll { max-height: min(72vh, 760px); overflow: auto; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
 .workforce-matrix { width: max-content; min-width: 100%; border-collapse: separate; border-spacing: 0; font-size: 11px; }

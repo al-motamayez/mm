@@ -34,7 +34,9 @@ let sewingEditorModalBound = false;
 let activeCuttingEditorTrigger = null;
 let activeSewingEditorTrigger = null;
 let selectedWorkforceMonth = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`;
+let selectedWorkforceDate = workforceDateKey(new Date());
 let selectedWorkforceCutoffDate = "";
+let showWorkforceRolloverModal = false;
 const REALTIME_NOTIFICATION_MESSAGE = "تحديث جديد في البرنامج";
 const rolePages = {
   admin: "admin.html",
@@ -5297,6 +5299,27 @@ function workforceDateKey(date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
+function workforceShiftDate(dateKey, unit, amount) {
+  const date = new Date(`${dateKey || workforceDateKey(new Date())}T00:00:00`);
+  if (unit === "day") date.setDate(date.getDate() + amount);
+  else if (unit === "month") date.setMonth(date.getMonth() + amount);
+  else if (unit === "year") date.setFullYear(date.getFullYear() + amount);
+  return workforceDateKey(date);
+}
+
+function workforcePreviousMonth(monthKey) {
+  const [year, month] = String(monthKey || "").split("-").map(Number);
+  if (!year || !month) return "";
+  return workforceDateKey(new Date(year, month - 2, 1)).slice(0, 7);
+}
+
+function workforceArabicDateLabels(dateKey) {
+  const date = new Date(`${dateKey || workforceDateKey(new Date())}T00:00:00`);
+  const gregorian = new Intl.DateTimeFormat("ar-EG-u-ca-gregory", { weekday: "long", day: "numeric", month: "long", year: "numeric" }).format(date);
+  const hijri = new Intl.DateTimeFormat("ar-EG-u-ca-islamic", { weekday: "long", day: "numeric", month: "long", year: "numeric" }).format(date);
+  return { gregorian, hijri };
+}
+
 function workforceMonthDates(monthKey) {
   const [year, month] = monthKey.split("-").map(Number);
   const count = new Date(year, month, 0).getDate();
@@ -5821,6 +5844,46 @@ function workforceView(data) {
     : defaultCutoffDate;
   const settlementEligibleDate = workforceSettlementOpenDate(selectedWorkforceMonth);
   const canSettlePeriod = workforceCanSettlePeriod(selectedWorkforceMonth);
+  const previousMonthKey = workforcePreviousMonth(selectedWorkforceMonth);
+  const previousMonthSettled = new Set(data.workforceSettlements
+    .filter((record) => record.period === previousMonthKey && !record.manualRollover)
+    .map((record) => record.workerId));
+  const previousMonthUnsettledWorkers = employees.filter((worker) => {
+    const previousThroughDate = workforceDateKey(workforceMonthDates(previousMonthKey).at(-1));
+    const calculation = workforceMonthAccrual(worker, data, settings, previousMonthKey, previousThroughDate);
+    return !previousMonthSettled.has(worker.id) && Math.abs(calculation.netDue) > 0.01;
+  });
+  const currentDateLabels = workforceArabicDateLabels(selectedWorkforceDate);
+  const dateToolbar = `<div class="workforce-date-toolbar">
+    <div class="workforce-date-arrows">
+      <button type="button" class="row-action" data-workforce-shift-date="day:-1" aria-label="اليوم السابق">‹ يوم</button>
+      <button type="button" class="row-action" data-workforce-shift-date="month:-1" aria-label="الشهر السابق">‹ شهر</button>
+      <button type="button" class="row-action" data-workforce-shift-date="year:-1" aria-label="السنة السابقة">‹ سنة</button>
+    </div>
+    <div class="workforce-date-display"><strong>${escapeHtml(currentDateLabels.hijri)}</strong><small>${escapeHtml(currentDateLabels.gregorian)} · ميلادي</small></div>
+    <div class="workforce-date-arrows">
+      <button type="button" class="row-action" data-workforce-shift-date="day:1" aria-label="اليوم التالي">يوم ›</button>
+      <button type="button" class="row-action" data-workforce-shift-date="month:1" aria-label="الشهر التالي">شهر ›</button>
+      <button type="button" class="row-action" data-workforce-shift-date="year:1" aria-label="السنة التالية">سنة ›</button>
+    </div>
+  </div>`;
+  const rolloverWarning = previousMonthUnsettledWorkers.length
+    ? `<div class="workforce-alert workforce-alert-warning"><strong>إنذار: مستحقات غير مصفاة عن شهر ${escapeHtml(previousMonthKey)}</strong><span>${previousMonthUnsettledWorkers.length} عامل لديهم أرصدة غير مرحّلة. تبقى تصفية الشهر السابق مستقلة ولا تدخل الشهر الجديد إلا بعد اعتماد الترحيل.</span><button type="button" class="row-action" data-open-workforce-rollover>ترحيل المستحقات يدويًا</button></div>`
+    : "";
+  const rolloverModal = showWorkforceRolloverModal ? `<div class="modal-backdrop" data-workforce-rollover-modal>
+    <section class="modal-card workforce-rollover-modal" role="dialog" aria-modal="true" aria-labelledby="workforce-rollover-title">
+      <button type="button" class="modal-close" data-close-workforce-rollover aria-label="إغلاق">×</button>
+      <header><h2 id="workforce-rollover-title">ترحيل مستحقات استثنائية</h2><p>اختر العامل والمبلغ والشهر المستهدف؛ الترحيل لا يتم تلقائياً.</p></header>
+      <form class="form-grid workforce-rollover-form" data-workforce-rollover-form>
+        <label class="field"><span>العامل</span><select name="workerId" required><option value="">اختر العامل</option>${workerOptions}</select></label>
+        <label class="field"><span>الشهر المصدر</span><input name="sourcePeriod" value="${escapeHtml(previousMonthKey)}" readonly></label>
+        <label class="field"><span>الشهر المستهدف</span><input name="targetPeriod" type="month" value="${escapeHtml(selectedWorkforceMonth)}" required></label>
+        <label class="field"><span>المبلغ المرحّل</span><input name="amount" type="number" step="0.01" required></label>
+        <label class="field wide"><span>السبب / التفصيل</span><textarea name="reason" rows="3" maxlength="500" required></textarea></label>
+        <div class="form-actions wide"><button type="button" class="row-action" data-close-workforce-rollover>إلغاء</button><button type="submit" class="button button-primary">اعتماد الترحيل</button></div>
+      </form>
+    </section>
+  </div>` : "";
   const profileRows = employees.map((worker) => {
     const profile = workforceProfile(data, worker.id);
     return `<tr><td>${escapeHtml(worker.name)}</td><td>${escapeHtml(worker.jobTitle || roleNames[worker.roleKey])}</td><td><form class="workforce-profile-form" data-workforce-profile-form="${escapeHtml(worker.id)}"><select name="wageBasis" aria-label="نوع المرتب"><option value="monthly" ${profile.wageBasis === "monthly" || !profile.wageBasis ? "selected" : ""}>شهري</option><option value="weekly" ${profile.wageBasis === "weekly" ? "selected" : ""}>أسبوعي</option><option value="daily" ${profile.wageBasis === "daily" ? "selected" : ""}>يومي</option><option value="hourly" ${profile.wageBasis === "hourly" ? "selected" : ""}>بالساعة</option></select><input name="wageAmount" type="number" min="0.01" step="0.01" value="${escapeHtml(profile.wageAmount ?? "")}" placeholder="الأجر بالجنيه" aria-label="قيمة الأجر"><button class="row-action" type="submit">حفظ الأجر</button><small class="workforce-inline-rate" data-workforce-rate-preview></small></form></td></tr>`;
@@ -5885,6 +5948,8 @@ function workforceView(data) {
       <button type="button" role="tab" class="client-management-tab${activeWorkforceTab === "discipline" ? " active" : ""}" aria-selected="${activeWorkforceTab === "discipline"}" data-workforce-tab="discipline">اللائحة والمخالفات</button>
       <button type="button" role="tab" class="client-management-tab${activeWorkforceTab === "settlements" ? " active" : ""}" aria-selected="${activeWorkforceTab === "settlements"}" data-workforce-tab="settlements">الأجور والتصفية</button>
     </div>
+    ${dateToolbar}
+    ${rolloverWarning}
     <div class="workforce-panel" data-workforce-panel="employees"${activeWorkforceTab === "employees" ? "" : " hidden"}>
       <div class="workforce-employee-toolbar"><div><h2>سجل العاملين والموظفين</h2><p>إدارة الملفات الوظيفية والأجور وربط حسابات الدخول.</p></div><button type="button" class="button button-primary workforce-add-employee" data-add-workforce-employee>＋ إضافة عامل جديد</button></div>
       ${panel("سجل العاملين والموظفين", employees.length
@@ -5909,6 +5974,7 @@ function workforceView(data) {
     </div>
     ${employeeProfileModal}
     ${newEmployeeModal}
+    ${rolloverModal}
     <div class="modal-backdrop" data-workforce-attendance-modal hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="workforce-attendance-title"><button class="modal-close" type="button" data-close-workforce-attendance aria-label="إغلاق">×</button><h2 id="workforce-attendance-title">تعديل حالة اليوم</h2><form class="workforce-attendance-form modal-form"><input type="hidden" name="workerId"><input type="hidden" name="date"><label>حالة اليوم<select name="status"></select></label><label class="workforce-inline-check"><input name="paidLeave" type="checkbox" checked> الإجازة مدفوعة الأجر</label><label>ملاحظات<textarea name="notes" rows="2" maxlength="400"></textarea></label><div class="form-actions"><button class="button button-primary" type="submit">حفظ الحالة</button><button class="row-action" type="button" data-close-workforce-attendance>إلغاء</button></div></form></section></div>
     <div class="modal-backdrop workforce-absence-backdrop" data-workforce-absence-modal ${pendingWorkforceAbsenceDecision ? "" : "hidden"}><section class="modal-card compact-view-modal" role="dialog" aria-modal="true" aria-labelledby="workforce-absence-title"><button class="modal-close" type="button" data-close-workforce-absence aria-label="إغلاق">×</button><h2 id="workforce-absence-title">تسجيل الغياب وتحديد الخصم</h2><p data-workforce-absence-summary>${pendingWorkforceAbsenceDecision ? `${escapeHtml(workforceEmployees(data).find((worker) => worker.id === pendingWorkforceAbsenceDecision.workerId)?.name || "")} · ${escapeHtml(pendingWorkforceAbsenceDecision.date)}` : ""}</p><div class="workforce-late-actions"><button type="button" class="button button-primary" data-absence-permission="permitted" aria-pressed="false">غياب بإذن · خصم يوم واحد</button><button type="button" class="button button-secondary" data-absence-permission="unexcused" aria-pressed="false">غياب بدون إذن · لا أجر لليوم + جزاء يوم</button></div><div class="form-actions"><button type="button" class="button button-primary" data-save-workforce-absence disabled>حفظ الغياب والخصم</button></div></section></div>
     <div class="modal-backdrop" data-workforce-clock-modal hidden><section class="modal-card compact-view-modal" role="dialog" aria-modal="true" aria-labelledby="workforce-clock-title"><button class="modal-close" type="button" data-close-workforce-clock aria-label="إغلاق">×</button><h2 id="workforce-clock-title">تسجيل أو تعديل الوقت</h2><form class="workforce-clock-form modal-form"><input type="hidden" name="workerId"><input type="hidden" name="date"><input type="hidden" name="clockType"><label>الوقت الجديد<input name="time" type="time" required></label><label data-early-departure-option hidden>قرار الانصراف المبكر<select name="earlyDepartureDecision"><option value="official">خصم ساعات الانصراف المبكر</option><option value="waived">عفو إداري · دون خصم</option></select><small data-early-departure-preview></small></label><div class="form-actions"><button class="button button-primary" type="submit">حفظ الوقت</button><button class="row-action" type="button" data-close-workforce-clock>إلغاء</button></div></form></section></div>
@@ -6367,9 +6433,76 @@ function bindWorkforceActions(session) {
     printWindow.document.write(`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>كشف العامل - ${escapeHtml(worker.name)}</title><style>body{font-family:Arial,sans-serif;padding:24px;color:#1d2923}h1,h2{color:#17543b}table{width:100%;border-collapse:collapse;margin:14px 0 24px}th,td{border:1px solid #cbd5ce;padding:7px;text-align:right;font-size:12px}th{background:#edf4ef}.summary{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.summary div{border:1px solid #cbd5ce;padding:10px;border-radius:6px}@media print{body{padding:0}}</style></head><body><h1>كشف العامل: ${escapeHtml(worker.name)}</h1><p>المسمى الوظيفي: ${escapeHtml(worker.jobTitle || "غير محدد")} · الدور: ${escapeHtml(worker.roleLabel)} · اسم المستخدم: ${escapeHtml(worker.username)}</p><p>الهاتف: ${escapeHtml(worker.phone || "—")} · الرقم القومي: ${escapeHtml(profile.nationalId || "—")} · العنوان: ${escapeHtml(profile.address || "—")} · الطوارئ: ${escapeHtml(profile.emergencyContact || "—")} · التعيين: ${escapeHtml(profile.hireDate || "—")}</p><div class="summary"><div>الأجر المستحق: ${workforceMoney(calculation.earned)}</div><div>السهر × 1.5: ${workforceMoney(calculation.overtimeAmount)}</div><div>السلف: ${workforceMoney(calculation.advances)}</div><div>الخصومات: ${workforceMoney(calculation.deductions)}</div><div>الرصيد المرحّل: ${workforceMoney(calculation.carryover)}</div><div>${calculation.netDue < 0 ? "المبلغ المستحق على العامل" : "صافي الحساب"}: ${workforceMoney(Math.abs(calculation.netDue))}</div></div><h2>سجل الحضور والغياب والتأخير والانصراف المبكر والسهر</h2><table><thead><tr><th>التاريخ</th><th>الحالة</th><th>الحضور</th><th>الانصراف</th><th>التأخير</th><th>الانصراف المبكر</th><th>السهر</th><th>ملاحظات</th></tr></thead><tbody>${attendanceMarkup || '<tr><td colspan="8">لا توجد سجلات.</td></tr>'}</tbody></table><h2>حركة الحساب</h2><table><thead><tr><th>التاريخ</th><th>النوع</th><th>التفاصيل</th><th>المبلغ</th></tr></thead><tbody>${accountMarkup || '<tr><td colspan="4">لا توجد حركات.</td></tr>'}</tbody></table><h2>الخصومات والجزاءات</h2><table><thead><tr><th>التاريخ</th><th>البند</th><th>القرار</th><th>الخصم</th><th>ملاحظات</th></tr></thead><tbody>${violationMarkup || '<tr><td colspan="5">لا توجد سجلات.</td></tr>'}</tbody></table><script>window.addEventListener('load',()=>window.print());</script></body></html>`);
     printWindow.document.close();
   });
+  root.querySelectorAll("[data-workforce-shift-date]").forEach((button) => button.addEventListener("click", () => {
+    const [unit, rawAmount] = String(button.dataset.workforceShiftDate || "").split(":");
+    const amount = Number(rawAmount);
+    if (!unit || !Number.isFinite(amount)) return;
+    selectedWorkforceDate = workforceShiftDate(selectedWorkforceDate, unit, amount);
+    selectedWorkforceMonth = selectedWorkforceDate.slice(0, 7);
+    selectedWorkforceCutoffDate = "";
+    render(session, dashboardData, dashboardData.pendingAccounts || []);
+  }));
+  root.querySelector("[data-open-workforce-rollover]")?.addEventListener("click", () => {
+    showWorkforceRolloverModal = true;
+    render(session, dashboardData, dashboardData.pendingAccounts || []);
+  });
+  root.querySelectorAll("[data-close-workforce-rollover]").forEach((button) => button.addEventListener("click", () => {
+    showWorkforceRolloverModal = false;
+    render(session, dashboardData, dashboardData.pendingAccounts || []);
+  }));
+  const rolloverForm = root.querySelector("[data-workforce-rollover-form]");
+  rolloverForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const workerId = rolloverForm.elements.workerId.value;
+    const worker = workforceEmployees(dashboardData).find((entry) => entry.id === workerId);
+    const amount = Number(rolloverForm.elements.amount.value);
+    const reason = rolloverForm.elements.reason.value.trim();
+    const sourcePeriod = rolloverForm.elements.sourcePeriod.value;
+    const targetPeriod = rolloverForm.elements.targetPeriod.value;
+    if (!worker || !Number.isFinite(amount) || amount === 0 || !reason || !/^\d{4}-\d{2}$/.test(targetPeriod)) {
+      window.factoryUI.toast("اختر العامل والمبلغ والسبب والشهر المستهدف بشكل صحيح.", "error");
+      return;
+    }
+    if (!await window.factoryUI.confirmAction({
+      title: "اعتماد ترحيل المستحقات",
+      message: `${worker.name}: ترحيل ${workforceMoney(amount)} من ${sourcePeriod} إلى ${targetPeriod}. السبب: ${reason}`,
+      confirmLabel: "اعتماد الترحيل",
+      danger: false
+    })) return;
+    const submit = rolloverForm.querySelector('[type="submit"]');
+    submit.disabled = true;
+    try {
+      await saveFlexibleRecord("workforce_settlements", {
+        workerId,
+        workerName: worker.name,
+        period: targetPeriod,
+        sourcePeriod,
+        manualRollover: true,
+        approved: true,
+        throughDate: workforceDateKey(new Date()),
+        earnedAmount: 0,
+        advanceAmount: 0,
+        previousPaidAmount: 0,
+        deductionAmount: 0,
+        previousBalance: amount,
+        paidAmount: 0,
+        balanceAfter: amount,
+        rolloverAmount: amount,
+        rolloverReason: reason
+      }, null, workforceRecordOwnerId(worker, dashboardData));
+      showWorkforceRolloverModal = false;
+      await refresh();
+      window.factoryUI.toast(`تم اعتماد ترحيل ${workforceMoney(amount)} للعامل ${worker.name}.`);
+    } catch (error) {
+      reportDashboardFailure(session, "تعذر اعتماد ترحيل المستحقات", error);
+    } finally {
+      submit.disabled = false;
+    }
+  });
   root.querySelector("[data-workforce-month]")?.addEventListener("change", (event) => {
     if (!/^\d{4}-\d{2}$/.test(event.currentTarget.value)) return;
     selectedWorkforceMonth = event.currentTarget.value;
+    selectedWorkforceDate = `${selectedWorkforceMonth}-01`;
     selectedWorkforceCutoffDate = "";
     void refresh().catch((error) => reportDashboardFailure(session, "تعذر تحميل الحضور للشهر المحدد", error));
   });
