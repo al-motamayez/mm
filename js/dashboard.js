@@ -1751,7 +1751,7 @@ function bindPickers(form) {
     update();
   });
   form.addEventListener("reset", () => window.setTimeout(() => {
-    if (form.elements.editIndex.value) return;
+    if (!form.isConnected || form.elements.namedItem("editIndex")?.value) return;
     form.querySelectorAll("[data-size-picker]").forEach((root) => {
       root.dataset.sizeLegacy = "";
       root.querySelectorAll("[data-size-toggle]").forEach((button) => {
