@@ -2419,7 +2419,7 @@ function clientOrderCards(orders) {
   const quantityFormat = new Intl.NumberFormat("ar-EG-u-nu-latn");
   return `<div class="order-cards client-order-cards">${orders.map((item) => `<article class="order-card client-order-card">
     <header class="order-card-heading">${modelImageMarkup(item.modelImageUrls || item.modelImageUrl)}<div><p class="order-card-label">كود الموديل: ${escapeHtml(item.factoryModelCode || item.clientModelCode || item.modelNumber || "—")}</p><h3>${escapeHtml(item.name || "موديل بدون اسم")}</h3></div>${statusTag(item.displayStatus || item.status || "قيد الانتظار")}</header>
-    <div class="client-order-card-summary"><strong>${item.quantity ? quantityFormat.format(item.quantity) : item.originalQuantity ? quantityFormat.format(item.originalQuantity) : "بانتظار الحصر"}</strong><span>إجمالي العدد</span></div>
+    <div class="client-order-card-summary"><strong>${item.quantity ? quantityFormat.format(item.quantity) : item.originalQuantity ? quantityFormat.format(item.originalQuantity) : "بانتظار الحصر"}</strong><span>العدد بعد القص</span><div class="client-order-delivery-totals"><span>المستلم فعلياً <strong>${quantityFormat.format(item.deliveredPieces || 0)}</strong></span><span>المتبقي <strong>${quantityFormat.format(item.remainingPieces || 0)}</strong></span></div></div>
     <div class="client-order-card-colors"><span>الألوان</span>${colorSummaryMarkup(item.colors, item.colorNames, item.colorPlyData)}</div>
     ${productionDetailsButton("client-order", item)}
   </article>`).join("")}</div>`;
@@ -2431,6 +2431,7 @@ function clientOrderDetailsMarkup(order) {
   return `<header class="production-details-heading">${modelImageMarkup(order.modelImageUrls || order.modelImageUrl)}<div><small>تفاصيل الموديل</small><h2>${escapeHtml(order.name || "موديل بدون اسم")}</h2><p>كود الموديل بالنظام: ${escapeHtml(order.factoryModelCode || "—")} · كود/رقم الموديل للعميل: ${escapeHtml(order.clientModelCode || order.modelNumber || "—")}</p></div>${statusTag(order.displayStatus || order.status)}</header>
     <dl class="sewing-order-facts"><div><dt>العدد الأصلي</dt><dd>${quantityFormat.format(order.originalQuantity || 0)} قطعة</dd></div><div><dt>العدد بعد القص</dt><dd>${order.quantity ? `${quantityFormat.format(order.quantity)} قطعة` : "بانتظار الحصر"}</dd></div><div><dt>الكمية المنجزة</dt><dd>${quantityFormat.format(order.completedPieces || 0)} قطعة</dd></div><div><dt>الكمية المسلّمة</dt><dd>${quantityFormat.format(order.deliveredPieces || 0)} قطعة</dd></div><div><dt>المتبقي</dt><dd>${order.quantity ? `${quantityFormat.format(order.remainingPieces || 0)} قطعة` : "بانتظار الحصر"}</dd></div><div><dt>التسليم المتوقع</dt><dd>${formatDateOnly(order.expectedDeliveryDate)}</dd></div></dl>
     <h3 class="modal-subheading">توزيع المقاسات والألوان</h3>${modelSizeColorCardsMarkup(order)}
+    <h3 class="modal-subheading">استلامات الألوان والمقاسات</h3>${orderDeliveryComparisonMarkup(order)}
     ${cuttingDetailsMarkup(order)}
     <h3 class="modal-subheading">مصروفات هذا الموديل على حسابك</h3>${clientExpenses.length
       ? table(["بيان المصروف","القيمة","التاريخ"], clientExpenses.map((entry) =>
@@ -3373,6 +3374,7 @@ function modelDetailsModalView(order, showPricingBreakdown = false) {
     ${cuttingDetailsMarkup(order)}
     ${showPricingBreakdown && !order.archivedAt && !LOCKED_FACTORY_ORDER_STATUSES.includes(order.status) ? adminCuttingEditFormMarkup(order) : ""}
     ${showPricingBreakdown ? `<h3 class="modal-subheading">سجل المصروفات الخارجية والإضافية</h3>${modelExpenseEntriesMarkup(order)}` : ""}
+    <h3 class="modal-subheading">مقارنة التسليم حسب اللون والمقاس</h3>${orderDeliveryComparisonMarkup(order)}
     <h3 class="modal-subheading">سجل دفعات التسليم</h3>${deliveryHistory}
     ${showPricingBreakdown && order.quantity > 0 && !order.archivedAt && !LOCKED_FACTORY_ORDER_STATUSES.includes(order.status)
       ? '<div class="form-actions"><button class="button button-primary" type="button" data-open-final-handover>تسليم / تسوية وإغلاق الطلب</button></div>'
@@ -3805,6 +3807,59 @@ function factoryOrderHasUnallocatedDeliveries(orderId, deliveries) {
   });
 }
 
+function orderDeliveryComparisonMarkup(order) {
+  const original = factoryOrderOriginalDeliveryCells(order);
+  const deliveries = order.deliveryHistory || [];
+  const delivered = new Map();
+  deliveries.forEach((delivery) => factoryOrderDeliveryCells(delivery.color_size_data).forEach((cell, key) => {
+    const current = delivered.get(key) || { ...cell, quantity: 0 };
+    current.quantity += cell.quantity;
+    delivered.set(key, current);
+  }));
+  const originalTotal = Number(order.quantity || 0);
+  const deliveredTotal = Math.max(
+    deliveries.reduce((sum, delivery) => sum + Number(delivery.quantity || 0), 0),
+    Number(order.deliveredPieces || 0)
+  );
+  const allocatedTotal = [...delivered.values()].reduce((sum, cell) => sum + cell.quantity, 0);
+  const hasUnallocated = factoryOrderHasUnallocatedDeliveries(order.id, deliveries)
+    || deliveredTotal !== allocatedTotal;
+  const rows = [...new Set([...original.keys(), ...delivered.keys()])].map((key) => {
+    const cut = original.get(key);
+    const received = delivered.get(key);
+    const item = cut || received;
+    return `<tr><td>${escapeHtml(item.name || item.hex || "—")}</td><td>${escapeHtml(item.size || "—")}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(cut?.quantity || 0)}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(received?.quantity || 0)}</td><td>${hasUnallocated ? "يتطلب مراجعة" : new Intl.NumberFormat("ar-EG-u-nu-latn").format(Math.max(0, (cut?.quantity || 0) - (received?.quantity || 0)))}</td></tr>`;
+  });
+  const unknown = Math.max(0, deliveredTotal - allocatedTotal);
+  return `<div class="delivery-comparison-summary"><div><span>العدد بعد القص</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(originalTotal)}</strong></div><div><span>المستلم فعلياً</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(deliveredTotal)}</strong></div><div><span>المتبقي</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(Math.max(0, originalTotal - deliveredTotal))}</strong></div></div>${hasUnallocated
+    ? `<p class="worker-delivery-locked-note">يوجد ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(unknown)} قطعة من دفعات سابقة بلا توزيع موثق؛ لا يمكن تحديد المتبقي لكل لون ومقاس إلا بعد مراجعتها.</p>`
+    : ""}${rows.length
+      ? table(["اللون","المقاس","العدد بعد القص","المستلم فعلياً","المتبقي"], rows, "order-delivery-comparison-table")
+      : '<p class="muted">لا يتوفر توزيع للألوان والمقاسات في بيانات هذه الطلبية.</p>'}`;
+}
+
+function adminDeliveryAllocationMarkup(order) {
+  const original = factoryOrderOriginalDeliveryCells(order);
+  if (!original.size) {
+    return '<p class="worker-delivery-locked-note">لا يتوفر توزيع قص موثق لهذه الطلبية؛ استخدم الإدخال الإجمالي.</p>';
+  }
+  const delivered = new Map();
+  (order.deliveryHistory || []).forEach((delivery) => factoryOrderDeliveryCells(delivery.color_size_data).forEach((cell, key) => {
+    const current = delivered.get(key) || { ...cell, quantity: 0 };
+    current.quantity += cell.quantity;
+    delivered.set(key, current);
+  }));
+  if (factoryOrderHasUnallocatedDeliveries(order.id, order.deliveryHistory || [])) {
+    return '<p class="worker-delivery-locked-note">توجد دفعات سابقة بلا توزيع موثق؛ راجعها أو استخدم الإدخال الإجمالي قبل تسجيل توزيع جديد.</p>';
+  }
+  const rows = [...original].map(([key, cut]) => {
+    const received = delivered.get(key)?.quantity || 0;
+    const remaining = Math.max(0, cut.quantity - received);
+    return `<tr><td>${escapeHtml(cut.name || cut.hex)}</td><td>${escapeHtml(cut.size)}</td><td>${cut.quantity}</td><td>${received}</td><td>${remaining}</td><td><input type="number" min="0" max="${remaining}" step="1" value="0" data-admin-delivery-count data-color="${escapeHtml(cut.hex)}" data-color-name="${escapeHtml(cut.name || "")}" data-size="${escapeHtml(cut.size)}" aria-label="تسليم ${escapeHtml(cut.name || cut.hex)} مقاس ${escapeHtml(cut.size)}" ${remaining ? "" : "disabled"}></td></tr>`;
+  });
+  return table(["اللون","المقاس","القص الأصلي","المستلم سابقاً","المتاح","تسليم الآن"], rows, "admin-delivery-allocation-table");
+}
+
 function workerOrderDeliveryComparisonMarkup(submission, order, deliveries) {
   if (!order) return '<p class="muted">تعذر العثور على الطلبية المرتبطة بالتسليم.</p>';
   const original = factoryOrderOriginalDeliveryCells(order);
@@ -3819,11 +3874,15 @@ function workerOrderDeliveryComparisonMarkup(submission, order, deliveries) {
   const submitted = factoryOrderDeliveryCells(submission.color_size_data);
   const keys = new Set([...original.keys(), ...previous.keys(), ...submitted.keys()]);
   const totalOriginal = [...original.values()].reduce((sum, cell) => sum + cell.quantity, 0);
-  const totalPrevious = orderDeliveries.reduce((sum, delivery) => sum + Number(delivery.quantity || 0), 0);
+  const totalPrevious = Math.max(
+    orderDeliveries.reduce((sum, delivery) => sum + Number(delivery.quantity || 0), 0),
+    Number(order.deliveredPieces || 0)
+  );
   const totalPreviouslyAllocated = [...previous.values()].reduce((sum, cell) => sum + cell.quantity, 0);
   const totalUnallocated = Math.max(0, totalPrevious - totalPreviouslyAllocated);
   const totalCurrent = Number(submission.quantity || 0);
-  const hasUnallocated = factoryOrderHasUnallocatedDeliveries(order.id, deliveries);
+  const hasUnallocated = factoryOrderHasUnallocatedDeliveries(order.id, deliveries)
+    || totalPrevious !== orderDeliveries.reduce((sum, delivery) => sum + Number(delivery.quantity || 0), 0);
   const detailRows = [...keys].map((key) => {
     const cut = original.get(key);
     const already = previous.get(key);
@@ -4011,7 +4070,7 @@ function adminView(data, accounts) {
         </div></section>
         <div class="form-actions"><button class="button button-primary" type="submit">حفظ الطلبية</button><button class="row-action" type="button" data-cancel-edit hidden>إلغاء التعديل</button><button class="row-action" type="button" data-close-order>إغلاق</button></div>
       </form><div data-order-cutting-editor hidden></div></section></div>
-      <div class="modal-backdrop" id="delivery-modal" hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="delivery-modal-title"><button class="modal-close" type="button" data-close-delivery aria-label="إغلاق">×</button><h2 id="delivery-modal-title">تسجيل تسليم جديد</h2><p id="delivery-modal-description">أدخل كمية هذه الدفعة واسم مستلمها؛ ستُضاف إلى إجمالي ما تم تسليمه حتى الآن.</p><form id="delivery-form" class="modal-form"><input type="hidden" name="orderId"><input type="hidden" name="finalize" value=""><label for="delivery-settlement-choice" data-settlement-choice-field hidden>طريقة التسوية</label><select id="delivery-settlement-choice" name="settlementChoice" data-settlement-choice-field hidden></select><label for="delivery-quantity" id="delivery-quantity-label">كمية التسليم</label><input id="delivery-quantity" name="quantity" type="number" min="1" step="1" required><label for="delivery-recipient">اسم المستلم</label><input id="delivery-recipient" name="recipientName" required><div class="form-actions"><button class="button button-primary" type="submit">تسجيل التسليم</button><button class="row-action" type="button" data-close-delivery>إلغاء</button></div></form></section></div>
+      <div class="modal-backdrop" id="delivery-modal" hidden><section class="modal-card delivery-modal-card" role="dialog" aria-modal="true" aria-labelledby="delivery-modal-title"><button class="modal-close" type="button" data-close-delivery aria-label="إغلاق">×</button><h2 id="delivery-modal-title">تسجيل تسليم جديد</h2><p id="delivery-modal-description">أدخل كمية هذه الدفعة واسم مستلمها؛ ستُضاف إلى إجمالي ما تم تسليمه حتى الآن.</p><form id="delivery-form" class="modal-form"><input type="hidden" name="orderId"><input type="hidden" name="finalize" value=""><label for="delivery-settlement-choice" data-settlement-choice-field hidden>طريقة التسوية</label><select id="delivery-settlement-choice" name="settlementChoice" data-settlement-choice-field hidden></select><label for="delivery-mode" data-delivery-mode-field hidden>طريقة إدخال التسليم</label><select id="delivery-mode" name="deliveryMode" data-delivery-mode-field hidden><option value="total">إدخال الإجمالي فقط</option><option value="detailed">حسب اللون والمقاس</option></select><div id="delivery-allocation" data-delivery-allocation hidden></div><label for="delivery-quantity" id="delivery-quantity-label">كمية التسليم</label><input id="delivery-quantity" name="quantity" type="number" min="1" step="1" required><label for="delivery-recipient">اسم المستلم</label><input id="delivery-recipient" name="recipientName" required><div class="form-actions"><button class="button button-primary" type="submit">تسجيل التسليم</button><button class="row-action" type="button" data-close-delivery>إلغاء</button></div></form></section></div>
     </section>
     ${factoryRegistersView(data, true, "cutting", false, true, true)}
     ${clientModelRequestsAdminView(data)}
@@ -11246,7 +11305,48 @@ function bindActions(session) {
   const deliveryRecipientInput = deliveryForm.elements.recipientName;
   const settlementChoice = deliveryForm.elements.settlementChoice;
   const settlementChoiceFields = deliveryForm.querySelectorAll("[data-settlement-choice-field]");
+  const deliveryMode = deliveryForm.elements.deliveryMode;
+  const deliveryModeFields = deliveryForm.querySelectorAll("[data-delivery-mode-field]");
+  const deliveryAllocation = deliveryForm.querySelector("[data-delivery-allocation]");
   let deliverySubmissionPending = false;
+  const updateDeliveryAllocationTotal = () => {
+    const inputs = [...deliveryAllocation.querySelectorAll("[data-admin-delivery-count]")];
+    const total = inputs.reduce((sum, input) => sum + Number(input.value || 0), 0);
+    deliveryForm.elements.quantity.value = String(total);
+  };
+  const configureDeliveryMode = (order) => {
+    const hasUnallocated = factoryOrderHasUnallocatedDeliveries(order.id, order.deliveryHistory || []);
+    const hasAllocation = factoryOrderOriginalDeliveryCells(order).size > 0;
+    deliveryMode.options[1].disabled = hasUnallocated || !hasAllocation;
+    deliveryMode.value = "total";
+    deliveryModeFields.forEach((field) => { field.hidden = false; });
+    deliveryAllocation.innerHTML = adminDeliveryAllocationMarkup(order);
+    deliveryAllocation.hidden = true;
+    deliveryForm.elements.quantity.readOnly = false;
+    deliveryModalDescription.textContent = hasUnallocated
+      ? "توجد دفعات سابقة بلا توزيع موثق؛ يمكنك تسجيل كمية إجمالية أو مراجعة تفاصيل الدفعات السابقة أولاً."
+      : hasAllocation
+        ? "يمكنك تسجيل إجمالي الدفعة مباشرة أو إدخالها حسب اللون والمقاس. الإجمالي فقط لن يوزّع على الألوان تلقائياً."
+        : "لا يوجد توزيع قص موثق للطلبية؛ يتاح تسجيل الإجمالي فقط، ولن يوزّع تلقائياً على الألوان والمقاسات.";
+  };
+  deliveryMode.addEventListener("change", () => {
+    const detailed = deliveryMode.value === "detailed";
+    deliveryAllocation.hidden = !detailed;
+    deliveryForm.elements.quantity.readOnly = detailed;
+    deliveryModalDescription.textContent = detailed
+      ? "أدخل الكمية المسلّمة لكل لون ومقاس؛ يجب ألا تتجاوز المتاح، ويُحسب إجمالي الدفعة تلقائياً."
+      : "أدخل إجمالي الدفعة. لن تُوزع هذه الكمية تلقائياً على الألوان والمقاسات.";
+    if (detailed) updateDeliveryAllocationTotal();
+  });
+  deliveryAllocation.addEventListener("input", (event) => {
+    if (!event.target.matches("[data-admin-delivery-count]")) return;
+    const maximum = Number(event.target.max);
+    const value = Number(event.target.value || 0);
+    event.target.setCustomValidity(Number.isSafeInteger(value) && value >= 0 && value <= maximum
+      ? ""
+      : `الحد المتاح لهذا اللون والمقاس هو ${maximum}.`);
+    updateDeliveryAllocationTotal();
+  });
   const applySettlementChoice = () => {
     const order = dashboardData.models.find((item) => item.id === deliveryForm.elements.orderId.value);
     if (!order) return;
@@ -11276,6 +11376,8 @@ function bindActions(session) {
     const hasEarlierDeliveries = Boolean(order.deliveryHistory?.length || order.deliveredPieces > 0);
     deliveryForm.elements.orderId.value = order.id;
     deliveryForm.elements.finalize.value = "true";
+    deliveryModeFields.forEach((field) => { field.hidden = true; });
+    deliveryAllocation.hidden = true;
     deliveryForm.elements.quantity.min = hasEarlierDeliveries && order.remainingPieces === 0 ? "0" : "1";
     deliveryForm.elements.quantity.max = hasEarlierDeliveries ? String(order.remainingPieces) : String(order.quantity);
     deliveryModalTitle.textContent = "تسوية وإغلاق الطلب";
@@ -11311,6 +11413,11 @@ function bindActions(session) {
     deliveryForm.elements.quantity.max = "";
     deliveryForm.elements.quantity.readOnly = false;
     settlementChoiceFields.forEach((field) => { field.hidden = true; });
+    deliveryModeFields.forEach((field) => { field.hidden = true; });
+    deliveryAllocation.hidden = true;
+    deliveryAllocation.innerHTML = "";
+    deliveryMode.options[1].disabled = false;
+    deliveryMode.value = "total";
     deliveryRecipientInput.required = true;
     deliveryModalTitle.textContent = "تسجيل تسليم جديد";
     deliveryModalDescription.textContent = "أدخل كمية هذه الدفعة واسم مستلمها؛ ستُضاف إلى إجمالي ما تم تسليمه حتى الآن.";
@@ -11332,6 +11439,7 @@ function bindActions(session) {
     const order = dashboardData.models.find((item) => item.id === deliveryForm.elements.orderId.value);
     const quantity = Number(deliveryForm.elements.quantity.value);
     const finalize = deliveryForm.elements.finalize.value === "true";
+    const detailedDelivery = !finalize && deliveryMode.value === "detailed";
     const recipientName = String(deliveryRecipientInput.value).trim();
     if (!order || order.archivedAt || LOCKED_FACTORY_ORDER_STATUSES.includes(order.status)) {
       window.factoryUI.toast("هذا الطلب مغلق أو غير متاح للتسليم.", "error");
@@ -11366,6 +11474,36 @@ function bindActions(session) {
       deliveryRecipientInput.focus();
       return;
     }
+    let deliveryColors = [];
+    if (detailedDelivery) {
+      const inputs = [...deliveryAllocation.querySelectorAll("[data-admin-delivery-count]")];
+      if (!inputs.length || inputs.some((input) => {
+        const value = Number(input.value || 0);
+        return !Number.isSafeInteger(value) || value < 0 || value > Number(input.max);
+      })) {
+        window.factoryUI.toast("تحقق من الكميات المدخلة لكل لون ومقاس.", "error");
+        return;
+      }
+      const colorsByHex = new Map();
+      inputs.forEach((input) => {
+        const count = Number(input.value || 0);
+        if (!count) return;
+        const hex = input.dataset.color.toUpperCase();
+        const color = colorsByHex.get(hex) || {
+          hex,
+          name: input.dataset.colorName || "",
+          sizes: {}
+        };
+        color.sizes[input.dataset.size] = (color.sizes[input.dataset.size] || 0) + count;
+        colorsByHex.set(hex, color);
+      });
+      deliveryColors = [...colorsByHex.values()];
+      const allocatedTotal = inputs.reduce((sum, input) => sum + Number(input.value || 0), 0);
+      if (allocatedTotal !== quantity || quantity < 1) {
+        window.factoryUI.toast("يجب أن يساوي مجموع توزيع اللون والمقاس إجمالي دفعة التسليم.", "error");
+        return;
+      }
+    }
     deliverySubmissionPending = true;
     const submitButton = deliverySubmitButton;
     submitButton.disabled = true;
@@ -11391,15 +11529,24 @@ function bindActions(session) {
           requested_final_batch_qty: quantity,
           requested_recipient_name: recipientName
         })
-        : await supabaseClient.rpc("record_factory_delivery", {
-          requested_order_id: order.id,
-          requested_quantity: quantity,
-          requested_recipient_name: recipientName
-        });
+        : detailedDelivery
+          ? await supabaseClient.rpc("record_factory_delivery_with_distribution", {
+            requested_order_id: order.id,
+            requested_quantity: quantity,
+            requested_recipient_name: recipientName,
+            requested_color_size_data: deliveryColors
+          })
+          : await supabaseClient.rpc("record_factory_delivery", {
+            requested_order_id: order.id,
+            requested_quantity: quantity,
+            requested_recipient_name: recipientName
+          });
       if (error?.code === "PGRST202") {
         throw new Error(finalize
           ? "دالة إنهاء التسليم غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor."
-          : "دالة تسجيل التسليم غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+          : detailedDelivery
+            ? "دالة تسجيل التسليم التفصيلي غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor."
+            : "دالة تسجيل التسليم غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
       }
       if (error) throw error;
       deliverySaved = true;
@@ -11407,7 +11554,9 @@ function bindActions(session) {
       await refreshDashboard(session);
       window.factoryUI.toast(finalize
         ? "تم إنهاء التسليم وتسوية حساب الطلب."
-        : "تم تسجيل التسليم وإضافته إلى إجمالي الكمية المسلّمة.");
+        : detailedDelivery
+          ? "تم تسجيل الدفعة التفصيلية حسب اللون والمقاس وتحديث حساب العميل."
+          : "تم تسجيل التسليم الإجمالي وإضافته إلى حساب العميل.");
     } catch (error) {
       reportDashboardFailure(session, deliverySaved
         ? `تم ${finalize ? "إنهاء التسليم" : "تسجيل التسليم"}، لكن تعذر تحديث البيانات المعروضة`
@@ -11987,11 +12136,12 @@ function bindActions(session) {
         deliveryForm.elements.quantity.min = "1";
         deliveryForm.elements.quantity.value = "";
         deliveryRecipientInput.required = true;
-        deliveryRecipientInput.required = true;
+        configureDeliveryMode(order);
         deliveryModalTitle.textContent = "تسجيل تسليم جديد";
         deliveryModalDescription.textContent = "أدخل كمية هذه الدفعة واسم مستلمها؛ ستُضاف إلى إجمالي ما تم تسليمه حتى الآن.";
         deliveryQuantityLabel.textContent = "كمية التسليم";
         deliverySubmitButton.textContent = "تسجيل التسليم";
+        configureDeliveryMode(order);
         deliveryModal.hidden = false;
         deliveryForm.elements.quantity.focus();
         return;

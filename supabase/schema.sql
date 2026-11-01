@@ -3380,6 +3380,14 @@ begin
     return false;
   end if;
 
+  if coalesce((
+    select sum(delivery.quantity)
+    from public.factory_deliveries as delivery
+    where delivery.order_id = requested_order_id
+  ), 0) <> current_order.delivered_pieces then
+    return false;
+  end if;
+
   if exists (
     select 1
     from public.factory_deliveries as delivery
@@ -5540,6 +5548,127 @@ begin
 end;
 $$;
 
+create or replace function public.record_factory_delivery_with_distribution(
+  requested_order_id uuid,
+  requested_quantity integer,
+  requested_recipient_name text,
+  requested_color_size_data jsonb
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  current_order public.orders%rowtype;
+  requested_cell record;
+  original_cell_quantity integer;
+  previously_delivered_quantity numeric;
+  saved_delivery_id uuid;
+begin
+  if not public.is_active_factory_admin() then
+    raise exception 'Only active admins can record factory deliveries.';
+  end if;
+  if requested_order_id is null
+     or requested_quantity is null
+     or requested_quantity <= 0
+     or length(trim(coalesce(requested_recipient_name, ''))) = 0
+     or not public.factory_production_colors_match_quantity(requested_color_size_data, requested_quantity) then
+    raise exception 'A valid order, positive delivery quantity, recipient, and matching color/size allocation are required.';
+  end if;
+
+  select *
+    into current_order
+  from public.orders
+  where id = requested_order_id
+  for update;
+  if not found or current_order.customer_id is null then
+    raise exception 'Factory order not found or has no customer.';
+  end if;
+  if current_order.archived_at is not null
+     or current_order.workflow_archived_at is not null
+     or (
+       current_order.status in ('تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق')
+       and current_order.delivered_pieces >= current_order.total_pieces
+     )
+     or current_order.total_pieces <= 0
+     or current_order.delivered_pieces + requested_quantity > current_order.total_pieces then
+    raise exception 'The order is closed, archived, uncut, or the delivery exceeds its remaining quantity.';
+  end if;
+  if coalesce((
+    select sum(delivery.quantity)
+    from public.factory_deliveries as delivery
+    where delivery.order_id = requested_order_id
+  ), 0) <> current_order.delivered_pieces then
+    raise exception 'The recorded order delivery total does not match its official delivery ledger; reconcile it before detailed delivery.';
+  end if;
+  if exists (
+    select 1
+    from public.factory_deliveries as delivery
+    where delivery.order_id = requested_order_id
+      and (
+        delivery.legacy_import
+        or not public.factory_production_colors_match_quantity(delivery.color_size_data, delivery.quantity)
+      )
+  ) then
+    raise exception 'An earlier delivery has no verified color/size allocation; review it before recording a detailed delivery.';
+  end if;
+
+  for requested_cell in
+    select upper(color_entry.value ->> 'hex') as color_hex,
+           case size_entry.key when 'SX' then 'XS' else size_entry.key end as size_name,
+           sum((size_entry.value #>> '{}')::integer)::integer as quantity
+    from jsonb_array_elements(requested_color_size_data) as color_entry(value)
+    cross join lateral jsonb_each(color_entry.value -> 'sizes') as size_entry(key, value)
+    group by upper(color_entry.value ->> 'hex'),
+             case size_entry.key when 'SX' then 'XS' else size_entry.key end
+  loop
+    select original_cell.original_quantity
+      into original_cell_quantity
+    from public.factory_order_original_delivery_cells(requested_order_id) as original_cell
+    where original_cell.color_hex = requested_cell.color_hex
+      and original_cell.size_name = requested_cell.size_name;
+    if not found then
+      raise exception 'The allocation contains a color/size not present in the cut order.';
+    end if;
+
+    select coalesce(sum((size_entry.value #>> '{}')::numeric), 0)
+      into previously_delivered_quantity
+    from public.factory_deliveries as delivery
+    cross join lateral jsonb_array_elements(delivery.color_size_data) as color_entry(value)
+    cross join lateral jsonb_each(color_entry.value -> 'sizes') as size_entry(key, value)
+    where delivery.order_id = requested_order_id
+      and upper(color_entry.value ->> 'hex') = requested_cell.color_hex
+      and case size_entry.key when 'SX' then 'XS' else size_entry.key end = requested_cell.size_name;
+    if requested_cell.quantity > original_cell_quantity - previously_delivered_quantity then
+      raise exception 'The allocation exceeds the remaining cut quantity for a color/size.';
+    end if;
+  end loop;
+
+  perform 1 from public.factory_clients where id = current_order.customer_id for update;
+  insert into public.factory_deliveries (
+    order_id, customer_id, quantity, price_per_piece, recipient_name,
+    expected_delivery_date, color_size_data
+  )
+  values (
+    current_order.id, current_order.customer_id, requested_quantity,
+    current_order.price_per_piece, trim(requested_recipient_name),
+    current_order.expected_delivery_date, requested_color_size_data
+  )
+  returning id into saved_delivery_id;
+
+  update public.orders
+  set delivered_pieces = delivered_pieces + requested_quantity
+  where id = current_order.id;
+  update public.production_stages
+  set target_quantity = greatest(target_quantity, current_order.delivered_pieces + requested_quantity),
+      completed_quantity = current_order.delivered_pieces + requested_quantity,
+      updated_at = now()
+  where order_id = current_order.id and stage_name = 'delivery';
+  return saved_delivery_id;
+end;
+$$;
+
 drop function if exists public.complete_factory_handover(uuid, integer, text);
 create function public.complete_factory_handover(
   requested_order_id uuid,
@@ -5660,6 +5789,7 @@ set search_path = public
 as $$
 declare
   current_order public.orders%rowtype;
+  current_delivery public.factory_deliveries%rowtype;
   updated_delivered_quantity integer;
 begin
   if not public.is_active_factory_admin() then
@@ -5682,7 +5812,8 @@ begin
     raise exception 'Archived factory deliveries cannot be adjusted.';
   end if;
 
-  perform 1
+  select *
+    into current_delivery
   from public.factory_deliveries
   where id = requested_delivery_id
     and order_id = requested_order_id
@@ -5697,7 +5828,12 @@ begin
       and order_id = requested_order_id;
   else
     update public.factory_deliveries
-    set quantity = requested_quantity
+    set quantity = requested_quantity,
+        color_size_data = case
+          when public.factory_production_colors_match_quantity(current_delivery.color_size_data, requested_quantity)
+            then current_delivery.color_size_data
+          else '[]'::jsonb
+        end
     where id = requested_delivery_id
       and order_id = requested_order_id;
   end if;
@@ -8668,6 +8804,8 @@ revoke all on function public.admin_update_factory_order_stage_status(uuid, text
 grant execute on function public.admin_update_factory_order_stage_status(uuid, text) to authenticated;
 revoke all on function public.record_factory_delivery(uuid, integer, text) from public, anon, authenticated;
 grant execute on function public.record_factory_delivery(uuid, integer, text) to authenticated;
+revoke all on function public.record_factory_delivery_with_distribution(uuid, integer, text, jsonb) from public, anon, authenticated;
+grant execute on function public.record_factory_delivery_with_distribution(uuid, integer, text, jsonb) to authenticated;
 revoke all on function public.complete_factory_handover(uuid, integer, text) from public, anon, authenticated;
 grant execute on function public.complete_factory_handover(uuid, integer, text) to authenticated;
 revoke all on function public.admin_update_factory_delivery_quantity(uuid, uuid, integer) from public, anon, authenticated;

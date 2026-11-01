@@ -960,8 +960,19 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .client-order-card .order-card-heading > .status { flex: 0 0 auto; max-width: 46%; white-space: normal; text-align: center; }
 .client-order-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
 .client-orders-panel[hidden] { display: none; }
-.client-order-card-summary { display: flex; align-items: baseline; gap: 8px; color: var(--muted); font-size: 12px; }
+.client-order-card-summary { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; color: var(--muted); font-size: 12px; }
 .client-order-card-summary strong { color: var(--green-dark); font-size: 19px; }
+.client-order-delivery-totals { display: flex; flex-wrap: wrap; gap: 8px 16px; width: 100%; padding-top: 6px; border-top: 1px solid var(--line); }
+.client-order-delivery-totals span { display: flex; align-items: baseline; gap: 5px; }
+.client-order-delivery-totals strong { font-size: 14px; }
+.delivery-comparison-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 8px 0; }
+.delivery-comparison-summary > div { display: grid; gap: 3px; padding: 9px; border: 1px solid var(--line); border-radius: 8px; background: #f8faf8; }
+.delivery-comparison-summary span { color: var(--muted); font-size: 11px; }
+.delivery-comparison-summary strong { color: var(--green-dark); font-size: 16px; }
+.order-delivery-comparison-table, .admin-delivery-allocation-table { min-width: 580px; }
+.delivery-modal-card { width: min(760px, calc(100vw - 24px)); }
+#delivery-allocation { max-width: 100%; overflow-x: auto; }
+#delivery-form [data-delivery-mode-field] { margin-top: 4px; }
 .client-order-card-colors { display: grid; gap: 5px; color: var(--muted); font-size: 11px; }
 .client-order-card > .button { justify-self: start; min-height: 38px; }
 .client-financial-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
