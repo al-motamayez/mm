@@ -1023,7 +1023,7 @@ alter table public.orders
   add constraint orders_work_stages_check
     check (
       cardinality(work_stages) > 0
-      and work_stages <@ array['cutting', 'sewing', 'finishing', 'ironing', 'printing', 'packaging', 'sorting']::text[]
+      and array_position(work_stages, '') is null
     ),
   drop constraint if exists orders_pricing_mode_check,
   add constraint orders_pricing_mode_check
@@ -1154,7 +1154,13 @@ where lower(trim(stage_name)) in ('تقطيع', 'قص', 'خياطة', 'تشطي�
 alter table public.production_stages
   drop constraint if exists production_stages_stage_name_check,
   add constraint production_stages_stage_name_check
-    check (stage_name in ('cutting', 'sewing', 'finishing', 'ironing', 'printing', 'packaging', 'sorting', 'delivery'));
+    check (
+      stage_name = 'delivery'
+      or (
+        length(btrim(stage_name)) between 1 and 50
+        and stage_name !~ '[[:cntrl:]]'
+      )
+    );
 
 update public.production_stages as stage
 set target_quantity = greatest(factory_order.total_pieces, stage.completed_quantity)
@@ -1491,6 +1497,7 @@ declare
   current_total_pieces integer;
   current_original_total_pieces integer;
   current_workflow_archived_at timestamptz;
+  current_work_stages text[];
   matched_client_id uuid;
   resolved_model_name text;
   normalized_color_names jsonb;
@@ -1529,10 +1536,21 @@ begin
     or requested_production_type is null
     or requested_production_type not in ('full_cutting', 'ready_sewing')
     or coalesce(cardinality(requested_work_stages), 0) = 0
-    or not (requested_work_stages <@ array['cutting', 'sewing', 'finishing', 'ironing', 'printing', 'packaging', 'sorting']::text[])
     or cardinality(requested_work_stages) <> (
-      select count(distinct selected.selected_stage)
+      select count(distinct lower(btrim(selected.selected_stage)))
       from unnest(requested_work_stages) as selected(selected_stage)
+    )
+    or exists (
+      select 1
+      from unnest(requested_work_stages) as selected(selected_stage)
+      where length(btrim(selected_stage)) not between 1 and 50
+         or selected_stage <> btrim(selected_stage)
+         or lower(btrim(selected_stage)) = any(array[
+           'delivery', 'cutting', 'sewing', 'finishing', 'ironing', 'printing', 'packaging', 'sorting',
+           'قص', 'خياطة', 'تشطيب', 'مكوى', 'طباعة', 'تكييس / أمبلاج', 'فرز',
+           'التشطيب', 'المكواة', 'الكي', 'الطباعة', 'التكييس', 'الفرز'
+         ]::text[])
+         or selected_stage ~ '[[:cntrl:]]'
     )
     or requested_pricing_mode is null
     or requested_pricing_mode not in ('total', 'stages')
@@ -1547,7 +1565,7 @@ begin
             case when jsonb_typeof(requested_stage_prices) = 'object'
               then requested_stage_prices else '{}'::jsonb end
           ) as stage_price(stage_name, price)
-          where stage_name not in ('cutting', 'sewing', 'finishing', 'ironing', 'printing', 'packaging', 'sorting')
+          where not (stage_name = any(requested_work_stages))
              or price !~ '^[0-9]+([.][0-9]{1,2})?$'
         )
         or (
@@ -1716,6 +1734,18 @@ begin
       when 'تم الفرز' then 'sorting'
       else null
     end;
+    if requested_initial_stage is null then
+      select selected_stage.stage_name
+        into requested_initial_stage
+      from unnest(requested_work_stages) with ordinality as selected_stage(stage_name, position)
+      where selected_stage.stage_name not in ('cutting', 'sewing')
+        and requested_status in (
+          'جاري ' || selected_stage.stage_name,
+          'تم ' || selected_stage.stage_name
+        )
+      order by selected_stage.position
+      limit 1;
+    end if;
     if requested_initial_stage is not null
        and requested_production_type <> 'ready_sewing' then
       raise exception 'Choose the pre-cut production path before entering an advanced production status.';
@@ -1732,7 +1762,14 @@ begin
         when requested_status in ('تم القص', 'في انتظار الخياطة') then 'متاح للخياطة'
         when requested_status in (
           'تمت الخياطة', 'تم التشطيب', 'تم الكي', 'تمت الطباعة', 'تم التكييس', 'تم الفرز'
-        ) then 'مكتمل'
+        ) or requested_status = case requested_initial_stage
+          when 'finishing' then 'تم التشطيب'
+          when 'ironing' then 'تم الكي'
+          when 'printing' then 'تمت الطباعة'
+          when 'packaging' then 'تم التكييس'
+          when 'sorting' then 'تم الفرز'
+          else 'تم ' || requested_initial_stage
+        end then 'مكتمل'
         else case requested_initial_stage
           when 'sewing' then 'قيد الخياطة'
           else 'قيد التنفيذ'
@@ -1810,9 +1847,10 @@ begin
         line_name = nullif(trim(requested_line_name), '')
     where order_id = saved_order_id;
   else
-    select customer_id, price_per_piece, status, total_pieces, original_total_pieces, workflow_archived_at
+    select customer_id, price_per_piece, status, total_pieces, original_total_pieces, workflow_archived_at,
+      work_stages
       into current_customer_id, current_price_per_piece, current_status, current_total_pieces,
-        current_original_total_pieces, current_workflow_archived_at
+        current_original_total_pieces, current_workflow_archived_at, current_work_stages
     from public.orders
     where id = requested_order_id
     for update;
@@ -1845,6 +1883,34 @@ begin
        ) then
       raise exception 'Use the production workflow controls to move an order into sewing or finishing.';
     end if;
+    if current_status is distinct from requested_status
+       and exists (
+         select 1
+         from unnest(current_work_stages) as selected_stage(stage_name)
+         where selected_stage.stage_name not in (
+           'cutting', 'sewing', 'finishing', 'ironing', 'printing', 'packaging', 'sorting'
+         )
+           and current_status in (
+             'جاري ' || selected_stage.stage_name,
+             'تم ' || selected_stage.stage_name
+           )
+       ) then
+      raise exception 'Production workflow statuses can only be changed through their stage controls.';
+    end if;
+    if current_status is distinct from requested_status
+        and exists (
+          select 1
+          from unnest(requested_work_stages) as selected_stage(stage_name)
+          where selected_stage.stage_name not in (
+            'cutting', 'sewing', 'finishing', 'ironing', 'printing', 'packaging', 'sorting'
+          )
+            and requested_status in (
+              'جاري ' || selected_stage.stage_name,
+              'تم ' || selected_stage.stage_name
+            )
+        ) then
+       raise exception 'Production workflow statuses can only be changed through their stage controls.';
+    end if;
     if current_status in (
       'في انتظار الخياطة', 'جاري الخياطة', 'تمت الخياطة', 'جاري التشطيب', 'تم التشطيب',
       'جاري المكواة', 'تم الكي', 'جاري الطباعة', 'تمت الطباعة',
@@ -1867,7 +1933,7 @@ begin
            select 1
            from public.production_stages as stage
            where stage.order_id = requested_order_id
-             and stage.stage_name in ('cutting', 'sewing', 'finishing', 'ironing', 'printing', 'packaging', 'sorting')
+             and stage.stage_name <> 'delivery'
              and (
                stage.completed_quantity > 0
                or stage.status not in ('معلق', 'قيد الانتظار', 'بانتظار')
@@ -1887,12 +1953,14 @@ begin
       select 1
       from public.production_stages as stage
       where stage.order_id = requested_order_id
-        and stage.stage_name in ('cutting', 'sewing', 'finishing', 'ironing', 'printing', 'packaging', 'sorting')
+        and stage.stage_name <> 'delivery'
         and not (stage.stage_name = any(requested_work_stages))
         and (
           stage.completed_quantity > 0
           or stage.status not in ('معلق', 'قيد الانتظار')
           or stage.worker_id is not null
+          or nullif(trim(coalesce(stage.worker_name, '')), '') is not null
+          or nullif(trim(coalesce(stage.cutter_name, '')), '') is not null
           or nullif(trim(coalesce(stage.fabric, '')), '') is not null
           or stage.fabric_id is not null
           or stage.layer_count > 0
@@ -1951,7 +2019,7 @@ begin
     );
     delete from public.production_stages as stage
     where stage.order_id = requested_order_id
-      and stage.stage_name in ('cutting', 'sewing', 'finishing', 'ironing', 'printing', 'packaging', 'sorting')
+      and stage.stage_name <> 'delivery'
       and not (stage.stage_name = any(requested_work_stages));
     if current_price_per_piece is distinct from requested_price_per_piece then
       update public.factory_deliveries
@@ -2004,8 +2072,8 @@ as $$
 declare
   current_order public.orders%rowtype;
   target_stage_name text;
+  target_completed boolean;
   earlier_stage record;
-  extra_stage_names text[] := array['finishing', 'ironing', 'printing', 'packaging', 'sorting']::text[];
   next_stage_name text;
   target_stage_position bigint;
 begin
@@ -2028,36 +2096,75 @@ begin
     raise exception 'This order is closed or unavailable for production updates.';
   end if;
 
-  target_stage_name := case requested_status
-    when 'جاري التشطيب' then 'finishing'
-    when 'تم التشطيب' then 'finishing'
-    when 'جاري المكواة' then 'ironing'
-    when 'تم الكي' then 'ironing'
-    when 'جاري الطباعة' then 'printing'
-    when 'تمت الطباعة' then 'printing'
-    when 'جاري التكييس' then 'packaging'
-    when 'تم التكييس' then 'packaging'
-    when 'جاري الفرز' then 'sorting'
-    when 'تم الفرز' then 'sorting'
-    else null
-  end;
+  select selected_stage.stage_name,
+         requested_status = case selected_stage.stage_name
+           when 'finishing' then 'تم التشطيب'
+           when 'ironing' then 'تم الكي'
+           when 'printing' then 'تمت الطباعة'
+           when 'packaging' then 'تم التكييس'
+           when 'sorting' then 'تم الفرز'
+           else 'تم ' || selected_stage.stage_name
+         end
+    into target_stage_name, target_completed
+  from unnest(current_order.work_stages) with ordinality as selected_stage(stage_name, position)
+  where selected_stage.stage_name not in ('cutting', 'sewing')
+    and requested_status in (
+      case selected_stage.stage_name
+        when 'finishing' then 'جاري التشطيب'
+        when 'ironing' then 'جاري المكواة'
+        when 'printing' then 'جاري الطباعة'
+        when 'packaging' then 'جاري التكييس'
+        when 'sorting' then 'جاري الفرز'
+        else 'جاري ' || selected_stage.stage_name
+      end,
+      case selected_stage.stage_name
+        when 'finishing' then 'تم التشطيب'
+        when 'ironing' then 'تم الكي'
+        when 'printing' then 'تمت الطباعة'
+        when 'packaging' then 'تم التكييس'
+        when 'sorting' then 'تم الفرز'
+        else 'تم ' || selected_stage.stage_name
+      end
+    )
+  order by selected_stage.position
+  limit 1;
 
   if target_stage_name is not null then
-    if not (target_stage_name = any(current_order.work_stages)) then
-      raise exception 'This order does not include the selected additional production stage.';
-    end if;
-    if current_order.status not in (
-      'تمت الخياطة', 'مكتمل', 'جاري التشطيب', 'تم التشطيب',
-      'جاري المكواة', 'تم الكي', 'جاري الطباعة', 'تمت الطباعة',
-      'جاري التكييس', 'تم التكييس', 'جاري الفرز', 'تم الفرز'
-    ) then
-      raise exception 'Complete sewing before updating an additional production stage.';
+    if current_order.work_stages @> array['sewing']::text[] then
+      if current_order.status not in (
+        'تمت الخياطة', 'مكتمل', 'جاري التشطيب', 'تم التشطيب',
+        'جاري المكواة', 'تم الكي', 'جاري الطباعة', 'تمت الطباعة',
+        'جاري التكييس', 'تم التكييس', 'جاري الفرز', 'تم الفرز'
+      )
+      and not exists (
+        select 1
+        from unnest(current_order.work_stages) as selected_stage(stage_name)
+        where selected_stage.stage_name not in ('cutting', 'sewing')
+          and current_order.status in (
+            'جاري ' || selected_stage.stage_name,
+            'تم ' || selected_stage.stage_name
+          )
+      ) then
+        raise exception 'Complete sewing before updating an additional production stage.';
+      end if;
+    elsif current_order.work_stages @> array['cutting']::text[]
+      and current_order.status not in ('تم القص', 'مكتمل')
+      and not exists (
+        select 1
+        from unnest(current_order.work_stages) as selected_stage(stage_name)
+        where selected_stage.stage_name not in ('cutting', 'sewing')
+          and current_order.status in (
+            'جاري ' || selected_stage.stage_name,
+            'تم ' || selected_stage.stage_name
+          )
+      ) then
+      raise exception 'Complete cutting before updating an additional production stage.';
     end if;
 
     for earlier_stage in
       select selected_stage.stage_name
       from unnest(current_order.work_stages) with ordinality as selected_stage(stage_name, position)
-      where selected_stage.stage_name = any(extra_stage_names)
+      where selected_stage.stage_name not in ('cutting', 'sewing')
         and selected_stage.position < (
           select selected_stage_target.position
           from unnest(current_order.work_stages) with ordinality as selected_stage_target(stage_name, position)
@@ -2076,12 +2183,9 @@ begin
     end loop;
 
     update public.production_stages
-    set status = case
-          when requested_status in ('تم التشطيب', 'تم الكي', 'تمت الطباعة', 'تم التكييس', 'تم الفرز') then 'مكتمل'
-          else 'قيد التنفيذ'
-        end,
+    set status = case when target_completed then 'مكتمل' else 'قيد التنفيذ' end,
         completed_quantity = case
-          when requested_status in ('تم التشطيب', 'تم الكي', 'تمت الطباعة', 'تم التكييس', 'تم الفرز') then target_quantity
+          when target_completed then target_quantity
           else least(completed_quantity, target_quantity)
         end,
         updated_at = now()
@@ -2091,7 +2195,7 @@ begin
       raise exception 'The selected additional production stage was not initialized.';
     end if;
 
-    if requested_status in ('تم التشطيب', 'تم الكي', 'تمت الطباعة', 'تم التكييس', 'تم الفرز') then
+    if target_completed then
       select selected_stage.position
         into target_stage_position
       from unnest(current_order.work_stages) with ordinality as selected_stage(stage_name, position)
@@ -2100,7 +2204,7 @@ begin
       select selected_stage.stage_name
         into next_stage_name
       from unnest(current_order.work_stages) with ordinality as selected_stage(stage_name, position)
-      where selected_stage.stage_name = any(extra_stage_names)
+      where selected_stage.stage_name not in ('cutting', 'sewing')
         and selected_stage.position > target_stage_position
         and exists (
           select 1
@@ -2134,6 +2238,7 @@ begin
           when 'printing' then 'جاري الطباعة'
           when 'packaging' then 'جاري التكييس'
           when 'sorting' then 'جاري الفرز'
+          else 'جاري ' || next_stage_name
         end
         where id = requested_order_id;
       end if;
@@ -2146,17 +2251,30 @@ begin
   end if;
 
   if requested_status = 'جاهز للتسليم' then
-    if current_order.status not in (
-      'تمت الخياطة', 'مكتمل', 'جاري التشطيب', 'تم التشطيب',
-      'جاري المكواة', 'تم الكي', 'جاري الطباعة', 'تمت الطباعة',
-      'جاري التكييس', 'تم التكييس', 'جاري الفرز', 'تم الفرز'
-    ) then
-      raise exception 'Finish sewing before marking the order ready for delivery.';
+    if current_order.work_stages @> array['sewing']::text[] then
+      if not exists (
+        select 1
+        from public.production_stages
+        where order_id = requested_order_id
+          and stage_name = 'sewing'
+          and status = 'مكتمل'
+      ) then
+        raise exception 'Finish sewing before marking the order ready for delivery.';
+      end if;
+    elsif current_order.work_stages @> array['cutting']::text[]
+      and not exists (
+        select 1
+        from public.production_stages
+        where order_id = requested_order_id
+          and stage_name = 'cutting'
+          and status = 'مكتمل'
+      ) then
+      raise exception 'Finish cutting before marking the order ready for delivery.';
     end if;
     if exists (
       select 1
       from unnest(current_order.work_stages) as selected_stage(stage_name)
-      where selected_stage.stage_name = any(extra_stage_names)
+      where selected_stage.stage_name not in ('cutting', 'sewing')
         and not exists (
           select 1
           from public.production_stages
@@ -2178,7 +2296,7 @@ begin
     return;
   end if;
 
-  raise exception 'The requested status is not an admin-manageable additional stage.';
+  raise exception 'The requested status is not an admin-manageable production stage.';
 end;
 $$;
 

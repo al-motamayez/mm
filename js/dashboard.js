@@ -117,9 +117,20 @@ const INITIAL_READY_STAGE_BY_STATUS = {
   "تم الفرز": "sorting"
 };
 
+function factoryOrderInitialStage(status, selectedStages) {
+  const fixedStage = INITIAL_READY_STAGE_BY_STATUS[status];
+  if (fixedStage) return fixedStage;
+  return selectedStages.find((stage) => isCustomWorkStage(stage)
+    && workStageStatusLabels(stage).includes(status)) || null;
+}
+
 function isFactoryOrderWorkflowManaged(order) {
-  return WORKFLOW_MANAGED_FACTORY_ORDER_STATUSES
-    .includes(canonicalFactoryOrderStatus(order.storedStatus || order.status))
+  const status = canonicalFactoryOrderStatus(order.storedStatus || order.status);
+  const additionalStatuses = (order.workStages || [])
+    .filter(isCustomWorkStage)
+    .flatMap(workStageStatusLabels);
+  return WORKFLOW_MANAGED_FACTORY_ORDER_STATUSES.includes(status)
+    || additionalStatuses.includes(status)
     || ["متاح للخياطة", "قيد الخياطة", "قيد التنفيذ", "مكتمل"].includes(order.sewingStageStatus || "");
 }
 
@@ -668,7 +679,7 @@ async function readDashboardData(session) {
     const cuttingStage = orderStages.find((stage) => ["cutting", "قص", "تقطيع"].includes(stage.stage_name));
     const sewingStage = orderStages.find((stage) => ["sewing", "خياطة"].includes(stage.stage_name));
     const completedPieces = orderStages
-      .filter((stage) => ["cutting", "sewing", "finishing", "ironing", "printing", "packaging"].includes(stage.stage_name))
+      .filter((stage) => stage.stage_name !== "delivery")
       .reduce((maximum, stage) => Math.max(maximum, Number(stage.completed_quantity || 0)), 0);
     const originalQuantity = Number(order.original_total_pieces ?? order.total_pieces ?? 0);
     const deliveredPieces = Number(order.delivered_pieces || 0);
@@ -1090,18 +1101,16 @@ function effectiveFactoryOrderStatus(order) {
 }
 
 function factoryOrderStatusSequence(order) {
-  const statuses = [...FACTORY_ORDER_STATUSES.slice(0, 8)];
-  const stageStatuses = {
-    finishing: ["جاري التشطيب", "تم التشطيب"],
-    ironing: ["جاري المكواة", "تم الكي"],
-    printing: ["جاري الطباعة", "تمت الطباعة"],
-    packaging: ["جاري التكييس", "تم التكييس"],
-    sorting: ["جاري الفرز", "تم الفرز"]
-  };
-  (order.workStages || []).forEach((stage) => {
-    if (stageStatuses[stage]) statuses.push(...stageStatuses[stage]);
-  });
-  statuses.push(...FACTORY_ORDER_STATUSES.slice(8));
+  const selectedStages = Array.isArray(order.workStages) ? order.workStages : [];
+  if (!selectedStages.length) return [...FACTORY_ORDER_STATUSES];
+
+  const statuses = [FACTORY_ORDER_STATUSES[0]];
+  if (selectedStages.includes("cutting")) statuses.push(...FACTORY_ORDER_STATUSES.slice(1, 5));
+  if (selectedStages.includes("sewing")) statuses.push(...FACTORY_ORDER_STATUSES.slice(5, 8));
+  selectedStages
+    .filter((stage) => stage !== "cutting" && stage !== "sewing")
+    .forEach((stage) => statuses.push(...workStageStatusLabels(stage)));
+  statuses.push(...FACTORY_ORDER_STATUSES.slice(18));
   return statuses;
 }
 
@@ -1112,6 +1121,10 @@ function factoryOrderPipelineCategory(order) {
   if (sewingStageStatus === "مكتمل") return "post_sewing";
 
   const status = canonicalFactoryOrderStatus(order.storedStatus || order.status);
+  const additionalStatuses = (order.workStages || [])
+    .filter((stage) => stage !== "cutting" && stage !== "sewing")
+    .flatMap(workStageStatusLabels);
+  if (additionalStatuses.includes(status)) return "additional_stages";
   if ([
     "تمت الخياطة", "جاري التشطيب", "تم التشطيب", "جاري المكواة", "تم الكي",
     "جاري الطباعة", "تمت الطباعة", "جاري التكييس", "تم التكييس",
@@ -1132,6 +1145,7 @@ function factoryOrderPipelineGroups(orders) {
     { key: "waiting_sewing", label: "في انتظار الخياطة", orders: [] },
     { key: "sewing", label: "قيد الخياطة / جاري الخياطة", orders: [] },
     { key: "post_sewing", label: "ما بعد الخياطة", orders: [] },
+    { key: "additional_stages", label: "المراحل الإضافية", orders: [] },
     { key: "unclassified", label: "حالات غير مصنفة", orders: [] }
   ];
   const groupsByKey = new Map(groups.map((group) => [group.key, group]));
@@ -2209,8 +2223,26 @@ function statusTag(value) {
 }
 
 function workStageLabels(stages) {
-  const selected = new Set(Array.isArray(stages) ? stages : []);
-  return WORK_STAGES.filter(([key]) => selected.has(key)).map(([, label]) => label);
+  return (Array.isArray(stages) ? stages : []).map(workStageLabel);
+}
+
+function workStageLabel(stage) {
+  return WORK_STAGES.find(([key]) => key === stage)?.[1] || String(stage || "");
+}
+
+function isCustomWorkStage(stage) {
+  return !WORK_STAGES.some(([key]) => key === stage);
+}
+
+function workStageStatusLabels(stage) {
+  const knownStatuses = {
+    finishing: ["جاري التشطيب", "تم التشطيب"],
+    ironing: ["جاري المكواة", "تم الكي"],
+    printing: ["جاري الطباعة", "تمت الطباعة"],
+    packaging: ["جاري التكييس", "تم التكييس"],
+    sorting: ["جاري الفرز", "تم الفرز"]
+  };
+  return knownStatuses[stage] || [`جاري ${workStageLabel(stage)}`, `تم ${workStageLabel(stage)}`];
 }
 
 function readStagePrices(form) {
@@ -2237,7 +2269,7 @@ function updateStagePricing(form, initialPrices = readStagePrices(form)) {
   }
   list.innerHTML = selectedStages.length
     ? selectedStages.map((stage) => {
-      const label = WORK_STAGES.find(([key]) => key === stage)?.[1] || stage;
+      const label = workStageLabel(stage);
       const rawValue = initialPrices[stage];
       const hasValue = Object.hasOwn(initialPrices, stage) && rawValue !== "" && rawValue !== null;
       const value = Number(rawValue);
@@ -2908,8 +2940,11 @@ function modelStatusReviewView(data) {
       const isLocked = Boolean(order.archivedAt) || LOCKED_FACTORY_ORDER_STATUSES.includes(order.status);
       const selectedStatus = canonicalFactoryOrderStatus(order.status);
       const allOrderStatuses = factoryOrderStatusSequence(order);
-      const additionalStatuses = allOrderStatuses.slice(8, -2);
-      const canManageStageStatus = selectedStatus === "تمت الخياطة" || additionalStatuses.includes(selectedStatus);
+      const additionalStages = (order.workStages || []).filter((stage) => stage !== "cutting" && stage !== "sewing");
+      const additionalStatuses = additionalStages.flatMap(workStageStatusLabels);
+      const canManageStageStatus = selectedStatus === "تمت الخياطة"
+        || (!order.workStages?.includes("sewing") && order.workStages?.includes("cutting") && selectedStatus === "تم القص" && additionalStages.length > 0)
+        || additionalStatuses.includes(selectedStatus);
       const statuses = canManageStageStatus
         ? [...new Set([selectedStatus, ...additionalStatuses, "جاهز للتسليم"])]
         : selectedStatus === "قيد الانتظار"
@@ -3816,7 +3851,7 @@ function adminView(data, accounts) {
         </div></section>
         <section class="form-section"><h3>التفاصيل التشغيلية <span>اختياري</span></h3><div class="form-section-grid">
           <div class="field wide"><label for="model-production-type">مسار التشغيل</label><select id="model-production-type" name="productionType"><option value="full_cutting">قص وفرش داخل المصنع</option><option value="ready_sewing">موديل جاهز ومقصوص مسبقاً</option></select><small>الموديل الجاهز يتجاوز القص، ويبدأ من الحالة والمرحلة التي تحددها أدناه.</small></div>
-          <fieldset class="field work-stage-picker"><legend>الأقسام المطلوبة</legend><div class="work-stage-options">${WORK_STAGES.map(([key, label]) => `<label><input type="checkbox" name="workStage" value="${key}" ${["cutting", "sewing", "finishing"].includes(key) ? "checked" : ""}><span>${label}</span></label>`).join("")}</div></fieldset>
+          <fieldset class="field work-stage-picker"><legend>مراحل الموديل المطلوبة</legend><div class="work-stage-options" data-work-stage-options>${WORK_STAGES.map(([key, label]) => `<label><input type="checkbox" name="workStage" value="${key}" ${["cutting", "sewing", "finishing"].includes(key) ? "checked" : ""}><span>${label}</span></label>`).join("")}</div><div class="work-stage-custom-entry"><input type="text" data-custom-work-stage maxlength="50" aria-label="اسم مرحلة مخصصة" placeholder="مرحلة إضافية مثل تركيب حبل"><button class="row-action" type="button" data-add-work-stage>＋ إضافة مرحلة</button></div><small>تُضاف المرحلة لهذا الموديل فقط، وتُدار حالتها من شاشة إدارة حالات الموديلات.</small></fieldset>
           ${colorPickerMarkup("", "model-colors")}
           ${sizePickerMarkup("", "model-sizes", true, true)}
           <div class="model-allocation field"><label>توزيع العدد على الألوان والمقاسات</label><div data-model-allocation-grid><p class="muted">أدخل العدد الكلي واختر الألوان والمقاسات لعرض التوزيع.</p></div><input type="hidden" name="colorSizeDistribution" value='{"colors":[]}'></div>
@@ -5299,12 +5334,12 @@ function workforceDateKey(date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
-function workforceShiftDate(dateKey, unit, amount) {
-  const date = new Date(`${dateKey || workforceDateKey(new Date())}T00:00:00`);
-  if (unit === "day") date.setDate(date.getDate() + amount);
-  else if (unit === "month") date.setMonth(date.getMonth() + amount);
-  else if (unit === "year") date.setFullYear(date.getFullYear() + amount);
-  return workforceDateKey(date);
+function workforceShiftMonth(dateKey, amount) {
+  const [year, month, day] = String(dateKey || workforceDateKey(new Date())).split("-").map(Number);
+  const targetMonth = new Date(year, month - 1 + amount, 1);
+  const lastDay = new Date(targetMonth.getFullYear(), targetMonth.getMonth() + 1, 0).getDate();
+  targetMonth.setDate(Math.min(day, lastDay));
+  return workforceDateKey(targetMonth);
 }
 
 function workforcePreviousMonth(monthKey) {
@@ -5315,9 +5350,24 @@ function workforcePreviousMonth(monthKey) {
 
 function workforceArabicDateLabels(dateKey) {
   const date = new Date(`${dateKey || workforceDateKey(new Date())}T00:00:00`);
-  const gregorian = new Intl.DateTimeFormat("ar-EG-u-ca-gregory", { weekday: "long", day: "numeric", month: "long", year: "numeric" }).format(date);
-  const hijri = new Intl.DateTimeFormat("ar-EG-u-ca-islamic", { weekday: "long", day: "numeric", month: "long", year: "numeric" }).format(date);
-  return { gregorian, hijri };
+  const [year, month] = workforceDateKey(date).slice(0, 7).split("-");
+  const monthNumber = new Intl.NumberFormat("ar-EG-u-nu-latn", { minimumIntegerDigits: 2 }).format(Number(month));
+  const yearNumber = new Intl.NumberFormat("ar-EG-u-nu-latn", { useGrouping: false }).format(Number(year));
+  const weekday = new Intl.DateTimeFormat("ar-EG-u-ca-gregory", { weekday: "long" }).format(date);
+  const monthName = new Intl.DateTimeFormat("ar-EG-u-ca-gregory", { month: "long" }).format(date);
+  return {
+    monthYear: `${monthNumber} / ${yearNumber}`,
+    details: `${weekday} · ${monthName}`
+  };
+}
+
+function workforceDateToolbarMarkup() {
+  const labels = workforceArabicDateLabels(selectedWorkforceDate);
+  return `<div class="workforce-date-toolbar" data-workforce-date-toolbar hidden role="group" aria-label="التنقل بين شهور شؤون العاملين">
+    <button type="button" class="workforce-date-arrow" data-workforce-shift-date="month:-1" aria-label="الشهر السابق">‹</button>
+    <div class="workforce-date-display"><strong>${escapeHtml(labels.monthYear)}</strong><small>${escapeHtml(labels.details)}</small></div>
+    <button type="button" class="workforce-date-arrow" data-workforce-shift-date="month:1" aria-label="الشهر التالي">›</button>
+  </div>`;
 }
 
 function workforceMonthDates(monthKey) {
@@ -5853,20 +5903,6 @@ function workforceView(data) {
     const calculation = workforceMonthAccrual(worker, data, settings, previousMonthKey, previousThroughDate);
     return !previousMonthSettled.has(worker.id) && Math.abs(calculation.netDue) > 0.01;
   });
-  const currentDateLabels = workforceArabicDateLabels(selectedWorkforceDate);
-  const dateToolbar = `<div class="workforce-date-toolbar">
-    <div class="workforce-date-arrows">
-      <button type="button" class="row-action" data-workforce-shift-date="day:-1" aria-label="اليوم السابق">‹ يوم</button>
-      <button type="button" class="row-action" data-workforce-shift-date="month:-1" aria-label="الشهر السابق">‹ شهر</button>
-      <button type="button" class="row-action" data-workforce-shift-date="year:-1" aria-label="السنة السابقة">‹ سنة</button>
-    </div>
-    <div class="workforce-date-display"><strong>${escapeHtml(currentDateLabels.hijri)}</strong><small>${escapeHtml(currentDateLabels.gregorian)} · ميلادي</small></div>
-    <div class="workforce-date-arrows">
-      <button type="button" class="row-action" data-workforce-shift-date="day:1" aria-label="اليوم التالي">يوم ›</button>
-      <button type="button" class="row-action" data-workforce-shift-date="month:1" aria-label="الشهر التالي">شهر ›</button>
-      <button type="button" class="row-action" data-workforce-shift-date="year:1" aria-label="السنة التالية">سنة ›</button>
-    </div>
-  </div>`;
   const rolloverWarning = previousMonthUnsettledWorkers.length
     ? `<div class="workforce-alert workforce-alert-warning"><strong>إنذار: مستحقات غير مصفاة عن شهر ${escapeHtml(previousMonthKey)}</strong><span>${previousMonthUnsettledWorkers.length} عامل لديهم أرصدة غير مرحّلة. تبقى تصفية الشهر السابق مستقلة ولا تدخل الشهر الجديد إلا بعد اعتماد الترحيل.</span><button type="button" class="row-action" data-open-workforce-rollover>ترحيل المستحقات يدويًا</button></div>`
     : "";
@@ -5948,7 +5984,6 @@ function workforceView(data) {
       <button type="button" role="tab" class="client-management-tab${activeWorkforceTab === "discipline" ? " active" : ""}" aria-selected="${activeWorkforceTab === "discipline"}" data-workforce-tab="discipline">اللائحة والمخالفات</button>
       <button type="button" role="tab" class="client-management-tab${activeWorkforceTab === "settlements" ? " active" : ""}" aria-selected="${activeWorkforceTab === "settlements"}" data-workforce-tab="settlements">الأجور والتصفية</button>
     </div>
-    ${dateToolbar}
     ${rolloverWarning}
     <div class="workforce-panel" data-workforce-panel="employees"${activeWorkforceTab === "employees" ? "" : " hidden"}>
       <div class="workforce-employee-toolbar"><div><h2>سجل العاملين والموظفين</h2><p>إدارة الملفات الوظيفية والأجور وربط حسابات الدخول.</p></div><button type="button" class="button button-primary workforce-add-employee" data-add-workforce-employee>＋ إضافة عامل جديد</button></div>
@@ -6437,7 +6472,8 @@ function bindWorkforceActions(session) {
     const [unit, rawAmount] = String(button.dataset.workforceShiftDate || "").split(":");
     const amount = Number(rawAmount);
     if (!unit || !Number.isFinite(amount)) return;
-    selectedWorkforceDate = workforceShiftDate(selectedWorkforceDate, unit, amount);
+    if (unit !== "month") return;
+    selectedWorkforceDate = workforceShiftMonth(selectedWorkforceDate, amount);
     selectedWorkforceMonth = selectedWorkforceDate.slice(0, 7);
     selectedWorkforceCutoffDate = "";
     render(session, dashboardData, dashboardData.pendingAccounts || []);
@@ -7273,7 +7309,7 @@ function render(session, data, accounts) {
     <div class="app-shell${collapsedClass}">
       <button class="sidebar-backdrop" type="button" data-sidebar-close aria-label="إغلاق القائمة الجانبية"></button>
       <aside class="sidebar" id="sidebar"><a class="brand" href="../index.html"><img class="brand-logo" src="../assets/al-motamayez-logo.png" alt="AL-MOTAMAYEZ logo"><span class="brand-copy"><strong>AL-MOTAMAYEZ</strong></span></a><nav aria-label="القائمة الرئيسية"><p class="side-label">القائمة الرئيسية</p>${navigation}</nav><div class="sidebar-bottom"><div class="profile-chip"><span class="avatar">${escapeHtml(username.slice(0, 1))}</span><div class="profile-details"><strong>${escapeHtml(username)}</strong><span>${escapeHtml(session.roleName)}</span>${["worker", "cutting", "sewing"].includes(session.role) ? `<small>${escapeHtml(session.fullName)} · ${escapeHtml(session.phone || "الهاتف غير مسجل")}</small>` : ""}</div></div><button class="logout-button" id="logout" type="button">↪ تسجيل الخروج</button>${developerFooterMarkup()}</div></aside>
-      <main class="main-content"><header class="topbar"><div class="topbar-leading"><button class="sidebar-toggle" type="button" data-sidebar-toggle aria-controls="sidebar" aria-expanded="true" aria-label="طي القائمة الجانبية"><span aria-hidden="true">☰</span></button><div class="topbar-title"><h1>${info.title}</h1><p>${info.description}</p></div></div><div class="header-brand">${session.role === "admin" ? `<button class="online-indicator${onlineUserCount ? " online" : ""}" data-online-indicator type="button" title="عرض الحسابات المتصلة"><span class="online-indicator-dot"></span><span>متصلون الآن: <strong data-online-count>${onlineUserCount}</strong></span></button>` : ""}<div class="notification-control"><button class="live-notification-button" type="button" data-live-notifications aria-label="إشعارات تحديثات البرنامج" aria-expanded="false"><span aria-hidden="true">🔔</span><span class="live-notification-badge" data-live-badge aria-live="polite" hidden></span></button><section class="notification-dropdown" data-notification-dropdown hidden aria-label="إشعارات تحديثات البرنامج"><header><strong>تحديثات البرنامج</strong><button type="button" class="notification-mark-read" data-mark-notifications-read>تعليم الكل كمقروء</button></header><div class="notification-list" data-notification-list>${notificationListMarkup()}</div></section></div><img class="header-logo" src="../assets/al-motamayez-logo.png" alt="AL-MOTAMAYEZ logo"><div class="brand-copy"><strong>AL-MOTAMAYEZ</strong></div><span class="date-label">${new Intl.DateTimeFormat("ar-EG-u-nu-latn", { dateStyle: "full" }).format(new Date())}</span></div></header>
+      <main class="main-content"><header class="topbar"><div class="topbar-leading"><button class="sidebar-toggle" type="button" data-sidebar-toggle aria-controls="sidebar" aria-expanded="true" aria-label="طي القائمة الجانبية"><span aria-hidden="true">☰</span></button><div class="topbar-title"><h1>${info.title}</h1><p>${info.description}</p></div>${session.role === "admin" ? workforceDateToolbarMarkup() : ""}</div><div class="header-brand">${session.role === "admin" ? `<button class="online-indicator${onlineUserCount ? " online" : ""}" data-online-indicator type="button" title="عرض الحسابات المتصلة"><span class="online-indicator-dot"></span><span>متصلون الآن: <strong data-online-count>${onlineUserCount}</strong></span></button>` : ""}<div class="notification-control"><button class="live-notification-button" type="button" data-live-notifications aria-label="إشعارات تحديثات البرنامج" aria-expanded="false"><span aria-hidden="true">🔔</span><span class="live-notification-badge" data-live-badge aria-live="polite" hidden></span></button><section class="notification-dropdown" data-notification-dropdown hidden aria-label="إشعارات تحديثات البرنامج"><header><strong>تحديثات البرنامج</strong><button type="button" class="notification-mark-read" data-mark-notifications-read>تعليم الكل كمقروء</button></header><div class="notification-list" data-notification-list>${notificationListMarkup()}</div></section></div><img class="header-logo" src="../assets/al-motamayez-logo.png" alt="AL-MOTAMAYEZ logo"><div class="brand-copy"><strong>AL-MOTAMAYEZ</strong></div><span class="date-label">${new Intl.DateTimeFormat("ar-EG-u-nu-latn", { dateStyle: "full" }).format(new Date())}</span></div></header>
     ${data.orderReadWarning ? `<div class="notice" role="alert">${escapeHtml(data.orderReadWarning)}</div>` : ""}
     ${content}
       ${session.role === "admin" ? '<div class="modal-backdrop" id="model-expense-modal" hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="model-expense-title"><button class="modal-close" type="button" data-close-model-expense aria-label="إغلاق">×</button><h2 id="model-expense-title">إضافة مصروف للموديل</h2><p data-model-expense-name></p><form class="modal-form" data-model-expense-form><input type="hidden" name="orderId"><label for="model-expense-description">بيان المصروف</label><input id="model-expense-description" name="description" maxlength="240" required><label class="field model-expense-customer-toggle"><input type="checkbox" name="billToCustomer" checked><span>تحميل هذا المصروف على حساب العميل وإظهاره في بوابته</span></label><label for="model-expense-type">نوع المصروف عند عدم تحميله على العميل</label><select id="model-expense-type" name="expenseType" required><option value="treasury_only">مصروف تشغيلي من الخزنة فقط</option><option value="included_in_price">مصروف مدمج ضمن سعر القطعة</option></select><small class="model-expense-impact-hint">عند تفعيل الخيار يُضاف المصروف لحساب العميل. عند إلغاء التفعيل يبقى للإدارة ولا يظهر في بوابة العميل.</small><label for="model-expense-amount">قيمة المصروف (ج.م)</label><input id="model-expense-amount" name="amount" type="number" min="0.01" max="999999999999.99" step="0.01" required><div class="form-actions"><button class="button button-primary" type="submit">حفظ المصروف</button><button class="row-action" type="button" data-close-model-expense>إلغاء</button></div></form></section></div>' : ""}
@@ -7316,6 +7352,9 @@ function activateDashboardView(viewId, updateHash = true) {
   sections.forEach((section) => {
     section.hidden = section.id !== selectedView;
   });
+  const workforceDateToolbar = document.querySelector("[data-workforce-date-toolbar]");
+  if (workforceDateToolbar) workforceDateToolbar.hidden = selectedView !== "workforce";
+  document.querySelector(".topbar")?.classList.toggle("workforce-date-active", selectedView === "workforce");
   updateRegisterTabs();
   const navigationView = selectedView === "client-details" ? "clients" : selectedView;
   document.querySelectorAll("[data-sidebar-link]").forEach((link) => {
@@ -10252,7 +10291,8 @@ function bindActions(session) {
     const stageManagedStatuses = [
       "جاري التشطيب", "تم التشطيب", "جاري المكواة", "تم الكي",
       "جاري الطباعة", "تمت الطباعة", "جاري التكييس", "تم التكييس",
-      "جاري الفرز", "تم الفرز", "جاهز للتسليم"
+      "جاري الفرز", "تم الفرز", "جاهز للتسليم",
+      ...(order.workStages || []).filter(isCustomWorkStage).flatMap(workStageStatusLabels)
     ];
     if (!stageManagedStatuses.includes(select.value) && isFactoryOrderWorkflowManaged(order)) {
       window.factoryUI.toast("لا يمكن إرجاع موديل دخل مراحل التشغيل من هنا؛ استخدم أدوات سير العمل.", "error");
@@ -10314,6 +10354,31 @@ function bindActions(session) {
     form.elements[config.fields[0]].focus();
   }));
   const orderForm = document.querySelector("#model-form");
+  const customWorkStageOptions = orderForm.querySelector("[data-work-stage-options]");
+  const removeCustomWorkStageOptions = () => {
+    customWorkStageOptions.querySelectorAll("[data-custom-work-stage-option]").forEach((option) => option.remove());
+  };
+  const addCustomWorkStageOption = (stage, checked = true) => {
+    const option = document.createElement("div");
+    option.dataset.customWorkStageOption = "";
+    option.innerHTML = `<label><input type="checkbox" name="workStage" value="${escapeHtml(stage)}"${checked ? " checked" : ""}><span>${escapeHtml(stage)}</span></label><button type="button" class="work-stage-remove" data-remove-work-stage aria-label="حذف مرحلة ${escapeHtml(stage)}">×</button>`;
+    customWorkStageOptions.append(option);
+  };
+  const syncCustomStageStatusOptions = () => {
+    orderForm.elements.status.querySelectorAll("[data-custom-work-stage-status]").forEach((option) => option.remove());
+    const existingValues = new Set([...orderForm.elements.status.options].map((option) => option.value));
+    orderForm.querySelectorAll('[name="workStage"]:checked').forEach((input) => {
+      if (!isCustomWorkStage(input.value)) return;
+      workStageStatusLabels(input.value).forEach((status) => {
+        if (existingValues.has(status)) return;
+        const option = new Option(status, status);
+        option.dataset.workflowStatusOption = "";
+        option.dataset.customWorkStageStatus = "";
+        orderForm.elements.status.add(option);
+        existingValues.add(status);
+      });
+    });
+  };
   const setOrderQuantityEditingLocked = (locked) => {
     orderForm.elements.quantity.readOnly = locked;
     orderForm.elements.quantity.setAttribute("aria-readonly", String(locked));
@@ -10387,6 +10452,7 @@ function bindActions(session) {
   });
   orderForm.addEventListener("change", (event) => {
     if (event.target.matches('[name="workStage"]')) {
+      syncCustomStageStatusOptions();
       updateStagePricing(orderForm);
       updateOrderTotals();
     } else if (event.target.matches('[name="pricingMode"]')) {
@@ -10396,6 +10462,38 @@ function bindActions(session) {
       updateOrderConditionalFields();
     } else if (event.target.matches('[name="productionType"]')) {
       updateProductionPathFields();
+      updateOrderTotals();
+    }
+  });
+  orderForm.addEventListener("click", (event) => {
+    const addButton = event.target.closest("[data-add-work-stage]");
+    if (addButton) {
+      const input = orderForm.querySelector("[data-custom-work-stage]");
+      const stage = input.value.trim();
+      const validStage = /^[^\u0000-\u001f<>]{1,50}$/u.test(stage);
+      const reservedStageNames = [
+        ...WORK_STAGES.flatMap(([key, label]) => [key, label]),
+        "delivery", "التشطيب", "المكواة", "الكي", "الطباعة", "التكييس", "الفرز"
+      ];
+      const duplicate = [...orderForm.querySelectorAll('[name="workStage"]')]
+        .some((option) => option.value.toLocaleLowerCase() === stage.toLocaleLowerCase());
+      const reserved = reservedStageNames.some((name) => name.toLocaleLowerCase() === stage.toLocaleLowerCase());
+      if (!validStage || !stage || reserved || duplicate) {
+        window.factoryUI.toast("أدخل اسم مرحلة واضحًا لا يتجاوز 50 حرفًا وغير مكرر.", "error");
+        input.focus();
+        return;
+      }
+      addCustomWorkStageOption(stage);
+      syncCustomStageStatusOptions();
+      input.value = "";
+      updateStagePricing(orderForm);
+      updateOrderTotals();
+      return;
+    }
+    if (event.target.closest("[data-remove-work-stage]")) {
+      event.target.closest("[data-custom-work-stage-option]")?.remove();
+      syncCustomStageStatusOptions();
+      updateStagePricing(orderForm);
       updateOrderTotals();
     }
   });
@@ -10467,6 +10565,7 @@ function bindActions(session) {
     setOrderQuantityEditingLocked(false);
     removeWorkflowStatusOptions();
     orderForm.reset();
+    removeCustomWorkStageOptions();
     updateProductionPathFields();
     const cuttingEditor = orderForm.parentElement.querySelector("[data-order-cutting-editor]");
     cuttingEditor.hidden = true;
@@ -10496,6 +10595,7 @@ function bindActions(session) {
     resetModelImageSlots();
     removeWorkflowStatusOptions();
     orderForm.reset();
+    removeCustomWorkStageOptions();
     if (![...orderForm.elements.status.options].some((option) => option.value === currentOrder.status)) {
       const option = new Option(currentOrder.status, currentOrder.status);
       option.dataset.workflowStatusOption = "";
@@ -10519,6 +10619,9 @@ function bindActions(session) {
     orderForm.querySelectorAll('[name="workStage"]').forEach((input) => {
       input.checked = (currentOrder.workStages || []).includes(input.value);
     });
+    (currentOrder.workStages || []).filter(isCustomWorkStage)
+      .forEach((stage) => addCustomWorkStageOption(stage));
+    syncCustomStageStatusOptions();
     updateProductionPathFields();
     updateStagePricing(orderForm);
     orderForm.elements.quantity.value = currentOrder.quantity || "";
@@ -11147,7 +11250,7 @@ function bindActions(session) {
     const operationalExpenses = Number(formData.get("operationalExpenses") || 0);
     const modelName = String(formData.get("name")).trim();
     const customerId = String(formData.get("customerId"));
-    const initialReadyStage = INITIAL_READY_STAGE_BY_STATUS[requestedStatus];
+    const initialReadyStage = factoryOrderInitialStage(requestedStatus, workStages);
     const pricingMode = String(formData.get("pricingMode"));
     const stagePrices = JSON.parse(String(formData.get("stagePrices") || "{}"));
     const colors = String(formData.get("colors") || "").trim();

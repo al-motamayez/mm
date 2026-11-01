@@ -577,16 +577,19 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .cutting-story-card .form-actions { margin-top: 0; }
 .workforce-tabs { margin-bottom: 16px; }
 .workforce-panel { min-width: 0; }
-.workforce-date-toolbar { display:grid; grid-template-columns:auto minmax(240px, 1fr) auto; align-items:center; gap:12px; margin-bottom:12px; padding:12px 14px; border:1px solid var(--line); border-radius:12px; background:linear-gradient(135deg,#f7faf8,#fff); }
-.workforce-date-arrows { display:flex; gap:6px; align-items:center; }
-.workforce-date-display { text-align:center; min-width:0; }
-.workforce-date-display strong { display:block; color:var(--green-dark); font-size:15px; }
-.workforce-date-display small { display:block; margin-top:3px; color:var(--muted); direction:ltr; }
+.workforce-date-toolbar { display:inline-flex; flex:0 0 auto; align-items:center; gap:5px; padding:4px 6px; border:1px solid var(--line); border-radius:10px; background:#fff; }
+.workforce-date-arrow { display:grid; flex:0 0 28px; width:28px; height:28px; place-items:center; border:0; border-radius:7px; color:var(--green-dark); background:#f0f5f1; font-size:19px; line-height:1; }
+.workforce-date-arrow:hover { background:#e4efe8; }
+.workforce-date-display { min-width:100px; text-align:center; }
+.workforce-date-display strong { display:block; color:var(--green-dark); font-size:12px; line-height:1.35; }
+.workforce-date-display small { display:block; margin-top:2px; color:var(--muted); font-size:10px; line-height:1.35; }
+.workforce-date-active .topbar-leading { flex-wrap:wrap; }
+.workforce-date-active .date-label { display:none; }
 .workforce-alert { display:flex; align-items:center; gap:10px; margin:0 0 12px; padding:10px 12px; border-radius:10px; }
 .workforce-alert-warning { border:1px solid #e7c66a; background:#fff8dc; color:#654d0b; }
 .workforce-alert span { flex:1; }
 .workforce-rollover-modal { width:min(620px,92vw); }
-@media (max-width:700px) { .workforce-date-toolbar { grid-template-columns:1fr; } .workforce-date-arrows { justify-content:center; flex-wrap:wrap; } .workforce-alert { align-items:flex-start; flex-wrap:wrap; } }
+@media (max-width:700px) { .workforce-date-toolbar { gap:3px; padding:3px 4px; } .workforce-date-display { min-width:88px; } .workforce-alert { align-items:flex-start; flex-wrap:wrap; } }
 .workforce-month-picker { width: min(230px, 100%); margin: 0; }
 .workforce-matrix-scroll { max-height: min(72vh, 760px); overflow: auto; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
 .workforce-matrix { width: max-content; min-width: 100%; border-collapse: separate; border-spacing: 0; font-size: 11px; }
@@ -861,6 +864,12 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .work-stage-options { display: flex; flex-wrap: wrap; gap: 6px; }
 .work-stage-options label { display: inline-flex; align-items: center; gap: 5px; margin: 0; padding: 6px 9px; border: 1px solid var(--line); border-radius: 7px; background: #fff; font-size: 12px; }
 .work-stage-options input { width: 15px; min-height: auto !important; height: 15px; margin: 0; accent-color: var(--green); }
+.work-stage-options [data-custom-work-stage-option] { display: inline-flex; align-items: center; gap: 3px; padding: 2px 6px 2px 0; border: 1px solid var(--line); border-radius: 7px; background: #fff; }
+.work-stage-options [data-custom-work-stage-option] label { padding: 4px 2px 4px 8px; border: 0; background: transparent; }
+.work-stage-custom-entry { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-top: 9px; }
+.work-stage-custom-entry input { flex: 1 1 220px; min-height: 38px; }
+.work-stage-picker > small { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; }
+.work-stage-remove { margin-inline-start: 2px; padding: 0 3px; border: 0; background: transparent; color: #b42318; font-size: 18px; line-height: 1; cursor: pointer; }
 .stage-prices-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 7px; }
 .stage-price-row { display: grid; grid-template-columns: 1fr minmax(80px, 110px); align-items: center; gap: 7px; margin: 0 !important; padding: 6px 8px; border: 1px solid var(--line); border-radius: 7px; background: #fff; }
 .stage-price-row input { width: 100%; min-height: 34px !important; }
