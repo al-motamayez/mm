@@ -4070,7 +4070,7 @@ function adminView(data, accounts) {
         </div></section>
         <div class="form-actions"><button class="button button-primary" type="submit">حفظ الطلبية</button><button class="row-action" type="button" data-cancel-edit hidden>إلغاء التعديل</button><button class="row-action" type="button" data-close-order>إغلاق</button></div>
       </form><div data-order-cutting-editor hidden></div></section></div>
-      <div class="modal-backdrop" id="delivery-modal" hidden><section class="modal-card delivery-modal-card" role="dialog" aria-modal="true" aria-labelledby="delivery-modal-title"><button class="modal-close" type="button" data-close-delivery aria-label="إغلاق">×</button><h2 id="delivery-modal-title">تسجيل تسليم جديد</h2><p id="delivery-modal-description">أدخل كمية هذه الدفعة واسم مستلمها؛ ستُضاف إلى إجمالي ما تم تسليمه حتى الآن.</p><form id="delivery-form" class="modal-form"><input type="hidden" name="orderId"><input type="hidden" name="finalize" value=""><label for="delivery-settlement-choice" data-settlement-choice-field hidden>طريقة التسوية</label><select id="delivery-settlement-choice" name="settlementChoice" data-settlement-choice-field hidden></select><label for="delivery-mode" data-delivery-mode-field hidden>طريقة إدخال التسليم</label><select id="delivery-mode" name="deliveryMode" data-delivery-mode-field hidden><option value="total">إدخال الإجمالي فقط</option><option value="detailed">حسب اللون والمقاس</option></select><div id="delivery-allocation" data-delivery-allocation hidden></div><label for="delivery-quantity" id="delivery-quantity-label">كمية التسليم</label><input id="delivery-quantity" name="quantity" type="number" min="1" step="1" required><label for="delivery-recipient">اسم المستلم</label><input id="delivery-recipient" name="recipientName" required><div class="form-actions"><button class="button button-primary" type="submit">تسجيل التسليم</button><button class="row-action" type="button" data-close-delivery>إلغاء</button></div></form></section></div>
+      <div class="modal-backdrop" id="delivery-modal" hidden><section class="modal-card delivery-modal-card" role="dialog" aria-modal="true" aria-labelledby="delivery-modal-title"><button class="modal-close" type="button" data-close-delivery aria-label="إغلاق">×</button><h2 id="delivery-modal-title">تسجيل تسليم جديد</h2><p id="delivery-modal-description">أدخل كمية هذه الدفعة واسم مستلمها؛ ستُضاف إلى إجمالي ما تم تسليمه حتى الآن.</p><form id="delivery-form" class="modal-form"><input type="hidden" name="orderId"><input type="hidden" name="finalize" value=""><label for="delivery-order-select" data-delivery-order-field hidden>الطلبية الجاهزة</label><select id="delivery-order-select" name="orderSelector" data-delivery-order-field hidden required></select><label for="delivery-settlement-choice" data-settlement-choice-field hidden>طريقة التسوية</label><select id="delivery-settlement-choice" name="settlementChoice" data-settlement-choice-field hidden></select><label for="delivery-mode" data-delivery-mode-field hidden>طريقة إدخال التسليم</label><select id="delivery-mode" name="deliveryMode" data-delivery-mode-field hidden><option value="total">إدخال الإجمالي فقط</option><option value="detailed">حسب اللون والمقاس</option></select><div id="delivery-allocation" data-delivery-allocation hidden></div><label for="delivery-quantity" id="delivery-quantity-label">كمية التسليم</label><input id="delivery-quantity" name="quantity" type="number" min="1" step="1" required><label for="delivery-recipient">اسم المستلم</label><input id="delivery-recipient" name="recipientName" required><div class="form-actions"><button class="button button-primary" type="submit">تسجيل التسليم</button><button class="row-action" type="button" data-close-delivery>إلغاء</button></div></form></section></div>
     </section>
     ${factoryRegistersView(data, true, "cutting", false, true, true)}
     ${clientModelRequestsAdminView(data)}
@@ -4812,7 +4812,7 @@ function workerOrderDeliveryForm(order) {
       : order.status === "تم التسليم"
         ? "اكتمل تسليم الطلبية."
         : "لا توجد كمية متبقية قابلة للتسليم.";
-  return `<article class="worker-order-delivery-card">
+  return `<article class="worker-order-delivery-card" data-delivery-order-card="${escapeHtml(order.order_id)}" hidden>
     <header><div><h3>${escapeHtml(order.model_name || "موديل بدون اسم")}</h3><p>${escapeHtml(order.factory_model_code || order.model_number || "طلبية")}</p></div>${statusTag(order.status)}</header>
     ${order.has_unallocated_deliveries
       ? '<div class="worker-delivery-locked-note">تعذر احتساب المتبقي لكل لون ومقاس بسبب دفعة قديمة بلا توزيع تفصيلي.</div>'
@@ -4824,7 +4824,12 @@ function workerOrderDeliveryForm(order) {
 }
 
 function workerOrderDeliveryPortalView(data) {
-  const modelCards = (data.workerDeliveryModels || []).map(workerOrderDeliveryForm);
+  const readyModels = (data.workerDeliveryModels || []).filter((order) =>
+    canonicalFactoryOrderStatus(order.status) === "جاهز للتسليم");
+  const modelCards = readyModels.map(workerOrderDeliveryForm);
+  const modelOptions = readyModels.map((order) =>
+    `<option value="${escapeHtml(order.order_id)}">${escapeHtml(order.model_name || "موديل بدون اسم")} · ${escapeHtml(order.factory_model_code || order.model_number || "بدون كود")}</option>`
+  ).join("");
   const orderNameById = new Map((data.workerDeliveryModels || []).map((order) => [order.order_id, order.model_name]));
   const submissionRows = (data.workerOrderDeliveries || []).map((submission) => {
     const status = submission.status === "pending" ? "قيد مراجعة الإدارة"
@@ -4838,9 +4843,9 @@ function workerOrderDeliveryPortalView(data) {
   });
   return `<section id="worker-production" class="dashboard-section worker-production-section">
     ${panel("تسليم الطلبيات الجاهزة", modelCards.length
-      ? `<div class="worker-order-delivery-list">${modelCards.join("")}</div>`
+      ? `<label class="field worker-delivery-model-select"><span>اختر الموديل الجاهز للتسليم</span><select data-worker-delivery-model required><option value="">اختر الموديل</option>${modelOptions}</select></label><div class="worker-order-delivery-list">${modelCards.join("")}</div>`
       : '<div class="empty-state">لا توجد طلبيات جاهزة للتسليم مرتبطة بحسابك حالياً.</div>',
-    "تظهر الألوان والمقاسات والمتبقي فقط. أدخل أعداد هذه الدفعة ثم أرسلها للإدارة؛ لا تُضاف إلى سجل العميل إلا بعد اعتمادها.")}
+    "اختر طلبية جاهزة؛ ستظهر ألوانها ومقاساتها من سجل القص مع المستلم سابقاً والمتبقي فقط. أدخل أعداد هذه الدفعة ثم أرسلها للإدارة؛ لا تُضاف إلى سجل العميل إلا بعد اعتمادها.")}
     ${panel("سجل تسليماتي", submissionRows.length
       ? `<div class="worker-order-delivery-history-list">${submissionRows.join("")}</div>`
       : '<div class="empty-state">لا توجد دفعات تسليم مرسلة بعد.</div>')}
@@ -5013,20 +5018,16 @@ function workerProductionSubmissionForm(parentSubmission = null) {
 
 function authorizedProductionSubmissionView(data, session) {
   if (!session.canSubmitProduction || !["cutting", "sewing"].includes(session.role)) return "";
-  const submissionCards = data.productionSubmissions.map((submission) =>
+  const legacyRows = data.productionSubmissions.map((submission) =>
     `<article class="worker-submission-card">
       <header>${modelImageMarkup(submission.imageUrl, `صورة القطعة ${submission.model_name}`, "submission-image-preview")}<div><h3>${escapeHtml(submission.model_name)}${submission.model_number ? `<small class="worker-model-number">${escapeHtml(submission.model_number)}</small>` : ""}</h3><p>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(submission.quantity)} قطعة · ${formatDateTime(submission.created_at)}</p>${statusTag(submission.status === "pending" ? "قيد مراجعة الإدارة" : submission.status === "confirmed" ? "تم الاستلام النهائي" : "مرفوض")}</div></header>
       ${workerProductionColorMarkup(submission.colors)}
-      ${submission.parentSubmission ? `<p class="muted">تابع للتسليم: ${escapeHtml(submission.parentSubmission.model_name)} · ${formatDateTime(submission.parentSubmission.created_at)}</p>` : ""}
-      ${submission.status === "confirmed" ? "" : `<details><summary>إضافة تسليم تابع لهذا العمل</summary>${workerProductionSubmissionForm(submission)}</details>`}
     </article>`
   );
-  return `<section id="worker-production" class="dashboard-section worker-production-section">
-    ${panel("تسليم القصة / الأعداد", workerProductionSubmissionForm(), "اعرض الألوان والمقاسات وأدخل الأعداد الفعلية لكل لون ومقاس، ثم أرسل التسليم للإدارة للمراجعة.")}
-    ${panel("تسليماتي المرسلة", submissionCards.length
-      ? `<div class="worker-submission-list">${submissionCards.join("")}</div>`
-      : '<div class="empty-state">لا توجد تسليمات إنتاج مرسلة بعد.</div>')}
-  </section>`;
+  const legacyHistory = legacyRows.length
+    ? `<section class="dashboard-section worker-production-section">${panel("سجل التسليمات السابقة", `<div class="worker-submission-list">${legacyRows.join("")}</div>`)}</section>`
+    : "";
+  return `${workerOrderDeliveryPortalView(data)}${legacyHistory}`;
 }
 
 function workerView(data, session) {
@@ -9752,6 +9753,13 @@ function productionColorsFromForm(form) {
 
 function bindWorkerOrderDeliveryActions(session) {
   if (!session.canSubmitProduction) return;
+  const modelSelect = document.querySelector("[data-worker-delivery-model]");
+  const orderCards = [...document.querySelectorAll("[data-delivery-order-card]")];
+  modelSelect?.addEventListener("change", () => {
+    orderCards.forEach((card) => {
+      card.hidden = card.dataset.deliveryOrderCard !== modelSelect.value;
+    });
+  });
   document.querySelectorAll("[data-worker-order-delivery]").forEach((form) => {
     const card = form.closest(".worker-order-delivery-card");
     const countInputs = [...(card?.querySelectorAll("[data-order-delivery-count]") || [])];
@@ -11305,6 +11313,8 @@ function bindActions(session) {
   const deliveryRecipientInput = deliveryForm.elements.recipientName;
   const settlementChoice = deliveryForm.elements.settlementChoice;
   const settlementChoiceFields = deliveryForm.querySelectorAll("[data-settlement-choice-field]");
+  const deliveryOrderSelect = deliveryForm.elements.orderSelector;
+  const deliveryOrderFields = deliveryForm.querySelectorAll("[data-delivery-order-field]");
   const deliveryMode = deliveryForm.elements.deliveryMode;
   const deliveryModeFields = deliveryForm.querySelectorAll("[data-delivery-mode-field]");
   const deliveryAllocation = deliveryForm.querySelector("[data-delivery-allocation]");
@@ -11318,16 +11328,47 @@ function bindActions(session) {
     const hasUnallocated = factoryOrderHasUnallocatedDeliveries(order.id, order.deliveryHistory || []);
     const hasAllocation = factoryOrderOriginalDeliveryCells(order).size > 0;
     deliveryMode.options[1].disabled = hasUnallocated || !hasAllocation;
-    deliveryMode.value = "total";
+    const showAllocationByDefault = hasAllocation && !hasUnallocated;
+    deliveryMode.value = showAllocationByDefault ? "detailed" : "total";
     deliveryModeFields.forEach((field) => { field.hidden = false; });
     deliveryAllocation.innerHTML = adminDeliveryAllocationMarkup(order);
-    deliveryAllocation.hidden = true;
-    deliveryForm.elements.quantity.readOnly = false;
+    deliveryAllocation.hidden = !showAllocationByDefault;
+    deliveryForm.elements.quantity.readOnly = showAllocationByDefault;
+    if (showAllocationByDefault) updateDeliveryAllocationTotal();
     deliveryModalDescription.textContent = hasUnallocated
       ? "توجد دفعات سابقة بلا توزيع موثق؛ يمكنك تسجيل كمية إجمالية أو مراجعة تفاصيل الدفعات السابقة أولاً."
       : hasAllocation
         ? "يمكنك تسجيل إجمالي الدفعة مباشرة أو إدخالها حسب اللون والمقاس. الإجمالي فقط لن يوزّع على الألوان تلقائياً."
         : "لا يوجد توزيع قص موثق للطلبية؛ يتاح تسجيل الإجمالي فقط، ولن يوزّع تلقائياً على الألوان والمقاسات.";
+  };
+  const deliveryEligibleOrders = () => dashboardData.models.filter((order) =>
+    !order.archivedAt
+    && canonicalFactoryOrderStatus(effectiveFactoryOrderStatus(order).status) === "جاهز للتسليم"
+    && Number(order.remainingPieces ?? (Number(order.quantity || 0) - Number(order.deliveredPieces || 0))) > 0
+  );
+  const populateDeliveryOrderSelect = (selectedOrderId) => {
+    const orders = deliveryEligibleOrders();
+    deliveryOrderSelect.innerHTML = `<option value="">اختر طلبية جاهزة للتسليم</option>${orders.map((order) =>
+      `<option value="${escapeHtml(order.id)}">${escapeHtml(order.name || "موديل بدون اسم")} · ${escapeHtml(order.modelNumber || order.id)}</option>`
+    ).join("")}`;
+    deliveryOrderSelect.value = selectedOrderId || "";
+  };
+  const selectDeliveryOrder = (orderId) => {
+    const order = deliveryEligibleOrders().find((item) => item.id === orderId);
+    deliveryForm.elements.orderId.value = order?.id || "";
+    if (!order) {
+      deliveryAllocation.innerHTML = "";
+      deliveryAllocation.hidden = true;
+      deliveryModeFields.forEach((field) => { field.hidden = true; });
+      deliveryMode.value = "total";
+      deliveryForm.elements.quantity.readOnly = false;
+      deliveryForm.elements.quantity.value = "";
+      return;
+    }
+    deliveryForm.elements.quantity.min = "1";
+    deliveryForm.elements.quantity.max = String(Math.max(0, Number(order.remainingPieces ?? order.quantity)));
+    deliveryForm.elements.quantity.value = "";
+    configureDeliveryMode(order);
   };
   deliveryMode.addEventListener("change", () => {
     const detailed = deliveryMode.value === "detailed";
@@ -11376,6 +11417,8 @@ function bindActions(session) {
     const hasEarlierDeliveries = Boolean(order.deliveryHistory?.length || order.deliveredPieces > 0);
     deliveryForm.elements.orderId.value = order.id;
     deliveryForm.elements.finalize.value = "true";
+    deliveryOrderFields.forEach((field) => { field.hidden = true; });
+    deliveryOrderSelect.required = false;
     deliveryModeFields.forEach((field) => { field.hidden = true; });
     deliveryAllocation.hidden = true;
     deliveryForm.elements.quantity.min = hasEarlierDeliveries && order.remainingPieces === 0 ? "0" : "1";
@@ -11413,6 +11456,9 @@ function bindActions(session) {
     deliveryForm.elements.quantity.max = "";
     deliveryForm.elements.quantity.readOnly = false;
     settlementChoiceFields.forEach((field) => { field.hidden = true; });
+    deliveryOrderFields.forEach((field) => { field.hidden = true; });
+    deliveryOrderSelect.required = false;
+    deliveryOrderSelect.value = "";
     deliveryModeFields.forEach((field) => { field.hidden = true; });
     deliveryAllocation.hidden = true;
     deliveryAllocation.innerHTML = "";
@@ -11429,6 +11475,7 @@ function bindActions(session) {
     if (event.target === deliveryModal) closeDeliveryModal();
   });
   deliveryForm.elements.quantity.addEventListener("input", updateDeliveryRecipientRequirement);
+  deliveryOrderSelect.addEventListener("change", () => selectDeliveryOrder(deliveryOrderSelect.value));
   settlementChoice.addEventListener("change", () => {
     applySettlementChoice();
     updateDeliveryRecipientRequirement();
@@ -12128,7 +12175,14 @@ function bindActions(session) {
         return;
       }
       if (button.dataset.action === "record-delivery") {
-        deliveryForm.elements.orderId.value = order.id;
+        if (!deliveryEligibleOrders().some((item) => item.id === order.id)) {
+          window.factoryUI.toast("يمكن تسجيل التسليم من هذه الشاشة للطلبيات الجاهزة للتسليم فقط.", "error");
+          return;
+        }
+        populateDeliveryOrderSelect(order.id);
+        deliveryOrderFields.forEach((field) => { field.hidden = false; });
+        deliveryOrderSelect.required = true;
+        selectDeliveryOrder(order.id);
         deliveryForm.elements.finalize.value = "";
         settlementChoiceFields.forEach((field) => { field.hidden = true; });
         deliveryForm.elements.quantity.readOnly = false;
@@ -12136,12 +12190,10 @@ function bindActions(session) {
         deliveryForm.elements.quantity.min = "1";
         deliveryForm.elements.quantity.value = "";
         deliveryRecipientInput.required = true;
-        configureDeliveryMode(order);
         deliveryModalTitle.textContent = "تسجيل تسليم جديد";
         deliveryModalDescription.textContent = "أدخل كمية هذه الدفعة واسم مستلمها؛ ستُضاف إلى إجمالي ما تم تسليمه حتى الآن.";
         deliveryQuantityLabel.textContent = "كمية التسليم";
         deliverySubmitButton.textContent = "تسجيل التسليم";
-        configureDeliveryMode(order);
         deliveryModal.hidden = false;
         deliveryForm.elements.quantity.focus();
         return;
