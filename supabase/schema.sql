@@ -2835,11 +2835,13 @@ begin
 end;
 $$;
 
-create or replace function public.read_factory_client_fabric_stock()
+drop function if exists public.read_factory_client_fabric_stock();
+create function public.read_factory_client_fabric_stock()
 returns table (
   fabric_id uuid,
   fabric_name text,
   color_name text,
+  color_hex text,
   unit text,
   quantity_available numeric,
   received_at timestamptz,
@@ -2864,6 +2866,7 @@ begin
     select fabric.id,
            fabric.name,
            fabric.color_name,
+           fabric.color_hex,
            fabric.unit,
            fabric.quantity_available,
            fabric.received_at,

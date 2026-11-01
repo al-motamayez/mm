@@ -5266,10 +5266,19 @@ function clientView(data, session) {
   const fabricStockRows = [...new Map(data.clientFabricStock.map((item) => [item.fabric_id, item])).values()];
   const fabricMovementRows = data.clientFabricStock.filter((item) => item.movement_id);
   const fabricQuantity = (value) => new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(Number(value || 0));
+  const fabricStockCards = fabricStockRows.map((item) => {
+    const colorHex = /^#[0-9a-f]{6}$/i.test(String(item.color_hex || "")) ? item.color_hex : "";
+    const swatch = colorHex
+      ? `<span class="client-fabric-swatch" style="--fabric-color:${colorHex}" role="img" aria-label="درجة اللون ${escapeHtml(item.color_name || "غير مسمى")}"></span>`
+      : '<span class="client-fabric-swatch client-fabric-swatch-unset" aria-hidden="true"></span>';
+    return `<article class="client-fabric-stock-card">
+      <div class="client-fabric-stock-kind"><small>نوع القماش</small><strong>${escapeHtml(item.fabric_name || "قماش")}</strong></div>
+      <div class="client-fabric-stock-color">${swatch}<strong>${escapeHtml(item.color_name || "لون غير مسمى")}</strong></div>
+      <div class="client-fabric-stock-quantity"><small>الرصيد المتاح</small><strong>${fabricQuantity(item.quantity_available)} <span>${escapeHtml(item.unit || "")}</span></strong></div>
+    </article>`;
+  }).join("");
   const fabricSection = `<section id="fabrics" class="dashboard-section">${panel("القماشي · رصيد القماش المسجل باسمك", fabricStockRows.length
-    ? table(["نوع القماش","اللون","الرصيد المتاح","الوحدة","آخر تحديث"], fabricStockRows.map((item) =>
-      `<tr><td>${escapeHtml(item.fabric_name)}</td><td>${escapeHtml(item.color_name || "—")}</td><td>${fabricQuantity(item.quantity_available)}</td><td>${escapeHtml(item.unit)}</td><td>${formatDateTime(item.updated_at || item.received_at)}</td></tr>`
-    ))
+    ? `<div class="client-fabric-stock-list">${fabricStockCards}</div>`
     : '<div class="empty-state">لا يوجد رصيد قماش مسجل على ملفك حالياً.</div>')}
     ${panel("حركات القماش", fabricMovementRows.length
       ? table(["القماش / اللون","الحركة","الكمية","ملاحظات","التاريخ"], fabricMovementRows.map((item) =>
