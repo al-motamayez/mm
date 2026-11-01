@@ -515,6 +515,19 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .worker-submission-review h3, .worker-submission-review p { margin: 0 0 5px; }
 .worker-submission-review .color-picker { grid-column: 1 / -1; }
 .worker-production-allocation { grid-column: 1 / -1; min-width: 0; }
+.worker-order-delivery-list { display: grid; gap: 10px; }
+.worker-order-delivery-card, .worker-order-delivery-history { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+.worker-order-delivery-card > header, .worker-order-delivery-history > header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.worker-order-delivery-card h3, .worker-order-delivery-card p, .worker-order-delivery-history p { margin: 0; }
+.worker-order-delivery-card header p { color: var(--muted); font-size: 12px; }
+.worker-order-delivery-table { min-width: 560px; }
+.worker-order-delivery-form { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
+.worker-order-delivery-form .field { margin: 0; }
+.worker-order-delivery-form output { color: var(--green); font-size: 18px; font-weight: 800; }
+.worker-delivery-locked-note { margin: 0; padding: 9px 11px; border-radius: 8px; color: #684700; background: #fff3cf; font-size: 13px; }
+.worker-order-delivery-history-list { display: grid; gap: 8px; }
+.worker-order-delivery-history { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+.worker-order-delivery-history p, .worker-order-delivery-history .production-colors { grid-column: 1 / -1; }
 .submission-comparison { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: #f8faf8; }
 .submission-comparison > p { margin: 0; }
 .submission-comparison-totals { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }

@@ -242,7 +242,9 @@ function emptyDashboardData() {
     workforceSettings: [],
     workforceSettlements: [],
     productionSubmissions: [],
-    finishedGoods: []
+    finishedGoods: [],
+    workerOrderDeliveries: [],
+    workerDeliveryModels: []
   };
 }
 
@@ -361,7 +363,8 @@ async function readDashboardData(session) {
       .order("occurred_at", { ascending: false })
       .limit(100)
     : Promise.resolve({ data: [], error: null });
-  const productionSubmissionsPromise = session.role === "admin" || session.canSubmitProduction
+  const productionSubmissionsPromise = session.role === "admin"
+      || (session.canSubmitProduction && ["cutting", "sewing"].includes(session.role))
     ? supabaseClient.from("factory_worker_production_submissions")
       .select("id, worker_id, parent_submission_id, worker_name, job_title, model_name, model_number, quantity, colors, image_path, notes, status, created_at, updated_at")
       .order("created_at", { ascending: false })
@@ -373,8 +376,16 @@ async function readDashboardData(session) {
     : Promise.resolve({ data: [], error: null });
   const deliveriesPromise = ["admin", "client"].includes(session.role)
     ? supabaseClient.from("factory_deliveries")
-      .select("id, order_id, customer_id, quantity, price_per_piece, amount, recipient_name, expected_delivery_date, delivered_at, legacy_import")
+      .select("id, order_id, customer_id, quantity, price_per_piece, amount, recipient_name, expected_delivery_date, delivered_at, legacy_import, color_size_data")
       .order("delivered_at", { ascending: false })
+    : Promise.resolve({ data: [], error: null });
+  const workerOrderDeliveriesPromise = session.role === "admin" || session.canSubmitProduction
+    ? supabaseClient.from("factory_worker_order_deliveries")
+      .select("id, order_id, worker_id, worker_name, quantity, color_size_data, status, created_at, updated_at")
+      .order("created_at", { ascending: false })
+    : Promise.resolve({ data: [], error: null });
+  const workerDeliveryModelsPromise = session.canSubmitProduction
+    ? supabaseClient.rpc("read_factory_worker_delivery_models")
     : Promise.resolve({ data: [], error: null });
   const cashTransactionsPromise = session.role === "admin"
     ? supabaseClient.from("factory_cash_transactions")
@@ -431,12 +442,14 @@ async function readDashboardData(session) {
   const accountAdjustmentsPromise = ["admin", "client"].includes(session.role)
     ? readFlexibleRecords("account_adjustments")
     : Promise.resolve([]);
-  const [payments, leaves, tasks, settlements, deliveriesResult, cashTransactionsResult, accountExpensesResult, clientFabricStockResult, personalAttendance, personalAdvances, personalPayroll, workerAdvances, workerPayroll, workerExpenses, fabricsResult, fabricTransactionsResult, fabricReservationsResult, authEventsResult, productionSubmissionsResult, finishedGoodsResult, clientModelRequestsResult, cuttingStoriesResult, cuttingRequestsResult, modelCatalogResult, workforceRecordsResult, accountAdjustments] = await Promise.all([
+  const [payments, leaves, tasks, settlements, deliveriesResult, workerOrderDeliveriesResult, workerDeliveryModelsResult, cashTransactionsResult, accountExpensesResult, clientFabricStockResult, personalAttendance, personalAdvances, personalPayroll, workerAdvances, workerPayroll, workerExpenses, fabricsResult, fabricTransactionsResult, fabricReservationsResult, authEventsResult, productionSubmissionsResult, finishedGoodsResult, clientModelRequestsResult, cuttingStoriesResult, cuttingRequestsResult, modelCatalogResult, workforceRecordsResult, accountAdjustments] = await Promise.all([
     readFlexibleRecords("payments"),
     readFlexibleRecords("leaves"),
     readFlexibleRecords("tasks"),
     readFlexibleRecords("settlements"),
     deliveriesPromise,
+    workerOrderDeliveriesPromise,
+    workerDeliveryModelsPromise,
     cashTransactionsPromise,
     accountExpensesPromise,
     clientFabricStockPromise,
@@ -461,7 +474,16 @@ async function readDashboardData(session) {
   if (["42P01", "PGRST205"].includes(deliveriesResult.error?.code)) {
     throw new Error("سجل التسليمات غير موجود في قاعدة البيانات. شغّل supabase/schema.sql كاملًا في SQL Editor.");
   }
+  if (["42703", "PGRST204"].includes(deliveriesResult.error?.code)) {
+    throw new Error("حقل توزيع التسليم حسب اللون والمقاس غير موجود. شغّل أحدث نسخة من supabase/schema.sql في SQL Editor.");
+  }
   if (deliveriesResult.error) throw deliveriesResult.error;
+  if (["42P01", "PGRST205"].includes(workerOrderDeliveriesResult.error?.code)
+      || workerDeliveryModelsResult.error?.code === "PGRST202") {
+    throw new Error("نظام تسليم الطلبيات للعمال غير موجود. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+  }
+  if (workerOrderDeliveriesResult.error) throw workerOrderDeliveriesResult.error;
+  if (workerDeliveryModelsResult.error) throw workerDeliveryModelsResult.error;
   if (session.role === "client" && cashTransactionsResult.error?.code === "PGRST202") {
     throw new Error("دالة قراءة مصروفات حساب العميل غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
   }
@@ -514,6 +536,8 @@ async function readDashboardData(session) {
   data.accountAdjustments = accountAdjustments;
   data.settlements = settlements;
   data.deliveries = deliveriesResult.data || [];
+  data.workerOrderDeliveries = workerOrderDeliveriesResult.data || [];
+  data.workerDeliveryModels = workerDeliveryModelsResult.data || [];
   data.cashTransactions = cashTransactionsResult.data || [];
   data.accountExpenses = accountExpensesResult.data || [];
   data.clientFabricStock = clientFabricStockResult.data || [];
@@ -3629,13 +3653,13 @@ function workerPermissionsView(users) {
     <td>${worker.roleKey === "worker"
       ? `<select name="jobTitle" aria-label="المسمى الوظيفي">${WORKER_JOB_TITLES.map((title) => `<option value="${escapeHtml(title)}" ${title === (worker.jobTitle || "غير محدد") ? "selected" : ""}>${escapeHtml(title)}</option>`).join("")}</select>`
       : escapeHtml(worker.jobTitle || "—")}</td>
-    <td><label class="permission-toggle"><input name="canSubmitProduction" type="checkbox" ${worker.canSubmitProduction ? "checked" : ""}><span>إذن تسليم القصات / تسليمات الأعداد</span></label></td>
+    <td><label class="permission-toggle"><input name="canSubmitProduction" type="checkbox" ${worker.canSubmitProduction ? "checked" : ""}><span>إذن تسليم الإنتاج والطلبيات الجاهزة</span></label></td>
     <td><button class="row-action" type="button" data-save-worker-permissions="${escapeHtml(worker.id)}">حفظ الصلاحيات</button></td>
   </tr>`);
-  return panel("إعدادات المستخدمين والصلاحيات · تسليم القصات والأعداد", staff.length
-    ? table(["الاسم","اسم المستخدم","القسم","المسمى الوظيفي","إذن تسليم القصات / تسليمات الأعداد","إجراء"], rows)
+  return panel("إعدادات المستخدمين والصلاحيات · تسليم الإنتاج والطلبيات", staff.length
+    ? table(["الاسم","اسم المستخدم","القسم","المسمى الوظيفي","إذن تسليم الإنتاج والطلبيات الجاهزة","إجراء"], rows)
     : '<div class="empty-state">لا توجد حسابات عمال أو مشرفين مفعّلة لإدارة صلاحياتها.</div>',
-  "امنح هذا الإذن بشكل مستقل لأي عامل أو مشرف قص أو مشرف خياطة. تظهر شاشة التسليم للحسابات المفعّل لها الإذن فقط، وتبقى مراجعة التسليم واعتماده للإدارة.");
+  "امنح هذا الإذن بشكل مستقل لأي عامل أو مشرف قص أو مشرف خياطة. تظهر شاشة التسليم للحسابات المفعّل لها الإذن فقط؛ اعتماد دفعات الطلبيات وتحديث كشف العميل للإدارة.");
 }
 
 function findProductionSubmissionOrder(submission, orders) {
@@ -3721,6 +3745,118 @@ function productionSubmissionComparisonMarkup(story, colors, actualQuantity) {
   return `<div class="submission-comparison-totals"><div><span>العدد الأصلي بالقصة</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(originalQuantity)}</strong></div><div><span>العدد المستلم فعلياً</span><strong data-comparison-actual-total>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(actualQuantity || 0)}</strong></div><div><span>الفرق</span><strong data-comparison-difference>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(Number(actualQuantity || 0) - originalQuantity)}</strong></div></div>${detailTable}`;
 }
 
+function factoryOrderOriginalDeliveryCells(order) {
+  const cells = new Map();
+  const cuttingColors = parseColorPlyData(order.colorPlyData, order.colors);
+  const selectedSizes = orderedSizeEntries(parseSizeData(order.sizes));
+  if (cuttingColors.length && selectedSizes.length) {
+    cuttingColors.forEach((color) => selectedSizes.forEach((size) => {
+      const key = `${color.color.toUpperCase()}\u0000${size}`;
+      const existing = cells.get(key) || {
+        hex: color.color.toUpperCase(),
+        name: order.colorNames?.[color.color] || color.name || color.color,
+        size,
+        quantity: 0
+      };
+      existing.quantity += Number(color.plys || 0);
+      cells.set(key, existing);
+    }));
+    return cells;
+  }
+  (Array.isArray(order.colorSizeDistribution?.colors) ? order.colorSizeDistribution.colors : [])
+    .forEach((color) => Object.entries(color.sizes || {}).forEach(([size, quantity]) => {
+      const hex = String(color.color || color.hex || "").toUpperCase();
+      const key = `${hex}\u0000${size}`;
+      cells.set(key, {
+        hex,
+        name: color.name || order.colorNames?.[hex] || hex,
+        size,
+        quantity: Number(quantity || 0)
+      });
+    }));
+  return cells;
+}
+
+function factoryOrderDeliveryCells(colors) {
+  const cells = new Map();
+  (Array.isArray(colors) ? colors : []).forEach((color) => {
+    const hex = String(color.hex || color.color || "").toUpperCase();
+    Object.entries(color.sizes || {}).forEach(([size, quantity]) => {
+      const key = `${hex}\u0000${size}`;
+      const existing = cells.get(key) || {
+        hex,
+        name: color.name || hex,
+        size,
+        quantity: 0
+      };
+      existing.quantity += Number(quantity || 0);
+      cells.set(key, existing);
+    });
+  });
+  return cells;
+}
+
+function factoryOrderHasUnallocatedDeliveries(orderId, deliveries) {
+  return deliveries.some((delivery) => {
+    if (delivery.order_id !== orderId) return false;
+    const allocated = [...factoryOrderDeliveryCells(delivery.color_size_data).values()]
+      .reduce((sum, cell) => sum + cell.quantity, 0);
+    return delivery.legacy_import || allocated !== Number(delivery.quantity || 0);
+  });
+}
+
+function workerOrderDeliveryComparisonMarkup(submission, order, deliveries) {
+  if (!order) return '<p class="muted">تعذر العثور على الطلبية المرتبطة بالتسليم.</p>';
+  const original = factoryOrderOriginalDeliveryCells(order);
+  const previous = new Map();
+  const orderDeliveries = deliveries.filter((delivery) => delivery.order_id === order.id);
+  orderDeliveries
+    .forEach((delivery) => factoryOrderDeliveryCells(delivery.color_size_data).forEach((cell, key) => {
+      const current = previous.get(key) || { ...cell, quantity: 0 };
+      current.quantity += cell.quantity;
+      previous.set(key, current);
+    }));
+  const submitted = factoryOrderDeliveryCells(submission.color_size_data);
+  const keys = new Set([...original.keys(), ...previous.keys(), ...submitted.keys()]);
+  const totalOriginal = [...original.values()].reduce((sum, cell) => sum + cell.quantity, 0);
+  const totalPrevious = orderDeliveries.reduce((sum, delivery) => sum + Number(delivery.quantity || 0), 0);
+  const totalPreviouslyAllocated = [...previous.values()].reduce((sum, cell) => sum + cell.quantity, 0);
+  const totalUnallocated = Math.max(0, totalPrevious - totalPreviouslyAllocated);
+  const totalCurrent = Number(submission.quantity || 0);
+  const hasUnallocated = factoryOrderHasUnallocatedDeliveries(order.id, deliveries);
+  const detailRows = [...keys].map((key) => {
+    const cut = original.get(key);
+    const already = previous.get(key);
+    const current = submitted.get(key);
+    const row = cut || already || current;
+    const remaining = hasUnallocated
+      ? "يتطلب مراجعة"
+      : new Intl.NumberFormat("ar-EG-u-nu-latn").format(Math.max(0, (cut?.quantity || 0) - (already?.quantity || 0) - (current?.quantity || 0)));
+    return `<tr><td>${escapeHtml(row.name || row.hex || "—")}</td><td>${escapeHtml(row.size)}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(cut?.quantity || 0)}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(already?.quantity || 0)}</td><td><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(current?.quantity || 0)}</strong></td><td>${remaining}</td></tr>`;
+  });
+  const totals = `<div class="submission-comparison-totals"><div><span>الأصل المقصوص</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(totalOriginal)}</strong></div><div><span>إجمالي التسليم السابق</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(totalPrevious)}</strong></div><div><span>غير موزع لونياً/مقاسياً</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(totalUnallocated)}</strong></div><div><span>هذه الدفعة</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(totalCurrent)}</strong></div><div><span>المتبقي بعد الاعتماد</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(Math.max(0, totalOriginal - totalPrevious - totalCurrent))}</strong></div></div>`;
+  return `${hasUnallocated ? '<p class="worker-delivery-locked-note">توجد دفعة سابقة بلا توزيع موثوق؛ لا يمكن اعتماد دفعة جديدة قبل مراجعة الإدارة لها.</p>' : ""}${totals}${detailRows.length
+    ? table(["اللون","المقاس","الأصل المقصوص","المعتمد سابقاً","الدفعة الحالية","المتبقي"], detailRows)
+    : '<p class="muted">لا يتوفر توزيع ألوان ومقاسات للمقارنة.</p>'}`;
+}
+
+function workerOrderDeliveryReviewView(data) {
+  const pending = (data.workerOrderDeliveries || []).filter((submission) => submission.status === "pending");
+  const cards = pending.map((submission) => {
+    const order = data.models.find((item) => item.id === submission.order_id);
+    const hasUnallocated = factoryOrderHasUnallocatedDeliveries(submission.order_id, data.deliveries);
+    return `<article class="worker-submission-card worker-order-delivery-review">
+      <header><div><h3>${escapeHtml(order?.name || "طلبية")}</h3><p>${escapeHtml(order?.factoryModelCode || order?.modelNumber || "—")} · ${escapeHtml(submission.worker_name)} · ${formatDateTime(submission.created_at)}</p></div>${statusTag("قيد مراجعة الإدارة")}</header>
+      ${workerOrderDeliveryComparisonMarkup(submission, order, data.deliveries)}
+      <div class="form-actions"><button class="button button-primary" type="button" data-confirm-worker-order-delivery="${escapeHtml(submission.id)}" ${hasUnallocated ? "disabled" : ""}>تأكيد التسليم وتحديث الطلبية</button><button class="button button-danger" type="button" data-reject-worker-order-delivery="${escapeHtml(submission.id)}">رفض الدفعة</button></div>
+    </article>`;
+  });
+  return panel("دفعات تسليم الطلبيات من العمال", cards.length
+    ? `<div class="worker-submission-list">${cards.join("")}</div>`
+    : '<div class="empty-state">لا توجد دفعات تسليم من العمال بانتظار التأكيد.</div>',
+  "يعرض الجدول العدد المقصوص والمعتمد سابقاً والدفعة الحالية لكل لون ومقاس. عند التأكيد تُسجّل الدفعة رسمياً وتُحدّث الكمية المتبقية وحساب العميل.");
+}
+
 function workerProductionReviewView(data) {
   const pending = data.productionSubmissions.filter((item) => item.status === "pending");
   const rejected = data.productionSubmissions.filter((item) => item.status === "rejected");
@@ -3784,7 +3920,7 @@ function workerProductionReviewView(data) {
   const rejectedCards = rejected.map((item) =>
     `<article class="worker-submission-card"><header>${modelImageMarkup(item.imageUrl, `صورة القطعة ${item.model_name}`, "submission-image-preview")}<div><h3>${escapeHtml(item.model_name)}</h3><p>${escapeHtml(item.worker_name)} · ${formatDateTime(item.created_at)}</p>${item.parentSubmission ? '<span class="submission-parent-note">تسليم تابع للتسليم السابق</span>' : ""}${statusTag("مرفوض")}</div></header><div class="worker-submission-actions"><button class="button button-secondary" type="button" data-delete-production-submission="${escapeHtml(item.id)}">حذف الطلب</button></div></article>`
   );
-  return `${panel("تسليمات العامل الواردة للمراجعة", cards.length
+  return `${workerOrderDeliveryReviewView(data)}${panel("تسليمات العامل الواردة للمراجعة", cards.length
     ? `<div class="worker-submission-list">${cards.join("")}</div>`
     : '<div class="empty-state">لا توجد تسليمات إنتاج بانتظار مراجعة الإدارة.</div>',
   "تظهر هنا تسليمات العمال الجديدة والتابعة. راجع الصورة والأعداد، ثم اعتمد التسليم أو ارفضه.")}${panel("التسليمات المرفوضة", rejectedCards.length ? `<div class="worker-submission-list">${rejectedCards.join("")}</div>` : '<div class="empty-state">لا توجد تسليمات مرفوضة.</div>')}${panel("سجل الإنتاج المستلم نهائياً", table(["الموديل","العميل","الكمية","الألوان","الصورة","العامل","تاريخ الاستلام"], confirmedRows))}`;
@@ -4592,6 +4728,66 @@ function workerProductionColorMarkup(colors) {
     : "—";
 }
 
+function workerOrderDeliveryRowsMarkup(balances, includeInputs = false) {
+  const rows = (Array.isArray(balances) ? balances : []).flatMap((color) =>
+    (Array.isArray(color.sizes) ? color.sizes : []).map((size) => {
+      const remaining = Number(size.remaining || 0);
+      return `<tr><td><span class="model-color-chip"><span class="color-breakdown-swatch" style="--swatch-color:${escapeHtml(color.hex)}"></span><strong>${escapeHtml(color.name || color.hex)}</strong></span></td><td>${escapeHtml(size.size)}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(Number(size.delivered || 0))}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(remaining)}</td>${includeInputs ? `<td><input type="number" min="0" max="${remaining}" step="1" value="0" data-order-delivery-count data-color="${escapeHtml(color.hex)}" data-color-name="${escapeHtml(color.name || "")}" data-size="${escapeHtml(size.size)}" aria-label="تسليم ${escapeHtml(color.name || color.hex)} مقاس ${escapeHtml(size.size)}" ${remaining ? "" : "disabled"}></td>` : ""}</tr>`;
+    })
+  );
+  const headers = ["اللون","المقاس","المسلّم سابقاً","المتبقي", ...(includeInputs ? ["تسليم الآن"] : [])];
+  return rows.length
+    ? table(headers, rows, "worker-order-delivery-table")
+    : '<p class="muted">لا توجد مقاسات وألوان مسجلة لهذه الطلبية.</p>';
+}
+
+function workerOrderDeliveryForm(order) {
+  const balances = Array.isArray(order.delivery_balances) ? order.delivery_balances : [];
+  const availableCount = balances.reduce((sum, color) =>
+    sum + (Array.isArray(color.sizes) ? color.sizes.reduce((subtotal, size) => subtotal + Number(size.remaining || 0), 0) : 0), 0);
+  const locked = !order.can_submit || order.has_pending_submission || order.has_unallocated_deliveries || availableCount < 1;
+  const lockMessage = order.has_unallocated_deliveries
+    ? "توجد دفعة سابقة لم تُسجل بتوزيع المقاسات والألوان؛ يلزم أن تراجعها الإدارة قبل متابعة التسليم التفصيلي."
+    : order.has_pending_submission
+      ? "يوجد تسليم بانتظار مراجعة الإدارة لهذه الطلبية."
+      : order.status === "تم التسليم"
+        ? "اكتمل تسليم الطلبية."
+        : "لا توجد كمية متبقية قابلة للتسليم.";
+  return `<article class="worker-order-delivery-card">
+    <header><div><h3>${escapeHtml(order.model_name || "موديل بدون اسم")}</h3><p>${escapeHtml(order.factory_model_code || order.model_number || "طلبية")}</p></div>${statusTag(order.status)}</header>
+    ${order.has_unallocated_deliveries
+      ? '<div class="worker-delivery-locked-note">تعذر احتساب المتبقي لكل لون ومقاس بسبب دفعة قديمة بلا توزيع تفصيلي.</div>'
+      : workerOrderDeliveryRowsMarkup(balances, !locked)}
+    ${locked
+      ? `<p class="worker-delivery-locked-note">${escapeHtml(lockMessage)}</p>`
+      : `<form class="worker-order-delivery-form" data-worker-order-delivery="${escapeHtml(order.order_id)}"><label class="field"><span>إجمالي التسليم لهذه الدفعة</span><output data-order-delivery-total>0</output></label><div class="form-actions"><button class="button button-primary" type="submit">إرسال للإدارة للتأكيد</button></div></form>`}
+  </article>`;
+}
+
+function workerOrderDeliveryPortalView(data) {
+  const modelCards = (data.workerDeliveryModels || []).map(workerOrderDeliveryForm);
+  const orderNameById = new Map((data.workerDeliveryModels || []).map((order) => [order.order_id, order.model_name]));
+  const submissionRows = (data.workerOrderDeliveries || []).map((submission) => {
+    const status = submission.status === "pending" ? "قيد مراجعة الإدارة"
+      : submission.status === "confirmed" ? "تم تأكيد التسليم"
+        : "مرفوض";
+    return `<article class="worker-order-delivery-history">
+      <header><strong>${escapeHtml(orderNameById.get(submission.order_id) || "طلبية")}</strong>${statusTag(status)}</header>
+      <p>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(submission.quantity)} قطعة · ${formatDateTime(submission.created_at)}</p>
+      ${workerProductionColorMarkup(submission.color_size_data)}
+    </article>`;
+  });
+  return `<section id="worker-production" class="dashboard-section worker-production-section">
+    ${panel("تسليم الطلبيات الجاهزة", modelCards.length
+      ? `<div class="worker-order-delivery-list">${modelCards.join("")}</div>`
+      : '<div class="empty-state">لا توجد طلبيات جاهزة للتسليم مرتبطة بحسابك حالياً.</div>',
+    "تظهر الألوان والمقاسات والمتبقي فقط. أدخل أعداد هذه الدفعة ثم أرسلها للإدارة؛ لا تُضاف إلى سجل العميل إلا بعد اعتمادها.")}
+    ${panel("سجل تسليماتي", submissionRows.length
+      ? `<div class="worker-order-delivery-history-list">${submissionRows.join("")}</div>`
+      : '<div class="empty-state">لا توجد دفعات تسليم مرسلة بعد.</div>')}
+  </section>`;
+}
+
 function workerProductionAllocationGridMarkup(colors, sizeData, existingColors = []) {
   const selectedSizes = Object.keys(sizeData?.counts || {});
   if (!colors.length || !selectedSizes.length) {
@@ -4701,7 +4897,7 @@ function renderWorkerProductionAllocation(form) {
 
 function bindWorkerProductionAllocation(form) {
   renderWorkerProductionAllocation(form);
-  form.addEventListener("input", (event) => {
+  card?.addEventListener("input", (event) => {
     if (event.target.matches("[data-worker-production-count]")) {
       if (!workerProductionCountsAreValid(form)) {
         event.target.setCustomValidity("أدخل عدداً صحيحاً من صفر إلى 2,147,483,647.");
@@ -4822,14 +5018,6 @@ function workerView(data, session) {
   const datedRows = (records, renderColumns) => records.map((record) =>
     `<tr>${renderColumns(record).map((value) => `<td>${escapeHtml(value)}</td>`).join("")}<td>${formatDateTime(record._createdAt || record.created_at || record.date)}</td></tr>`
   );
-  const productionCards = data.productionSubmissions.map((submission) =>
-    `<article class="worker-submission-card">
-      <header>${modelImageMarkup(submission.imageUrl, `صورة القطعة ${submission.model_name}`, "submission-image-preview")}<div><h3>${escapeHtml(submission.model_name)}${submission.model_number ? `<small class="worker-model-number">${escapeHtml(submission.model_number)}</small>` : ""}</h3><p>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(submission.quantity)} قطعة · ${formatDateTime(submission.created_at)}</p><p>${statusTag(submission.status === "pending" ? "قيد مراجعة الإدارة" : submission.status === "confirmed" ? "تم الاستلام النهائي" : "مرفوض")}</p>${submission.parent_submission_id ? '<span class="submission-parent-note">تسليم تابع للتسليم السابق</span>' : ""}</div></header>
-      ${workerProductionColorMarkup(submission.colors)}
-      ${submission.parentSubmission ? `<p class="muted">تابع للتسليم: ${escapeHtml(submission.parentSubmission.model_name)} · ${formatDateTime(submission.parentSubmission.created_at)}</p>` : ""}
-      <details><summary>إضافة تسليم تابع لهذا العمل</summary>${workerProductionSubmissionForm(submission)}</details>
-    </article>`
-  );
   const personalAccount = `<section id="personal-account" class="dashboard-section">
     <header class="worker-account-heading"><div><p class="eyebrow">حساب العامل</p><h2>مرحباً، ${escapeHtml(workerProfile.employeeName || session.fullName)}</h2><p>${escapeHtml(workerProfile.jobTitle || session.jobTitle || "العامل")} · الاسم المسجل شخصياً: ${escapeHtml(session.registrationName || session.fullName)} · هاتف التسجيل: ${escapeHtml(session.registrationPhone || session.phone || "غير مسجل")} · ملخص الرواتب والحضور للشهر الحالي</p></div><span class="worker-account-month">${escapeHtml(workerMonth)}</span></header>
     <div class="stats-grid worker-finance-stats">
@@ -4876,7 +5064,7 @@ function workerView(data, session) {
       : '<div class="empty-state">لا توجد سجلات مرتب مسجلة لحسابك.</div>')}
   </section>`;
   const production = session.canSubmitProduction
-    ? `<section id="worker-production" class="dashboard-section worker-production-section">${panel("تسليم طلبية / تسليم أعداد", workerProductionSubmissionForm(), "أدخل اسم ورقم الموديل، وحدد المقاسات والأعداد لكل لون، وأرفق صورة الموديل.")}${panel("تسليماتي المرسلة", productionCards.length ? `<div class="worker-submission-list">${productionCards.join("")}</div>` : '<div class="empty-state">لا توجد تسليمات إنتاج مرسلة بعد.</div>')}</section>`
+    ? workerOrderDeliveryPortalView(data)
     : "";
   return `<section id="dashboard" class="dashboard-section"><div class="stats-grid">${stat("المهام المسندة إليّ", tasks.length, "حسب حساب العامل")}${stat("قيد التنفيذ", tasks.filter((item) => item.status === "قيد التنفيذ").length)}${stat("مهام جديدة", tasks.filter((item) => item.status === "جديدة").length)}${session.jobTitle ? stat("المسمى الوظيفي", escapeHtml(session.jobTitle)) : ""}</div>${panel("مهامي", table(["المهمة","الموديل","الكمية","موعد التسليم","الحالة"], tasks.map((item) => `<tr><td>${escapeHtml(item.task)}</td><td>${escapeHtml(item.model)}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.quantity)}</td><td>${escapeHtml(item.due)}</td><td>${statusTag(item.status)}</td></tr>`)))}</section>${personalAccount}${production}`;
 }
@@ -7586,6 +7774,9 @@ function subscribeToFactoryUpdates(session) {
         void revalidateSessionAfterAccountChange(session);
       }
     });
+  if (session.role === "admin" || session.canSubmitProduction) {
+    channel = channel.on("postgres_changes", { event: "*", schema: "public", table: "factory_worker_order_deliveries" }, (payload) => scheduleRealtimeRefresh(session, "تسليمات الطلبيات", payload));
+  }
   if (["admin", "client"].includes(session.role)) {
     channel = channel
       .on("postgres_changes", { event: "*", schema: "public", table: "factory_finished_goods" }, (payload) => scheduleRealtimeRefresh(session, "مخزون الإنتاج المستلم", payload))
@@ -9500,6 +9691,73 @@ function productionColorsFromForm(form) {
   return workerProductionColorsFromForm(form);
 }
 
+function bindWorkerOrderDeliveryActions(session) {
+  if (!session.canSubmitProduction) return;
+  document.querySelectorAll("[data-worker-order-delivery]").forEach((form) => {
+    const card = form.closest(".worker-order-delivery-card");
+    const countInputs = [...(card?.querySelectorAll("[data-order-delivery-count]") || [])];
+    const updateTotal = () => {
+      const total = countInputs.reduce((sum, input) => sum + Number(input.value || 0), 0);
+      const output = form.querySelector("[data-order-delivery-total]");
+      if (output) output.textContent = new Intl.NumberFormat("ar-EG-u-nu-latn").format(total);
+    };
+    card?.addEventListener("input", (event) => {
+      if (!event.target.matches("[data-order-delivery-count]")) return;
+      const max = Number(event.target.max);
+      const value = Number(event.target.value || 0);
+      event.target.setCustomValidity(Number.isSafeInteger(value) && value >= 0 && value <= max
+        ? ""
+        : `الحد المتاح لهذا اللون والمقاس هو ${max}.`);
+      updateTotal();
+    });
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const total = countInputs.reduce((sum, input) => sum + Number(input.value || 0), 0);
+      if (!Number.isSafeInteger(total) || total < 1 || total > 2147483647
+        || countInputs.some((input) => !Number.isSafeInteger(Number(input.value || 0))
+          || Number(input.value || 0) < 0 || Number(input.value || 0) > Number(input.max))) {
+        window.factoryUI.toast("أدخل كمية موجبة لا تتجاوز المتبقي لكل لون ومقاس.", "error");
+        return;
+      }
+      const colorsByHex = new Map();
+      countInputs.forEach((input) => {
+        const quantity = Number(input.value || 0);
+        if (!quantity) return;
+        const hex = input.dataset.color.toUpperCase();
+        const entry = colorsByHex.get(hex) || {
+          hex,
+          name: input.dataset.colorName || "",
+          sizes: {}
+        };
+        entry.sizes[input.dataset.size] = (entry.sizes[input.dataset.size] || 0) + quantity;
+        colorsByHex.set(hex, entry);
+      });
+      if (!await window.factoryUI.confirmAction({
+        title: "إرسال دفعة التسليم",
+        message: `سيتم إرسال ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(total)} قطعة إلى الإدارة للمراجعة. لن تُضاف إلى كشف العميل قبل الاعتماد.`,
+        confirmLabel: "إرسال للمراجعة"
+      })) return;
+      const button = form.querySelector('[type="submit"]');
+      button.disabled = true;
+      try {
+        const { error } = await supabaseClient.rpc("submit_factory_worker_order_delivery", {
+          requested_order_id: form.dataset.workerOrderDelivery,
+          requested_quantity: total,
+          requested_colors: [...colorsByHex.values()]
+        });
+        if (error?.code === "PGRST202") throw new Error("دالة إرسال تسليم العامل غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+        if (error) throw error;
+        await refreshDashboard(session);
+        window.factoryUI.toast("تم إرسال دفعة التسليم إلى الإدارة للتأكيد.");
+      } catch (error) {
+        reportDashboardFailure(session, "تعذر إرسال دفعة التسليم", error);
+      } finally {
+        if (button.isConnected) button.disabled = false;
+      }
+    });
+  });
+}
+
 function bindWorkerProductionActions(session) {
   if (!session.canSubmitProduction) return;
   document.querySelectorAll("[data-worker-production-form]").forEach((form) => {
@@ -9599,6 +9857,52 @@ function bindWorkerProductionActions(session) {
 }
 
 function bindWorkerProductionReview(session) {
+  document.querySelectorAll("[data-confirm-worker-order-delivery]").forEach((button) => button.addEventListener("click", async () => {
+    const submission = dashboardData.workerOrderDeliveries.find((item) => item.id === button.dataset.confirmWorkerOrderDelivery);
+    if (!submission || submission.status !== "pending") {
+      window.factoryUI.toast("لم تعد دفعة التسليم بانتظار التأكيد.", "error");
+      return;
+    }
+    if (!await window.factoryUI.confirmAction({
+      title: "تأكيد دفعة التسليم",
+      message: `سيُسجل ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(submission.quantity)} قطعة رسمياً على الطلبية، وسيُحدّث إجمالي التسليم وكشف حساب العميل.`,
+      confirmLabel: "تأكيد وتحديث الحساب"
+    })) return;
+    button.disabled = true;
+    try {
+      const { error } = await supabaseClient.rpc("confirm_factory_worker_order_delivery", {
+        requested_submission_id: submission.id
+      });
+      if (error?.code === "PGRST202") throw new Error("دالة اعتماد تسليم العامل غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+      if (error) throw error;
+      await refreshDashboard(session);
+      window.factoryUI.toast("تم اعتماد الدفعة وتحديث الطلبية وكشف حساب العميل.");
+    } catch (error) {
+      if (button.isConnected) button.disabled = false;
+      reportDashboardFailure(session, "تعذر اعتماد دفعة التسليم", error);
+    }
+  }));
+  document.querySelectorAll("[data-reject-worker-order-delivery]").forEach((button) => button.addEventListener("click", async () => {
+    const submissionId = button.dataset.rejectWorkerOrderDelivery;
+    if (!submissionId || !await window.factoryUI.confirmAction({
+      title: "رفض دفعة التسليم",
+      message: "لن تُسجل هذه الكمية على الطلبية أو كشف حساب العميل، ويمكن للعامل إرسال دفعة صحيحة لاحقاً.",
+      confirmLabel: "رفض الدفعة"
+    })) return;
+    button.disabled = true;
+    try {
+      const { error } = await supabaseClient.rpc("reject_factory_worker_order_delivery", {
+        requested_submission_id: submissionId
+      });
+      if (error?.code === "PGRST202") throw new Error("دالة رفض تسليم العامل غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+      if (error) throw error;
+      await refreshDashboard(session);
+      window.factoryUI.toast("تم رفض دفعة التسليم.");
+    } catch (error) {
+      if (button.isConnected) button.disabled = false;
+      reportDashboardFailure(session, "تعذر رفض دفعة التسليم", error);
+    }
+  }));
   document.querySelectorAll("[data-worker-submission]").forEach((form) => {
     bindPickers(form);
     bindWorkerProductionAllocation(form);
@@ -9999,6 +10303,7 @@ function bindActions(session) {
   bindFabricEntryRows();
   bindIncomingFabricActions(session);
   bindCustomColorPickers();
+  bindWorkerOrderDeliveryActions(session);
   if (session.role === "client") bindClientModelRequestActions(session);
   if (session.role === "cutting") {
     bindPickers(document.querySelector("#app"));

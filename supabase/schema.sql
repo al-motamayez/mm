@@ -3064,7 +3064,8 @@ create table if not exists public.factory_deliveries (
 
 alter table public.factory_deliveries
   add column if not exists recipient_name text not null default '',
-  add column if not exists expected_delivery_date date;
+  add column if not exists expected_delivery_date date,
+  add column if not exists color_size_data jsonb not null default '[]'::jsonb;
 
 alter table public.users
   add column if not exists job_title text not null default 'عامل إنتاج',
@@ -3204,6 +3205,489 @@ create index if not exists factory_worker_production_submissions_status_created_
   on public.factory_worker_production_submissions (status, created_at desc);
 create index if not exists factory_finished_goods_customer_confirmed_idx
   on public.factory_finished_goods (customer_id, confirmed_at desc);
+
+create table if not exists public.factory_worker_order_deliveries (
+  id uuid primary key default gen_random_uuid(),
+  order_id uuid not null references public.orders (id) on delete restrict,
+  worker_id uuid references auth.users (id) on delete set null,
+  worker_name text not null,
+  quantity integer not null check (quantity > 0),
+  color_size_data jsonb not null check (public.factory_production_colors_match_quantity(color_size_data, quantity)),
+  status text not null default 'pending' check (status in ('pending', 'confirmed', 'rejected')),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table public.factory_worker_order_deliveries
+  add column if not exists worker_id uuid references auth.users (id) on delete set null,
+  add column if not exists worker_name text not null default '',
+  add column if not exists color_size_data jsonb not null default '[]'::jsonb,
+  add column if not exists status text not null default 'pending',
+  add column if not exists updated_at timestamptz not null default now();
+
+create unique index if not exists factory_worker_order_deliveries_one_pending_idx
+  on public.factory_worker_order_deliveries (order_id)
+  where status = 'pending';
+create index if not exists factory_worker_order_deliveries_worker_created_idx
+  on public.factory_worker_order_deliveries (worker_id, created_at desc);
+create index if not exists factory_worker_order_deliveries_order_created_idx
+  on public.factory_worker_order_deliveries (order_id, created_at desc);
+
+create or replace function public.factory_order_original_delivery_cells(requested_order_id uuid)
+returns table (color_hex text, color_name text, size_name text, original_quantity integer)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  with source_order as (
+    select factory_order.id,
+           factory_order.color_size_distribution,
+           cutting_stage.color_ply_data
+    from public.orders as factory_order
+    left join lateral (
+      select stage.color_ply_data
+      from public.production_stages as stage
+      where stage.order_id = factory_order.id
+        and stage.stage_name = 'cutting'
+      order by stage.updated_at desc
+      limit 1
+    ) as cutting_stage on true
+    where factory_order.id = requested_order_id
+  ),
+  cutting_sizes as (
+    select source_order.id,
+           case size_entry.size when 'SX' then 'XS' else size_entry.size end as size_name,
+           count(*)::integer as occurrences
+    from source_order
+    cross join lateral jsonb_array_elements_text(
+      case
+        when jsonb_typeof(source_order.color_ply_data -> 'sizes') = 'array'
+          then source_order.color_ply_data -> 'sizes'
+        else '[]'::jsonb
+      end
+    ) as size_entry(size)
+    group by source_order.id, case size_entry.size when 'SX' then 'XS' else size_entry.size end
+  ),
+  cutting_cells as (
+    select source_order.id,
+           upper(trim(color_entry.value ->> 'color')) as color_hex,
+           coalesce(nullif(trim(color_entry.value ->> 'name'), ''), upper(trim(color_entry.value ->> 'color'))) as color_name,
+           cutting_sizes.size_name,
+           (
+             case
+               when coalesce(color_entry.value ->> 'plys', '') ~ '^[0-9]+$'
+                    and length(color_entry.value ->> 'plys') <= 10
+                    and (color_entry.value ->> 'plys')::numeric * cutting_sizes.occurrences <= 2147483647
+                 then ((color_entry.value ->> 'plys')::numeric * cutting_sizes.occurrences)::integer
+               else 0
+             end
+           )::integer as original_quantity
+    from source_order
+    cross join lateral jsonb_array_elements(
+      case
+        when jsonb_typeof(source_order.color_ply_data -> 'colors') = 'array'
+          then source_order.color_ply_data -> 'colors'
+        else '[]'::jsonb
+      end
+    ) as color_entry(value)
+    join cutting_sizes on cutting_sizes.id = source_order.id
+    where upper(trim(coalesce(color_entry.value ->> 'color', ''))) ~ '^#[0-9A-F]{6}$'
+  ),
+  fallback_cells as (
+    select source_order.id,
+           upper(trim(coalesce(color_entry.value ->> 'color', color_entry.value ->> 'hex'))) as color_hex,
+           coalesce(nullif(trim(color_entry.value ->> 'name'), ''),
+             upper(trim(coalesce(color_entry.value ->> 'color', color_entry.value ->> 'hex')))) as color_name,
+           case size_entry.key when 'SX' then 'XS' else size_entry.key end as size_name,
+           case
+             when size_entry.value #>> '{}' ~ '^[0-9]+$'
+                  and length(size_entry.value #>> '{}') <= 10
+                  and (size_entry.value #>> '{}')::numeric <= 2147483647
+               then (size_entry.value #>> '{}')::integer
+             else 0
+           end as original_quantity
+    from source_order
+    cross join lateral jsonb_array_elements(
+      case
+        when jsonb_typeof(source_order.color_size_distribution -> 'colors') = 'array'
+          then source_order.color_size_distribution -> 'colors'
+        else '[]'::jsonb
+      end
+    ) as color_entry(value)
+    cross join lateral jsonb_each(
+      case
+        when jsonb_typeof(color_entry.value -> 'sizes') = 'object'
+          then color_entry.value -> 'sizes'
+        else '{}'::jsonb
+      end
+    ) as size_entry(key, value)
+    where upper(trim(coalesce(color_entry.value ->> 'color', color_entry.value ->> 'hex', ''))) ~ '^#[0-9A-F]{6}$'
+  ),
+  selected_cells as (
+    select cutting_cells.color_hex, cutting_cells.color_name, cutting_cells.size_name, cutting_cells.original_quantity
+    from cutting_cells
+    where cutting_cells.original_quantity > 0
+    union all
+    select fallback_cells.color_hex, fallback_cells.color_name, fallback_cells.size_name, fallback_cells.original_quantity
+    from fallback_cells
+    where fallback_cells.original_quantity > 0
+      and not exists (select 1 from cutting_cells where cutting_cells.original_quantity > 0)
+  )
+  select selected_cells.color_hex,
+         min(selected_cells.color_name),
+         selected_cells.size_name,
+         sum(selected_cells.original_quantity)::integer
+  from selected_cells
+  group by selected_cells.color_hex, selected_cells.size_name;
+$$;
+
+create or replace function public.factory_order_worker_delivery_is_valid(
+  requested_order_id uuid,
+  requested_quantity integer,
+  requested_colors jsonb
+)
+returns boolean
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  current_order public.orders%rowtype;
+  requested_cell record;
+  original_cell_quantity integer;
+  previously_delivered_quantity numeric;
+begin
+  if requested_order_id is null
+     or requested_quantity is null
+     or requested_quantity < 1
+     or not public.factory_production_colors_match_quantity(requested_colors, requested_quantity) then
+    return false;
+  end if;
+
+  select *
+    into current_order
+  from public.orders
+  where id = requested_order_id;
+  if not found
+     or current_order.status <> 'جاهز للتسليم'
+     or current_order.archived_at is not null
+     or current_order.workflow_archived_at is not null
+     or current_order.customer_id is null
+     or current_order.total_pieces <= current_order.delivered_pieces
+     or requested_quantity > current_order.total_pieces - current_order.delivered_pieces then
+    return false;
+  end if;
+
+  if exists (
+    select 1
+    from public.factory_deliveries as delivery
+    where delivery.order_id = requested_order_id
+      and (
+        delivery.legacy_import
+        or not public.factory_production_colors_match_quantity(delivery.color_size_data, delivery.quantity)
+      )
+  ) then
+    return false;
+  end if;
+
+  for requested_cell in
+    select upper(color_entry.value ->> 'hex') as color_hex,
+           case size_entry.key when 'SX' then 'XS' else size_entry.key end as size_name,
+           sum((size_entry.value #>> '{}')::integer)::integer as quantity
+    from jsonb_array_elements(requested_colors) as color_entry(value)
+    cross join lateral jsonb_each(color_entry.value -> 'sizes') as size_entry(key, value)
+    group by upper(color_entry.value ->> 'hex'),
+             case size_entry.key when 'SX' then 'XS' else size_entry.key end
+  loop
+    select original_quantity
+      into original_cell_quantity
+    from public.factory_order_original_delivery_cells(requested_order_id) as original_cell
+    where original_cell.color_hex = requested_cell.color_hex
+      and original_cell.size_name = requested_cell.size_name;
+    if not found then
+      return false;
+    end if;
+
+    select coalesce(sum((size_entry.value #>> '{}')::numeric), 0)
+      into previously_delivered_quantity
+    from public.factory_deliveries as delivery
+    cross join lateral jsonb_array_elements(delivery.color_size_data) as color_entry(value)
+    cross join lateral jsonb_each(color_entry.value -> 'sizes') as size_entry(key, value)
+    where delivery.order_id = requested_order_id
+      and upper(color_entry.value ->> 'hex') = requested_cell.color_hex
+      and case size_entry.key when 'SX' then 'XS' else size_entry.key end = requested_cell.size_name;
+    if requested_cell.quantity > original_cell_quantity - previously_delivered_quantity then
+      return false;
+    end if;
+  end loop;
+  return true;
+end;
+$$;
+
+create or replace function public.read_factory_worker_delivery_models()
+returns table (
+  order_id uuid,
+  model_name text,
+  model_number text,
+  factory_model_code text,
+  status text,
+  delivery_balances jsonb,
+  can_submit boolean,
+  has_pending_submission boolean,
+  has_unallocated_deliveries boolean
+)
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+begin
+  if not public.has_active_factory_role(array['worker', 'cutting', 'sewing'])
+     or not exists (
+       select 1 from public.users
+       where id = auth.uid() and can_submit_production
+     ) then
+    raise exception 'Production delivery permission is required.';
+  end if;
+
+  return query
+  select factory_order.id,
+         factory_order.model_name,
+         factory_order.model_number,
+         factory_order.factory_model_code,
+         factory_order.status,
+         coalesce(balance_data.delivery_balances, '[]'::jsonb),
+         factory_order.status = 'جاهز للتسليم'
+           and factory_order.delivered_pieces < factory_order.total_pieces
+           and not coalesce(pending_data.has_pending_submission, false)
+           and not coalesce(unallocated_data.has_unallocated_deliveries, false),
+         coalesce(pending_data.has_pending_submission, false),
+         coalesce(unallocated_data.has_unallocated_deliveries, false)
+  from public.orders as factory_order
+  left join lateral (
+    select jsonb_agg(
+      jsonb_build_object(
+        'hex', color_cells.color_hex,
+        'name', color_cells.color_name,
+        'sizes', color_cells.sizes
+      ) order by color_cells.color_hex
+    ) as delivery_balances
+    from (
+      select original_cell.color_hex,
+             min(original_cell.color_name) as color_name,
+             jsonb_agg(
+               jsonb_build_object(
+                 'size', original_cell.size_name,
+                 'delivered', delivered_cell.quantity,
+                 'remaining', greatest(original_cell.original_quantity - delivered_cell.quantity, 0)
+               ) order by original_cell.size_name
+             ) as sizes
+      from public.factory_order_original_delivery_cells(factory_order.id) as original_cell
+      cross join lateral (
+        select least(coalesce(sum((size_entry.value #>> '{}')::numeric), 0), 2147483647)::integer as quantity
+        from public.factory_deliveries as delivery
+        cross join lateral jsonb_array_elements(
+          case when jsonb_typeof(delivery.color_size_data) = 'array'
+            then delivery.color_size_data else '[]'::jsonb end
+        ) as color_entry(value)
+        cross join lateral jsonb_each(
+          case when jsonb_typeof(color_entry.value -> 'sizes') = 'object'
+            then color_entry.value -> 'sizes' else '{}'::jsonb end
+        ) as size_entry(key, value)
+        where delivery.order_id = factory_order.id
+          and upper(color_entry.value ->> 'hex') = original_cell.color_hex
+          and case size_entry.key when 'SX' then 'XS' else size_entry.key end = original_cell.size_name
+          and (size_entry.value #>> '{}') ~ '^[0-9]+$'
+          and length(size_entry.value #>> '{}') <= 10
+          and (size_entry.value #>> '{}')::numeric <= 2147483647
+      ) as delivered_cell
+      group by original_cell.color_hex
+    ) as color_cells
+  ) as balance_data on true
+  left join lateral (
+    select exists (
+      select 1
+      from public.factory_worker_order_deliveries as submission
+      where submission.order_id = factory_order.id and submission.status = 'pending'
+    ) as has_pending_submission
+  ) as pending_data on true
+  left join lateral (
+    select exists (
+      select 1
+      from public.factory_deliveries as delivery
+      where delivery.order_id = factory_order.id
+        and (
+          delivery.legacy_import
+          or not public.factory_production_colors_match_quantity(delivery.color_size_data, delivery.quantity)
+        )
+    ) as has_unallocated_deliveries
+  ) as unallocated_data on true
+  where factory_order.archived_at is null
+    and factory_order.workflow_archived_at is null
+    and (
+      factory_order.status = 'جاهز للتسليم'
+      or (
+        factory_order.status = 'تم التسليم'
+        and exists (
+          select 1
+          from public.factory_worker_order_deliveries as own_submission
+          where own_submission.order_id = factory_order.id
+            and own_submission.worker_id = auth.uid()
+        )
+      )
+    )
+  order by factory_order.created_at desc;
+end;
+$$;
+
+create or replace function public.submit_factory_worker_order_delivery(
+  requested_order_id uuid,
+  requested_quantity integer,
+  requested_colors jsonb
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  current_order public.orders%rowtype;
+  current_worker public.users%rowtype;
+  saved_submission_id uuid;
+begin
+  if not public.has_active_factory_role(array['worker', 'cutting', 'sewing'])
+     or not exists (
+       select 1 from public.users
+       where id = auth.uid() and can_submit_production
+     ) then
+    raise exception 'Production delivery permission is required.';
+  end if;
+
+  select *
+    into current_worker
+  from public.users
+  where id = auth.uid()
+  for key share;
+  if not found then
+    raise exception 'Worker account not found.';
+  end if;
+
+  select *
+    into current_order
+  from public.orders
+  where id = requested_order_id
+  for update;
+  if not found
+     or not public.factory_order_worker_delivery_is_valid(
+       requested_order_id, requested_quantity, requested_colors
+     ) then
+    raise exception 'The delivery quantity, order status, or color/size allocation is no longer valid.';
+  end if;
+
+  insert into public.factory_worker_order_deliveries (
+    order_id, worker_id, worker_name, quantity, color_size_data, status
+  )
+  values (
+    current_order.id, current_worker.id,
+    coalesce(nullif(trim(current_worker.name), ''), current_worker.registration_name, 'عامل'),
+    requested_quantity, requested_colors, 'pending'
+  )
+  returning id into saved_submission_id;
+  return saved_submission_id;
+end;
+$$;
+
+create or replace function public.confirm_factory_worker_order_delivery(requested_submission_id uuid)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  current_submission public.factory_worker_order_deliveries%rowtype;
+  current_order public.orders%rowtype;
+  saved_delivery_id uuid;
+  updated_delivered_quantity integer;
+begin
+  if not public.is_active_factory_admin() then
+    raise exception 'Only active admins can confirm worker deliveries.';
+  end if;
+
+  select *
+    into current_submission
+  from public.factory_worker_order_deliveries
+  where id = requested_submission_id
+  for update;
+  if not found or current_submission.status <> 'pending' then
+    raise exception 'Worker delivery is no longer pending review.';
+  end if;
+
+  select *
+    into current_order
+  from public.orders
+  where id = current_submission.order_id
+  for update;
+  if not found
+     or not public.factory_order_worker_delivery_is_valid(
+       current_order.id, current_submission.quantity, current_submission.color_size_data
+     ) then
+    raise exception 'The order changed or the delivery allocation is no longer valid.';
+  end if;
+
+  insert into public.factory_deliveries (
+    order_id, customer_id, quantity, price_per_piece, recipient_name,
+    expected_delivery_date, color_size_data
+  )
+  values (
+    current_order.id, current_order.customer_id, current_submission.quantity,
+    current_order.price_per_piece, current_submission.worker_name,
+    current_order.expected_delivery_date, current_submission.color_size_data
+  )
+  returning id into saved_delivery_id;
+
+  updated_delivered_quantity := current_order.delivered_pieces + current_submission.quantity;
+  update public.orders
+  set delivered_pieces = updated_delivered_quantity,
+      status = case
+        when updated_delivered_quantity >= current_order.total_pieces then 'تم التسليم'
+        else current_order.status
+      end
+  where id = current_order.id;
+
+  update public.production_stages
+  set target_quantity = greatest(target_quantity, updated_delivered_quantity),
+      completed_quantity = least(greatest(target_quantity, updated_delivered_quantity), target_quantity),
+      status = case when updated_delivered_quantity >= current_order.total_pieces then 'مكتمل' else status end,
+      updated_at = now()
+  where order_id = current_order.id and stage_name = 'delivery';
+
+  update public.factory_worker_order_deliveries
+  set status = 'confirmed', updated_at = now()
+  where id = current_submission.id;
+  return saved_delivery_id;
+end;
+$$;
+
+create or replace function public.reject_factory_worker_order_delivery(requested_submission_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not public.is_active_factory_admin() then
+    raise exception 'Only active admins can reject worker deliveries.';
+  end if;
+  update public.factory_worker_order_deliveries
+  set status = 'rejected', updated_at = now()
+  where id = requested_submission_id and status = 'pending';
+  if not found then
+    raise exception 'Worker delivery is no longer pending review.';
+  end if;
+end;
+$$;
 
 create table if not exists public.factory_fabrics (
   id uuid primary key default gen_random_uuid(),
@@ -7297,6 +7781,7 @@ alter table public.orders enable row level security;
 alter table public.production_stages enable row level security;
 alter table public.factory_records enable row level security;
 alter table public.factory_deliveries enable row level security;
+alter table public.factory_worker_order_deliveries enable row level security;
 alter table public.factory_fabrics enable row level security;
 alter table public.factory_fabric_transactions enable row level security;
 
@@ -7441,6 +7926,21 @@ create policy "Users read their own factory deliveries"
           or public.owns_factory_client_profile(orders.customer_id)
         )
         and public.has_active_factory_role(array['client'])
+    )
+  );
+
+drop policy if exists "Admins and submitting workers read order delivery submissions" on public.factory_worker_order_deliveries;
+create policy "Admins and submitting workers read order delivery submissions"
+  on public.factory_worker_order_deliveries for select to authenticated
+  using (
+    public.is_active_factory_admin()
+    or (
+      worker_id = auth.uid()
+      and public.has_active_factory_role(array['worker', 'cutting', 'sewing'])
+      and exists (
+        select 1 from public.users
+        where id = auth.uid() and can_submit_production
+      )
     )
   );
 
@@ -7654,6 +8154,8 @@ grant select (model_image_url, model_image_url_2) on public.orders to authentica
 grant select on public.production_stages to authenticated;
 grant select, insert, update on public.factory_records to authenticated;
 grant select on public.factory_deliveries to authenticated;
+revoke all on public.factory_worker_order_deliveries from public, anon, authenticated;
+grant select on public.factory_worker_order_deliveries to authenticated;
 grant select on public.factory_fabrics to authenticated;
 grant select on public.factory_fabric_transactions to authenticated;
 revoke all on public.factory_cutting_request_reservations from public, anon, authenticated;
@@ -8126,6 +8628,16 @@ revoke all on function public.is_valid_factory_production_colors(jsonb) from pub
 grant execute on function public.is_valid_factory_production_colors(jsonb) to authenticated;
 revoke all on function public.factory_production_colors_match_quantity(jsonb, integer) from public, anon, authenticated;
 grant execute on function public.factory_production_colors_match_quantity(jsonb, integer) to authenticated;
+revoke all on function public.factory_order_original_delivery_cells(uuid) from public, anon, authenticated;
+revoke all on function public.factory_order_worker_delivery_is_valid(uuid, integer, jsonb) from public, anon, authenticated;
+revoke all on function public.read_factory_worker_delivery_models() from public, anon, authenticated;
+grant execute on function public.read_factory_worker_delivery_models() to authenticated;
+revoke all on function public.submit_factory_worker_order_delivery(uuid, integer, jsonb) from public, anon, authenticated;
+grant execute on function public.submit_factory_worker_order_delivery(uuid, integer, jsonb) to authenticated;
+revoke all on function public.confirm_factory_worker_order_delivery(uuid) from public, anon, authenticated;
+grant execute on function public.confirm_factory_worker_order_delivery(uuid) to authenticated;
+revoke all on function public.reject_factory_worker_order_delivery(uuid) from public, anon, authenticated;
+grant execute on function public.reject_factory_worker_order_delivery(uuid) to authenticated;
 
 grant execute on function public.has_active_factory_role(text[]) to authenticated;
 revoke all on function public.owns_factory_client_profile(uuid) from public, anon, authenticated;
@@ -8392,6 +8904,7 @@ begin
       'factory_clients',
       'factory_records',
       'factory_deliveries',
+      'factory_worker_order_deliveries',
       'factory_worker_production_submissions',
       'factory_finished_goods',
       'factory_client_model_requests',
@@ -8418,6 +8931,7 @@ alter table public.factory_fabric_transactions replica identity full;
 alter table public.factory_auth_events replica identity full;
 alter table public.users replica identity full;
 alter table public.factory_cash_transactions replica identity full;
+alter table public.factory_worker_order_deliveries replica identity full;
 alter table public.factory_worker_production_submissions replica identity full;
 alter table public.factory_finished_goods replica identity full;
 alter table public.factory_client_model_requests replica identity full;

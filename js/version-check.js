@@ -1,5 +1,5 @@
 (() => {
-  const CURRENT_VERSION = "2026.11.01.3";
+  const CURRENT_VERSION = "2026.11.01.4";
   const CHECK_INTERVAL = 5 * 60 * 1000;
   const versionUrl = new URL("../version.json", document.currentScript.src);
   let lastCheck = 0;
