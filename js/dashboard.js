@@ -4596,7 +4596,7 @@ function cuttingPersonalAccountView(data, session) {
       ? table(["التاريخ","الحالة","ملاحظات","تاريخ التسجيل"], datedRows(attendance, (record) => [formatRecordDate(record.date || record.day || record._createdAt), record.status || record.type || "—", record.notes || record.note || "—"]))
       : '<div class="empty-state">لا توجد سجلات حضور أو غياب مرتبطة بحسابك حاليًا.</div>')}
     ${panel("الخصومات والجزاءات لهذا الشهر", deductions.length
-      ? table(["التاريخ","السبب","الإجراء","المبلغ"], deductions.map((record) => `<tr><td>${formatRecordDate(record.date)}</td><td>${escapeHtml(record.ruleKey === "absence" && record.permission === "unexcused" ? "خصم يوم جزاء غياب بدون إذن" : record.ruleLabel || workforceRuleTitle(settings, record.ruleKey))}</td><td>${escapeHtml(record.decisionDescription || record.decision || "—")}</td><td>${money(record.deductionAmount || 0)}${record.ruleKey === "absence" && record.permission === "unexcused" ? `<small class="workforce-deduction-detail">أجر يوم واحد: ${money(wageRates.daily)}</small>` : ""}</td></tr>`))
+      ? table(["التاريخ","السبب","الإجراء","المبلغ"], deductions.map((record) => `<tr><td>${formatRecordDate(record.date)}</td><td>${escapeHtml(record.ruleKey === "absence" && record.permission === "unexcused" ? "خصم يوم جزاء غياب بدون إذن" : record.ruleLabel || workforceRuleTitle(settings, record.ruleKey))}</td><td>${escapeHtml(record.decisionDescription || record.decision || "—")}</td><td>${money(record.deductionAmount || 0)}${record.ruleKey === "absence" ? `<small class="workforce-deduction-detail">يُحسب ضمن الأجر المستحق ولا يُسجل مديونية</small>` : ""}</td></tr>`))
       : '<div class="empty-state">لا توجد خصومات أو جزاءات مسجلة لهذا الشهر.</div>')}
     ${panel("سجل السُلف", advances.length
       ? table(["المبلغ","البيان","ملاحظات","تاريخ التسجيل"], datedRows(advances, (record) => [money(amountOf(record)), record.description || record.reason || record.reference || "—", record.notes || record.note || "—"]))
@@ -5117,7 +5117,7 @@ function workerView(data, session) {
       }))
       : '<div class="empty-state">لا توجد سجلات حضور للشهر الحالي.</div>')}
     ${panel("الخصومات والجزاءات لهذا الشهر", monthViolations.length
-      ? table(["التاريخ","سبب الخصم","الإجراء","المبلغ"], monthViolations.map((record) => `<tr><td>${formatRecordDate(record.date)}</td><td>${escapeHtml(record.ruleLabel || workforceRuleTitle(workerSettings, record.ruleKey))}</td><td>${escapeHtml(record.decisionDescription || record.decision || "—")}</td><td>${money(record.deductionAmount || 0)}</td></tr>`))
+      ? table(["التاريخ","سبب الخصم","الإجراء","المبلغ"], monthViolations.map((record) => `<tr><td>${formatRecordDate(record.date)}</td><td>${escapeHtml(record.ruleLabel || workforceRuleTitle(workerSettings, record.ruleKey))}</td><td>${escapeHtml(record.decisionDescription || record.decision || "—")}</td><td>${money(record.deductionAmount || 0)}${record.ruleKey === "absence" ? `<small class="workforce-deduction-detail">يُحسب ضمن الأجر المستحق ولا يُسجل مديونية</small>` : ""}</td></tr>`))
       : '<div class="empty-state">لا توجد خصومات أو جزاءات مسجلة لهذا الشهر.</div>')}
     ${panel("السهر والمكافآت لهذا الشهر", overtimeRows.length
       ? table(["التاريخ","وقت الانصراف","مدة السهر","المبلغ المحتسب"], overtimeRows.map((record) => `<tr><td>${formatRecordDate(record.date)}</td><td>${escapeHtml(record.checkOut || "—")}</td><td>${record.overtimeMinutes} دقيقة</td><td>${money(record.overtimeAmount)}</td></tr>`))
@@ -5824,13 +5824,6 @@ function workforceMonthAccrual(worker, data, settings, monthKey, throughDate) {
     } else if (status === "friday_paid") {
       creditedDays += 1;
       earned += rates.basis === "hourly" ? rates.hourly * rates.shiftHours : rates.daily;
-    } else if (status === "absent" && data.workforceViolations.some((violation) =>
-      violation.workerId === worker.id && violation.ruleKey === "absence"
-      && violation.date === dateKey && violation.decision === "official"
-      && violation.permission !== "unexcused"
-    )) {
-      creditedDays += 1;
-      earned += rates.basis === "hourly" ? rates.hourly * rates.shiftHours : rates.daily;
     }
     const checkInMinutes = workforceTimeMinutes(record?.checkIn);
     const checkOutMinutes = workforceTimeMinutes(record?.checkOut);
@@ -5870,12 +5863,19 @@ function workforceMonthAccrual(worker, data, settings, monthKey, throughDate) {
         && String(record.date || record.created_at || record._createdAt || "").slice(0, 10) >= monthStart
         || (!lastSettlement && (record.period === monthKey || record.month === monthKey))))
     .reduce((total, record) => total + Number(record.paidAmount ?? record.paid ?? 0), 0);
-  const deductions = data.workforceViolations
+  const violationsInRange = data.workforceViolations
     .filter((record) => record.workerId === worker.id
       && dateInRange(record.date)
       && ["official", "actual_time"].includes(record.decision))
+  const regularDeductions = violationsInRange
+    .filter((record) => record.ruleKey !== "absence")
+    .reduce((total, record) => total + Number(record.deductionAmount || 0), 0);
+  const requestedAbsencePenalty = violationsInRange
+    .filter((record) => record.ruleKey === "absence" && record.permission === "unexcused")
     .reduce((total, record) => total + Number(record.deductionAmount
-      || (record.ruleKey === "absence" ? rates.daily * Number(record.deductionDays || 0) : 0)), 0);
+      || rates.daily * Number(record.deductionDays || 0)), 0);
+  const absencePenalty = Math.min(requestedAbsencePenalty, Math.max(0, earned - overtimeAmount));
+  const deductions = regularDeductions + absencePenalty;
   return {
     earned,
     overtimeAmount,
@@ -5894,24 +5894,33 @@ function workforceMonthAccrual(worker, data, settings, monthKey, throughDate) {
 function workforceAttendanceGrid(data, employees, settings) {
   const dates = workforceMonthDates(selectedWorkforceMonth);
   if (!employees.length) return '<div class="empty-state">لا توجد ملفات عاملين لعرض حضورها.</div>';
-  const headings = dates.map((date) =>
-    `<th class="${date.getDay() === 5 ? "workforce-friday" : ""}"><span>${date.getDate()}</span><small>${new Intl.DateTimeFormat("ar-EG", { weekday: "short" }).format(date)}</small></th>`
+  const weekdays = Array.from({ length: 7 }, (_, index) =>
+    new Intl.DateTimeFormat("ar-EG", { weekday: "short" }).format(new Date(2023, 0, 7 + index))
+  );
+  const weekdayHeadings = weekdays.map((weekday, index) =>
+    `<span class="workforce-weekday ${index === 6 ? "workforce-friday" : ""}">${weekday}</span>`
   ).join("");
+  const firstDayOffset = (dates[0].getDay() + 1) % 7;
+  const trailingBlankCount = (7 - ((firstDayOffset + dates.length) % 7)) % 7;
   const rows = employees.map((worker) => {
     const cells = dates.map((date) => {
       const dateKey = workforceDateKey(date);
       const record = workforceAttendanceRecord(data, worker.id, dateKey);
       const status = record?.status || "";
       const shortStatus = WORKFORCE_ATTENDANCE_LABELS[status] || "غير مسجل";
-      return `<td><div class="workforce-cell ${status ? `workforce-cell-${status}` : ""}">
-        <button type="button" class="workforce-clock-button workforce-clock-in" data-workforce-clock="in" data-worker-id="${escapeHtml(worker.id)}" data-attendance-date="${dateKey}" aria-label="تسجيل أو تعديل حضور ${escapeHtml(worker.name)} بتاريخ ${dateKey}">حضور <b>${escapeHtml(record?.checkIn || "＋")}</b></button>
-        <button type="button" class="workforce-clock-button workforce-clock-out" data-workforce-clock="out" data-worker-id="${escapeHtml(worker.id)}" data-attendance-date="${dateKey}" aria-label="تسجيل أو تعديل انصراف ${escapeHtml(worker.name)} بتاريخ ${dateKey}">انصراف <b>${escapeHtml(record?.checkOut || settings.shiftEnd)}</b></button>
+      const fridayClass = date.getDay() === 5 ? " workforce-friday" : "";
+      return `<div class="workforce-cell workforce-day-cell${fridayClass} ${status ? `workforce-cell-${status}` : ""}">
+        <strong class="workforce-day-number">${date.getDate()}</strong>
+        <button type="button" class="workforce-clock-button workforce-clock-in" data-workforce-clock="in" data-worker-id="${escapeHtml(worker.id)}" data-attendance-date="${dateKey}" aria-label="تسجيل أو تعديل حضور ${escapeHtml(worker.name)} بتاريخ ${dateKey}">دخول <b>${escapeHtml(record?.checkIn || "＋")}</b></button>
+        <button type="button" class="workforce-clock-button workforce-clock-out" data-workforce-clock="out" data-worker-id="${escapeHtml(worker.id)}" data-attendance-date="${dateKey}" aria-label="تسجيل أو تعديل انصراف ${escapeHtml(worker.name)} بتاريخ ${dateKey}">خروج <b>${escapeHtml(record?.checkOut || settings.shiftEnd)}</b></button>
         <button type="button" class="workforce-status-button" data-workforce-status data-worker-id="${escapeHtml(worker.id)}" data-attendance-date="${dateKey}" aria-label="تعديل حالة ${escapeHtml(worker.name)} بتاريخ ${dateKey}">${escapeHtml(shortStatus)}</button>
-      </div></td>`;
+      </div>`;
     }).join("");
-    return `<tr><th class="workforce-worker-name">${escapeHtml(worker.name)}<small>${escapeHtml(worker.jobTitle || roleNames[worker.roleKey] || "")}</small></th>${cells}</tr>`;
+    const leadingBlanks = '<span class="workforce-day-blank" aria-hidden="true"></span>'.repeat(firstDayOffset);
+    const trailingBlanks = '<span class="workforce-day-blank" aria-hidden="true"></span>'.repeat(trailingBlankCount);
+    return `<section class="workforce-month-employee"><header class="workforce-month-employee-heading"><strong>${escapeHtml(worker.name)}</strong><small>${escapeHtml(worker.jobTitle || roleNames[worker.roleKey] || "")}</small></header><div class="workforce-month-grid">${weekdayHeadings}${leadingBlanks}${cells}${trailingBlanks}</div></section>`;
   }).join("");
-  return `<div class="workforce-matrix-scroll"><table class="workforce-matrix"><thead><tr><th class="workforce-worker-name">العامل / اليوم</th>${headings}</tr></thead><tbody>${rows}</tbody></table></div>`;
+  return `<div class="workforce-matrix-scroll">${rows}</div>`;
 }
 
 function workforceView(data) {
@@ -6273,7 +6282,7 @@ function workforceView(data) {
     ${newEmployeeModal}
     ${rolloverModal}
     <div class="modal-backdrop" data-workforce-attendance-modal hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="workforce-attendance-title"><button class="modal-close" type="button" data-close-workforce-attendance aria-label="إغلاق">×</button><h2 id="workforce-attendance-title">تعديل حالة اليوم</h2><form class="workforce-attendance-form modal-form"><input type="hidden" name="workerId"><input type="hidden" name="date"><label>حالة اليوم<select name="status"></select></label><label class="workforce-inline-check"><input name="paidLeave" type="checkbox" checked> الإجازة مدفوعة الأجر</label><label>ملاحظات<textarea name="notes" rows="2" maxlength="400"></textarea></label><div class="form-actions"><button class="button button-primary" type="submit">حفظ الحالة</button><button class="row-action" type="button" data-close-workforce-attendance>إلغاء</button></div></form></section></div>
-    <div class="modal-backdrop workforce-absence-backdrop" data-workforce-absence-modal ${pendingWorkforceAbsenceDecision ? "" : "hidden"}><section class="modal-card compact-view-modal" role="dialog" aria-modal="true" aria-labelledby="workforce-absence-title"><button class="modal-close" type="button" data-close-workforce-absence aria-label="إغلاق">×</button><h2 id="workforce-absence-title">تسجيل الغياب وتحديد الخصم</h2><p data-workforce-absence-summary>${pendingWorkforceAbsenceDecision ? `${escapeHtml(workforceEmployees(data).find((worker) => worker.id === pendingWorkforceAbsenceDecision.workerId)?.name || "")} · ${escapeHtml(pendingWorkforceAbsenceDecision.date)}` : ""}</p><div class="workforce-late-actions"><button type="button" class="button button-primary" data-absence-permission="permitted" aria-pressed="false">غياب بإذن · خصم يوم واحد</button><button type="button" class="button button-secondary" data-absence-permission="unexcused" aria-pressed="false">غياب بدون إذن · لا أجر لليوم + جزاء يوم</button></div><div class="form-actions"><button type="button" class="button button-primary" data-save-workforce-absence disabled>حفظ الغياب والخصم</button></div></section></div>
+    <div class="modal-backdrop workforce-absence-backdrop" data-workforce-absence-modal ${pendingWorkforceAbsenceDecision ? "" : "hidden"}><section class="modal-card compact-view-modal" role="dialog" aria-modal="true" aria-labelledby="workforce-absence-title"><button class="modal-close" type="button" data-close-workforce-absence aria-label="إغلاق">×</button><h2 id="workforce-absence-title">تسجيل الغياب وتحديد الخصم</h2><p data-workforce-absence-summary>${pendingWorkforceAbsenceDecision ? `${escapeHtml(workforceEmployees(data).find((worker) => worker.id === pendingWorkforceAbsenceDecision.workerId)?.name || "")} · ${escapeHtml(pendingWorkforceAbsenceDecision.date)}` : ""}</p><div class="workforce-late-actions"><button type="button" class="button button-primary workforce-absence-choice" data-absence-permission="permitted" aria-pressed="false">غياب بإذن · حسم أجر يوم</button><button type="button" class="button button-secondary workforce-absence-choice" data-absence-permission="unexcused" aria-pressed="false">غياب بدون إذن · لا أجر + جزاء يوم</button></div><p class="workforce-absence-note">يُحتسب الغياب والجزاء من الأجر المستحق، ولا يُنشأ بسببهما رصيد مديونية.</p><div class="form-actions"><button type="button" class="button button-primary" data-save-workforce-absence disabled>حفظ الغياب والخصم</button></div></section></div>
     <div class="modal-backdrop" data-workforce-clock-modal hidden><section class="modal-card compact-view-modal" role="dialog" aria-modal="true" aria-labelledby="workforce-clock-title"><button class="modal-close" type="button" data-close-workforce-clock aria-label="إغلاق">×</button><h2 id="workforce-clock-title">تسجيل أو تعديل الوقت</h2><form class="workforce-clock-form modal-form"><input type="hidden" name="workerId"><input type="hidden" name="date"><input type="hidden" name="clockType"><label>الوقت الجديد<input name="time" type="time" required></label><label data-early-departure-option hidden>قرار الانصراف المبكر<select name="earlyDepartureDecision"><option value="official">خصم ساعات الانصراف المبكر</option><option value="waived">عفو إداري · دون خصم</option></select><small data-early-departure-preview></small></label><div class="form-actions"><button class="button button-primary" type="submit">حفظ الوقت</button><button class="row-action" type="button" data-close-workforce-clock>إلغاء</button></div></form></section></div>
     <div class="modal-backdrop workforce-late-backdrop" data-workforce-late-modal ${pendingWorkforceLateDecision ? "" : "hidden"}><section class="modal-card compact-view-modal" role="dialog" aria-modal="true" aria-labelledby="workforce-late-title"><button class="modal-close" type="button" data-close-workforce-late aria-label="إغلاق">×</button><h2 id="workforce-late-title">تم تسجيل حضور متأخر</h2><p data-workforce-late-summary>${pendingWorkforceLateDecision ? `${escapeHtml(workforceEmployees(data).find((worker) => worker.id === pendingWorkforceLateDecision.workerId)?.name || "")} · تأخير ${pendingWorkforceLateDecision.delay} دقيقة · اختر قرار الخصم الآن.` : ""}</p><div class="workforce-late-actions"><button type="button" class="button button-primary${pendingWorkforceLateDecision?.decision === "official" ? " active" : ""}" data-late-decision="official" aria-pressed="${pendingWorkforceLateDecision?.decision === "official"}">تطبيق اللائحة</button><button type="button" class="button button-secondary${pendingWorkforceLateDecision?.decision === "actual_time" ? " active" : ""}" data-late-decision="actual_time" aria-pressed="${pendingWorkforceLateDecision?.decision === "actual_time"}">خصم الوقت الفعلي</button><button type="button" class="row-action${pendingWorkforceLateDecision?.decision === "waived" ? " active" : ""}" data-late-decision="waived" aria-pressed="${pendingWorkforceLateDecision?.decision === "waived"}">إعفاء من الخصم</button></div><div class="form-actions"><button type="button" class="button button-primary" data-save-late-decision ${pendingWorkforceLateDecision?.decision ? "" : "disabled"}>حفظ قرار الخصم</button></div></section></div>
   </section>`;
@@ -7006,8 +7015,8 @@ function bindWorkforceActions(session) {
     const deductionDays = 1;
     const amount = rates.daily * deductionDays;
     const decisionDescription = pending.permission === "permitted"
-      ? "غياب بإذن · خصم يوم واحد"
-      : "غياب بدون إذن · لا أجر لليوم + جزاء يوم واحد";
+      ? "غياب بإذن · حسم أجر يوم من المستحقات"
+      : "غياب بدون إذن · لا أجر لليوم + جزاء يوم من المستحقات";
     button.disabled = true;
     try {
       await saveFlexibleRecord("workforce_attendance", {
@@ -7038,7 +7047,7 @@ function bindWorkforceActions(session) {
       }, existingViolation?._recordId || null, workforceRecordOwnerId(worker, dashboardData));
       pendingWorkforceAbsenceDecision = null;
       await refresh();
-      window.factoryUI.toast(`تم تسجيل ${decisionDescription}. قيمة الخصم الحالية: ${workforceMoney(amount)}.`);
+      window.factoryUI.toast(`تم تسجيل ${decisionDescription} (${workforceMoney(amount)}) دون إنشاء مديونية.`);
     } catch (error) {
       reportDashboardFailure(session, "تعذر حفظ الغياب أو الخصم", error);
     } finally {
