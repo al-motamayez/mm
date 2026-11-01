@@ -8334,7 +8334,7 @@ grant select (id, client_id, customer_id, model_name, model_number, factory_mode
 grant select (sender_name) on public.orders to authenticated;
 grant select (model_image_url, model_image_url_2) on public.orders to authenticated;
 grant select on public.production_stages to authenticated;
-grant select, insert, update on public.factory_records to authenticated;
+grant select, insert, update, delete on public.factory_records to authenticated;
 grant select on public.factory_deliveries to authenticated;
 revoke all on public.factory_worker_order_deliveries from public, anon, authenticated;
 grant select on public.factory_worker_order_deliveries to authenticated;
