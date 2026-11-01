@@ -4876,7 +4876,7 @@ begin
     raise exception 'Only active admins can manage fabric items.';
   end if;
   if length(trim(coalesce(requested_name, ''))) not between 1 and 120
-     or length(coalesce(requested_type, '')) > 120
+     or length(trim(coalesce(requested_type, ''))) not between 1 and 120
      or length(coalesce(requested_color_name, '')) > 64
      or upper(coalesce(requested_color_hex, '')) !~ '^#[0-9A-F]{6}$'
      or requested_unit is null
@@ -4886,7 +4886,7 @@ begin
 
   if requested_fabric_id is null then
     insert into public.factory_fabrics (name, fabric_type, color_name, color_hex, unit)
-    values (trim(requested_name), '',
+    values (trim(requested_name), trim(requested_type),
             trim(coalesce(requested_color_name, '')), upper(requested_color_hex), requested_unit)
     returning id into saved_fabric_id;
   else
@@ -4905,7 +4905,7 @@ begin
     end if;
     update public.factory_fabrics
     set name = trim(requested_name),
-        fabric_type = '',
+        fabric_type = trim(requested_type),
         color_name = trim(coalesce(requested_color_name, '')),
         color_hex = upper(requested_color_hex),
         unit = requested_unit,
@@ -5063,7 +5063,7 @@ begin
   )
   values (
     'incoming', requested_customer_id, trim(requested_name),
-    '', trim(coalesce(requested_color_name, '')), upper(requested_color_hex),
+    trim(requested_name), trim(coalesce(requested_color_name, '')), upper(requested_color_hex),
     requested_unit, requested_quantity, receipt_time, auth.uid()
   )
   returning id into saved_fabric_id;
@@ -5138,7 +5138,7 @@ begin
       unit, quantity_available, received_at, received_by
     )
     values (
-      'incoming', requested_customer_id, item_name, '', item_color_name,
+      'incoming', requested_customer_id, item_name, item_name, item_color_name,
       item_color_hex, item_unit, item_quantity, receipt_time, auth.uid()
     )
     returning id into saved_fabric_id;
