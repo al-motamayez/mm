@@ -608,22 +608,34 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .workforce-rollover-modal { width:min(620px,92vw); }
 @media (max-width:700px) { .workforce-date-toolbar { gap:3px; padding:3px 4px; } .workforce-date-display { min-width:88px; } .workforce-alert { align-items:flex-start; flex-wrap:wrap; } }
 .workforce-month-picker { width: min(230px, 100%); margin: 0; }
-.workforce-matrix-scroll { max-height: min(72vh, 760px); overflow-x: hidden; overflow-y: auto; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
-.workforce-month-employee + .workforce-month-employee { border-top: 1px solid #dfe8e2; }
-.workforce-month-employee-heading { display: flex; align-items: baseline; gap: 8px; padding: 9px 12px; color: var(--green-dark); background: #f4f8f5; }
-.workforce-month-employee-heading small { color: var(--muted); font-size: 11px; }
-.workforce-month-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; padding: 7px; }
-.workforce-weekday { padding: 3px 1px; color: var(--green-dark); text-align: center; font-size: 10px; font-weight: 700; }
-.workforce-weekday.workforce-friday { color: #815516; }
-.workforce-day-cell { display: grid; min-width: 0; min-height: 91px; align-content: start; gap: 2px; padding: 3px; border: 1px solid #dce5de; border-radius: 7px; color: #344b40; background: #fff; font-size: 9px; }
-.workforce-day-cell.workforce-friday { border-color: #d7bd7a; }
-.workforce-day-number { justify-self: start; min-width: 18px; padding: 1px 4px; border-radius: 8px; color: #334c3f; background: #edf3ee; font-size: 10px; }
-.workforce-day-blank { min-width: 0; }
-.workforce-cell:hover { border-color: #4f9879; filter: brightness(.98); }
-.workforce-clock-button, .workforce-status-button { display: grid; width: 100%; min-width: 0; justify-items: center; gap: 0; padding: 2px 1px; border: 0; border-radius: 4px; color: inherit; background: transparent; font-size: 8px; line-height: 1.2; }
-.workforce-clock-button:hover, .workforce-status-button:hover { background: #e9f2ec; }
-.workforce-clock-button b { direction: ltr; }
-.workforce-status-button { max-height: 25px; overflow: hidden; border-top: 1px solid #d8e2db; color: #40564a; white-space: nowrap; text-overflow: ellipsis; }
+.workforce-matrix-scroll { max-height: min(72vh, 760px); overflow: auto; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+.workforce-matrix { width: max-content; min-width: 100%; table-layout: fixed; border-collapse: separate; border-spacing: 0; font-size: 10px; }
+.workforce-matrix th, .workforce-matrix td { width: 25px; min-width: 25px; padding: 2px; border-inline-start: 1px solid #e4ebe6; border-bottom: 1px solid #e4ebe6; text-align: center; }
+.workforce-matrix thead th { position: sticky; z-index: 2; top: 0; height: 38px; color: var(--green-dark); background: #f1f7f3; }
+.workforce-matrix .workforce-worker-name { position: sticky; z-index: 3; right: 0; width: 112px; min-width: 112px; max-width: 112px; padding: 6px; background: #f8faf8; text-align: right; overflow-wrap: anywhere; }
+.workforce-matrix thead .workforce-worker-name { z-index: 4; background: #e8f1eb; }
+.workforce-worker-name small { display: block; color: var(--muted); font-size: 9px; font-weight: 400; }
+.workforce-day-heading span, .workforce-day-heading small { display: block; line-height: 1.3; }
+.workforce-day-heading span { font-size: 11px; font-weight: 800; }
+.workforce-day-heading small { font-size: 8px; }
+.workforce-day-heading.workforce-friday { color: #80541d; background: #fff3d8; }
+.workforce-day-column.workforce-friday { background: #fffaf0; }
+.workforce-day-slot { display: grid; min-height: 48px; align-content: center; justify-items: center; gap: 1px; border: 1px solid #e0e8e2; border-radius: 5px; background: #fff; }
+.workforce-day-action { display: grid; width: 100%; min-height: 25px; place-items: center; padding: 1px; border: 0; border-radius: 4px; color: #586c60; background: transparent; font-size: 12px; font-weight: 800; line-height: 1; touch-action: manipulation; }
+.workforce-day-action:not(:disabled):hover { background: #e9f2ec; }
+.workforce-day-action:disabled { cursor: not-allowed; opacity: .48; }
+.workforce-day-recorded-time { max-width: 100%; overflow: hidden; color: inherit; font-size: 7px; direction: ltr; white-space: nowrap; }
+.workforce-day-tools { display: flex; width: 100%; justify-content: center; gap: 1px; }
+.workforce-day-tools button { width: 11px; min-height: 14px; padding: 0; border: 0; border-radius: 3px; color: #52665a; background: #edf3ee; font-size: 8px; line-height: 1; }
+.workforce-day-tools button:not(:disabled):hover { color: #fff; background: var(--green-dark); }
+.workforce-day-tools button:disabled { opacity: .35; }
+.workforce-attendance-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 0 0 10px; padding: 9px; border: 1px solid #dce8df; border-radius: 9px; background: #f8fbf9; }
+.workforce-attendance-lock { min-height: 36px; white-space: nowrap; }
+.workforce-entry-modes { display: flex; flex: 1 1 420px; flex-wrap: wrap; gap: 5px; }
+.workforce-entry-mode { min-height: 32px; padding: 5px 9px; border: 1px solid #cbd9cf; border-radius: 7px; color: #3b5747; background: #fff; font-size: 11px; }
+.workforce-entry-mode.active { border-color: #286a4a; color: #fff; background: #286a4a; box-shadow: 0 0 0 2px #c9e4d1; }
+.workforce-entry-mode:disabled { opacity: .5; }
+.workforce-attendance-controls > p { flex: 1 1 100%; margin: 0; color: #53675b; font-size: 11px; line-height: 1.6; }
 .workforce-cell-present { border-color: #78b98e; color: #145d34; background: #dff3e4; }
 .workforce-cell-late { border-color: #d5a74e; color: #754509; background: #fff0cb; }
 .workforce-cell-absent { border-color: #d7867e; color: #8c2824; background: #ffe2df; }
@@ -730,10 +742,14 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 @media (max-width: 700px) {
   .workforce-employee-toolbar { align-items: stretch; flex-direction: column; }
   .workforce-add-employee { width: 100%; }
-  .workforce-month-grid { gap: 3px; padding: 5px; }
-  .workforce-day-cell { min-height: 84px; padding: 2px; }
-  .workforce-clock-button, .workforce-status-button { font-size: 7px; }
-  .workforce-clock-button b { font-size: 8px; }
+  .workforce-matrix th, .workforce-matrix td { width: 23px; min-width: 23px; padding: 1px; }
+  .workforce-matrix .workforce-worker-name { width: 96px; min-width: 96px; max-width: 96px; }
+  .workforce-day-slot { min-height: 43px; }
+  .workforce-day-action { min-height: 23px; }
+  .workforce-attendance-controls { align-items: stretch; }
+  .workforce-attendance-lock { width: 100%; }
+  .workforce-entry-modes { flex-basis: 100%; }
+  .workforce-entry-mode { flex: 1 1 42%; min-height: 40px; }
   .workforce-absence-choice { flex-basis: 100%; }
   .workforce-profile-backdrop { padding: 16px 10px; }
   .workforce-profile-modal { width: 96vw; max-width: 96vw; padding: 18px; }

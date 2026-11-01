@@ -27,6 +27,8 @@ let selectedWorkforceProfileTab = "finance";
 let showNewWorkforceEmployeeModal = false;
 let pendingWorkforceLateDecision = null;
 let pendingWorkforceAbsenceDecision = null;
+let workforceAttendanceUnlocked = false;
+let workforceAttendanceEntryMode = "present";
 let modelImageLightboxBound = false;
 let productionDetailsModalBound = false;
 let cuttingEditorModalBound = false;
@@ -5651,6 +5653,31 @@ function workforceAttendanceRecord(data, workerId, date) {
   return data.workforceAttendance.find((record) => record.workerId === workerId && record.date === date) || null;
 }
 
+function workforceLocalTime(date = new Date()) {
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+function openWorkforceAttendanceEditor(root, data, workerId, date) {
+  const record = workforceAttendanceRecord(data, workerId, date);
+  const worker = workforceEmployees(data).find((entry) => entry.id === workerId);
+  if (!worker) return;
+  const form = root.querySelector(".workforce-attendance-form");
+  const statusSelect = form.elements.status;
+  const isFriday = new Date(`${date}T00:00:00`).getDay() === 5;
+  const states = isFriday
+    ? ["friday_paid", "friday_unpaid", "friday_deducted"]
+    : ["present", "absent", "leave", "late"];
+  if (record?.status && !states.includes(record.status)) states.push(record.status);
+  statusSelect.innerHTML = `<option value="">اختر الحالة</option>${states.map((status) => `<option value="${status}">${escapeHtml(WORKFORCE_ATTENDANCE_LABELS[status])}</option>`).join("")}`;
+  statusSelect.required = true;
+  form.elements.workerId.value = workerId;
+  form.elements.date.value = date;
+  statusSelect.value = record?.status || (isFriday ? "" : "present");
+  form.elements.paidLeave.checked = record?.paidLeave !== false;
+  form.elements.notes.value = record?.notes || "";
+  root.querySelector("[data-workforce-attendance-modal]").hidden = false;
+}
+
 async function workforceCreditPreviousFriday(worker, attendanceDate, data, saturdayAttendance) {
   const saturday = new Date(`${attendanceDate}T00:00:00`);
   if (saturday.getDay() !== 6) return false;
@@ -5891,36 +5918,58 @@ function workforceMonthAccrual(worker, data, settings, monthKey, throughDate) {
   };
 }
 
-function workforceAttendanceGrid(data, employees, settings) {
+function workforceAttendanceGrid(data, employees) {
   const dates = workforceMonthDates(selectedWorkforceMonth);
   if (!employees.length) return '<div class="empty-state">لا توجد ملفات عاملين لعرض حضورها.</div>';
-  const weekdays = Array.from({ length: 7 }, (_, index) =>
-    new Intl.DateTimeFormat("ar-EG", { weekday: "short" }).format(new Date(2023, 0, 7 + index))
-  );
-  const weekdayHeadings = weekdays.map((weekday, index) =>
-    `<span class="workforce-weekday ${index === 6 ? "workforce-friday" : ""}">${weekday}</span>`
+  const weekdays = dates.map((date) =>
+    `<th class="workforce-day-heading ${date.getDay() === 5 ? "workforce-friday" : ""}" scope="col"><span>${date.getDate()}</span><small>${new Intl.DateTimeFormat("ar-EG", { weekday: "short" }).format(date)}</small></th>`
   ).join("");
-  const firstDayOffset = (dates[0].getDay() + 1) % 7;
-  const trailingBlankCount = (7 - ((firstDayOffset + dates.length) % 7)) % 7;
   const rows = employees.map((worker) => {
     const cells = dates.map((date) => {
       const dateKey = workforceDateKey(date);
       const record = workforceAttendanceRecord(data, worker.id, dateKey);
       const status = record?.status || "";
-      const shortStatus = WORKFORCE_ATTENDANCE_LABELS[status] || "غير مسجل";
-      const fridayClass = date.getDay() === 5 ? " workforce-friday" : "";
-      return `<div class="workforce-cell workforce-day-cell${fridayClass} ${status ? `workforce-cell-${status}` : ""}">
-        <strong class="workforce-day-number">${date.getDate()}</strong>
-        <button type="button" class="workforce-clock-button workforce-clock-in" data-workforce-clock="in" data-worker-id="${escapeHtml(worker.id)}" data-attendance-date="${dateKey}" aria-label="تسجيل أو تعديل حضور ${escapeHtml(worker.name)} بتاريخ ${dateKey}">دخول <b>${escapeHtml(record?.checkIn || "＋")}</b></button>
-        <button type="button" class="workforce-clock-button workforce-clock-out" data-workforce-clock="out" data-worker-id="${escapeHtml(worker.id)}" data-attendance-date="${dateKey}" aria-label="تسجيل أو تعديل انصراف ${escapeHtml(worker.name)} بتاريخ ${dateKey}">خروج <b>${escapeHtml(record?.checkOut || settings.shiftEnd)}</b></button>
-        <button type="button" class="workforce-status-button" data-workforce-status data-worker-id="${escapeHtml(worker.id)}" data-attendance-date="${dateKey}" aria-label="تعديل حالة ${escapeHtml(worker.name)} بتاريخ ${dateKey}">${escapeHtml(shortStatus)}</button>
-      </div>`;
+      const violation = data.workforceViolations.find((entry) =>
+        entry.workerId === worker.id && entry.ruleKey === "absence" && entry.date === dateKey
+      );
+      const displayStatus = status === "absent" && violation?.permission === "permitted"
+        ? "غياب بإذن"
+        : status === "absent" && violation?.permission === "unexcused"
+          ? "بدون إذن"
+          : WORKFORCE_ATTENDANCE_LABELS[status] || "غير مسجل";
+      const recordedTime = record?.recordedAt
+        ? new Intl.DateTimeFormat("ar-EG", { hour: "2-digit", minute: "2-digit" }).format(new Date(record.recordedAt))
+        : record?.checkIn || "";
+      const statusMark = !status ? "·"
+        : status === "present" || status === "late" ? "ح"
+          : status === "absent" ? violation?.permission === "permitted" ? "إ" : "غ"
+            : status === "leave" ? "ج" : status.startsWith("friday_") ? "ج" : "•";
+      const locked = !workforceAttendanceUnlocked;
+      const futureDate = dateKey > workforceDateKey(new Date());
+      return `<td class="workforce-day-column ${date.getDay() === 5 ? "workforce-friday" : ""}"><div class="workforce-day-slot ${status ? `workforce-cell-${status}` : ""}">
+        <button type="button" class="workforce-day-action" data-workforce-day-action data-future="${futureDate}" data-worker-id="${escapeHtml(worker.id)}" data-attendance-date="${dateKey}" aria-label="${escapeHtml(workforceAttendanceEntryMode === "edit" ? "تعديل" : "تسجيل")} ${escapeHtml(worker.name)} · ${dateKey} · ${escapeHtml(displayStatus)}" title="${escapeHtml(worker.name)} · ${dateKey} · ${escapeHtml(displayStatus)}${recordedTime ? ` · ${recordedTime}` : ""}" ${locked || futureDate ? "disabled" : ""}>${statusMark}</button>
+        <small class="workforce-day-recorded-time">${escapeHtml(recordedTime)}</small>
+        <div class="workforce-day-tools">
+          <button type="button" data-workforce-edit-day data-future="${futureDate}" data-worker-id="${escapeHtml(worker.id)}" data-attendance-date="${dateKey}" aria-label="تعديل تفاصيل ${escapeHtml(worker.name)} بتاريخ ${dateKey}" title="تعديل الحالة والبيانات" ${locked || futureDate ? "disabled" : ""}>✎</button>
+          <button type="button" data-workforce-clock="out" data-has-check-in="${Boolean(record?.checkIn)}" data-future="${futureDate}" data-worker-id="${escapeHtml(worker.id)}" data-attendance-date="${dateKey}" aria-label="تسجيل انصراف ${escapeHtml(worker.name)} بتاريخ ${dateKey}" title="تسجيل الانصراف" ${locked || futureDate || !record?.checkIn ? "disabled" : ""}>خ</button>
+        </div>
+      </div></td>`;
     }).join("");
-    const leadingBlanks = '<span class="workforce-day-blank" aria-hidden="true"></span>'.repeat(firstDayOffset);
-    const trailingBlanks = '<span class="workforce-day-blank" aria-hidden="true"></span>'.repeat(trailingBlankCount);
-    return `<section class="workforce-month-employee"><header class="workforce-month-employee-heading"><strong>${escapeHtml(worker.name)}</strong><small>${escapeHtml(worker.jobTitle || roleNames[worker.roleKey] || "")}</small></header><div class="workforce-month-grid">${weekdayHeadings}${leadingBlanks}${cells}${trailingBlanks}</div></section>`;
+    return `<tr><th class="workforce-worker-name" scope="row">${escapeHtml(worker.name)}<small>${escapeHtml(worker.jobTitle || roleNames[worker.roleKey] || "")}</small></th>${cells}</tr>`;
   }).join("");
-  return `<div class="workforce-matrix-scroll">${rows}</div>`;
+  const modes = [
+    ["present", "تسجيل حضور"],
+    ["absent-permitted", "غياب بإذن"],
+    ["absent-unexcused", "غياب بدون إذن"],
+    ["edit", "تعديل التفاصيل"]
+  ].map(([mode, label]) =>
+    `<button type="button" class="workforce-entry-mode${workforceAttendanceEntryMode === mode ? " active" : ""}" data-workforce-entry-mode="${mode}" aria-pressed="${workforceAttendanceEntryMode === mode}" ${workforceAttendanceUnlocked ? "" : "disabled"}>${label}</button>`
+  ).join("");
+  return `<div class="workforce-attendance-controls">
+    <button type="button" class="button ${workforceAttendanceUnlocked ? "button-secondary" : "button-primary"} workforce-attendance-lock" data-workforce-attendance-lock aria-pressed="${workforceAttendanceUnlocked}">${workforceAttendanceUnlocked ? "🔓 قفل التسجيل" : "🔒 فتح التسجيل"}</button>
+    <div class="workforce-entry-modes" role="group" aria-label="وضع تسجيل الحضور">${modes}</div>
+    <p data-workforce-entry-instructions>${workforceAttendanceUnlocked ? "اختر نوع التسجيل ثم اضغط خلية العامل واليوم. تُحفظ الحالة فوراً مع وقت التسجيل." : "الجدول مقفول للحماية من اللمس غير المقصود. افتح التسجيل واختر نوع الإجراء أولاً."}</p>
+  </div><div class="workforce-matrix-scroll"><table class="workforce-matrix" aria-label="جدول الحضور الشهري"><thead><tr><th class="workforce-worker-name" scope="col">العامل / اليوم</th>${weekdays}</tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 function workforceView(data) {
@@ -5936,7 +5985,7 @@ function workforceView(data) {
   const pendingStaffOptions = [...new Map(pendingStaffAccounts.map((account) => [account.id, account])).values()]
     .map((account) => `<option value="${escapeHtml(account.id)}">${escapeHtml(account.name)} · ${escapeHtml(account.username)}${account.phone ? ` · ${escapeHtml(account.phone)}` : ""}${account.status === "pending" ? " · معلق" : account.status === "suspended" ? " · موقوف" : " · نشط"}</option>`)
     .join("");
-  const attendanceRows = workforceAttendanceGrid(data, employees, settings);
+  const attendanceRows = workforceAttendanceGrid(data, employees);
   const employeeRows = employees.map((worker) => `<tr>
     <td><strong>${escapeHtml(worker.name)}</strong><small class="workforce-identity-source">الاسم الأساسي المعتمد</small><small class="workforce-identity-source">التسجيل الشخصي: ${escapeHtml(worker.registeredName || "غير متاح")} · ${escapeHtml(worker.registeredPhone || "هاتف غير مسجل")}</small></td>
     <td>${escapeHtml(worker.registeredName || "—")}<small class="workforce-identity-source">اسم حساب التسجيل</small></td>
@@ -6264,8 +6313,8 @@ function workforceView(data) {
       "الاسم والهاتف المعتمدان تديرهما الإدارة، وتظهر بيانات التسجيل الأصلية للمطابقة والمراجعة؛ حذف الملف لا يحذف السجلات المالية أو سجل حساب الدخول.")}
     </div>
     <div class="workforce-panel" data-workforce-panel="attendance"${activeWorkforceTab === "attendance" ? "" : " hidden"}>
-      <div class="clients-toolbar"><div><h2>جدول الحضور والغياب الشهري</h2><p>اضغط الحضور لتسجيل وقت بداية الدوام، واضغط مرة أخرى لتعديله. يبدأ الانصراف بموعد نهاية الوردية المجدول، ويمكن تعديله مع اختيار الخصم أو العفو عند الخروج مبكراً.</p></div><label class="field workforce-month-picker"><span>الشهر</span><input type="month" data-workforce-month value="${escapeHtml(selectedWorkforceMonth)}"></label></div>
-      ${panel("مصفوفة الحضور", attendanceRows, `الدوام الافتراضي ${settings.shiftStart}–${settings.shiftEnd}. الجمعة لا تُحتسب إلا بعد تسجيل حضور السبت التالي، ويمكن تعديلها يدويًا.`)}
+      <div class="clients-toolbar"><div><h2>جدول الحضور والغياب الشهري</h2><p>الأيام أفقياً وأسماء العاملين في العمود الثابت يميناً. افتح التسجيل واختر الإجراء قبل الضغط على خلية اليوم؛ تُحفظ ساعة التسجيل الفعلية تلقائياً.</p></div><label class="field workforce-month-picker"><span>الشهر</span><input type="month" data-workforce-month value="${escapeHtml(selectedWorkforceMonth)}"></label></div>
+      ${panel("مصفوفة الحضور", attendanceRows, `الدوام الافتراضي ${settings.shiftStart}–${settings.shiftEnd}. الجمعة لا تُحتسب إلا بعد تسجيل حضور السبت التالي، ويمكن تعديل السجلات من زر القلم بعد فتح الجدول.`)}
     </div>
     <div class="workforce-panel" data-workforce-panel="discipline"${activeWorkforceTab === "discipline" ? "" : " hidden"}>
       ${panel("تسجيل مخالفة وقرار الخصم", violationForm, "أضف بنود الخصم يدويًا من الإعدادات، ثم اختر العامل والبند وقرار الخصم.")}
@@ -6824,6 +6873,146 @@ function bindWorkforceActions(session) {
     selectedWorkforceCutoffDate = date;
     void refresh().catch((error) => reportDashboardFailure(session, "تعذر تحديث حساب التصفية", error));
   });
+  root.querySelector("[data-workforce-attendance-lock]")?.addEventListener("click", (event) => {
+    workforceAttendanceUnlocked = !workforceAttendanceUnlocked;
+    const button = event.currentTarget;
+    button.setAttribute("aria-pressed", String(workforceAttendanceUnlocked));
+    button.classList.toggle("button-primary", !workforceAttendanceUnlocked);
+    button.classList.toggle("button-secondary", workforceAttendanceUnlocked);
+    button.textContent = workforceAttendanceUnlocked ? "🔓 قفل التسجيل" : "🔒 فتح التسجيل";
+    root.querySelectorAll("[data-workforce-entry-mode]").forEach((modeButton) => {
+      modeButton.disabled = !workforceAttendanceUnlocked;
+    });
+    root.querySelectorAll("[data-workforce-day-action], [data-workforce-edit-day]").forEach((action) => {
+      action.disabled = !workforceAttendanceUnlocked || action.dataset.future === "true";
+    });
+    root.querySelectorAll("[data-workforce-clock='out']").forEach((action) => {
+      action.disabled = !workforceAttendanceUnlocked
+        || action.dataset.future === "true"
+        || action.dataset.hasCheckIn !== "true";
+    });
+    const instructions = root.querySelector("[data-workforce-entry-instructions]");
+    if (instructions) {
+      instructions.textContent = workforceAttendanceUnlocked
+        ? "اختر نوع التسجيل ثم اضغط خلية العامل واليوم. تُحفظ الحالة فوراً مع وقت التسجيل."
+        : "الجدول مقفول للحماية من اللمس غير المقصود. افتح التسجيل واختر نوع الإجراء أولاً.";
+    }
+  });
+  root.querySelectorAll("[data-workforce-entry-mode]").forEach((button) => button.addEventListener("click", () => {
+    if (!workforceAttendanceUnlocked) return;
+    workforceAttendanceEntryMode = button.dataset.workforceEntryMode;
+    root.querySelectorAll("[data-workforce-entry-mode]").forEach((modeButton) => {
+      const selected = modeButton === button;
+      modeButton.classList.toggle("active", selected);
+      modeButton.setAttribute("aria-pressed", String(selected));
+    });
+  }));
+  root.querySelectorAll("[data-workforce-day-action]").forEach((button) => button.addEventListener("click", async () => {
+    if (!workforceAttendanceUnlocked) return;
+    const workerId = button.dataset.workerId;
+    const date = button.dataset.attendanceDate;
+    if (workforceAttendanceEntryMode === "edit") {
+      openWorkforceAttendanceEditor(root, dashboardData, workerId, date);
+      return;
+    }
+    const worker = workforceEmployees(dashboardData).find((entry) => entry.id === workerId);
+    const existing = workforceAttendanceRecord(dashboardData, workerId, date);
+    if (!worker || !date) {
+      window.factoryUI.toast("تعذر تحديد العامل أو تاريخ الحضور.", "error");
+      return;
+    }
+    if (date > workforceDateKey(new Date())) {
+      window.factoryUI.toast("لا يمكن تسجيل حضور أو غياب بتاريخ مستقبلي.", "error");
+      return;
+    }
+    if (existing) {
+      window.factoryUI.toast("يوجد سجل لهذا اليوم بالفعل. اختر «تعديل التفاصيل» لتغييره.", "error");
+      return;
+    }
+    const now = new Date();
+    const recordedAt = now.toISOString();
+    const recordedTime = workforceLocalTime(now);
+    const settings = workforceSettings(dashboardData);
+    const ownerId = workforceRecordOwnerId(worker, dashboardData);
+    button.disabled = true;
+    try {
+      if (workforceAttendanceEntryMode === "present") {
+        const isToday = date === workforceDateKey(now);
+        const checkIn = isToday ? recordedTime : settings.shiftStart;
+        const delay = isToday
+          ? Math.max(0, workforceTimeMinutes(checkIn) - workforceTimeMinutes(settings.shiftStart))
+          : 0;
+        const payload = {
+          workerId,
+          workerName: worker.name,
+          date,
+          status: delay > 0 ? "late" : "present",
+          checkIn,
+          checkOut: "",
+          paidLeave: false,
+          recordedAt,
+          notes: ""
+        };
+        await saveFlexibleRecord("workforce_attendance", payload, null, ownerId);
+        await workforceCreditPreviousFriday(worker, date, dashboardData, payload);
+        await refresh();
+        if (delay > 0) showWorkforceLateDecisionModal(root, worker, date, delay);
+        else window.factoryUI.toast(`تم تسجيل الحضور الساعة ${recordedTime}.`);
+        return;
+      }
+      if (!["absent-permitted", "absent-unexcused"].includes(workforceAttendanceEntryMode)) {
+        window.factoryUI.toast("اختر نوع تسجيل صالحاً قبل متابعة الحضور.", "error");
+        return;
+      }
+      if (dashboardData.workforceViolations.some((violation) =>
+        violation.workerId === workerId && violation.ruleKey === "absence" && violation.date === date
+      )) {
+        window.factoryUI.toast("يوجد قرار غياب مسجل لهذا اليوم بالفعل؛ افتح التفاصيل لمراجعته.", "error");
+        return;
+      }
+      const permission = workforceAttendanceEntryMode === "absent-permitted" ? "permitted" : "unexcused";
+      const rates = workforceWageRates(workforceProfile(dashboardData, workerId), settings, date.slice(0, 7), dashboardData, workerId);
+      if (rates.rate <= 0) {
+        window.factoryUI.toast("سجل أجر العامل أولاً حتى يمكن احتساب خصم يوم الغياب.", "error");
+        return;
+      }
+      const amount = rates.daily;
+      const decisionDescription = permission === "permitted"
+        ? "غياب بإذن · حسم أجر يوم من المستحقات"
+        : "غياب بدون إذن · لا أجر لليوم + جزاء يوم من المستحقات";
+      await saveFlexibleRecord("workforce_attendance", {
+        workerId,
+        workerName: worker.name,
+        date,
+        status: "absent",
+        checkIn: "",
+        checkOut: "",
+        paidLeave: false,
+        recordedAt,
+        notes: ""
+      }, null, ownerId);
+      await saveFlexibleRecord("workforce_violations", {
+        workerId,
+        workerName: worker.name,
+        ruleKey: "absence",
+        ruleLabel: permission === "unexcused" ? "خصم يوم جزاء غياب بدون إذن" : "خصم يوم غياب بإذن",
+        date,
+        decision: "official",
+        decisionDescription,
+        deductionAmount: amount,
+        deductionDays: 1,
+        permission,
+        recordedAt,
+        notes: ""
+      }, null, ownerId);
+      await refresh();
+      window.factoryUI.toast(`تم تسجيل ${decisionDescription} الساعة ${recordedTime}.`);
+    } catch (error) {
+      reportDashboardFailure(session, "تعذر تسجيل الحضور أو الغياب", error);
+    } finally {
+      button.disabled = false;
+    }
+  }));
   root.querySelectorAll("[data-workforce-clock]").forEach((button) => button.addEventListener("click", async () => {
     const workerId = button.dataset.workerId;
     const date = button.dataset.attendanceDate;
@@ -6848,7 +7037,7 @@ function bindWorkforceActions(session) {
       form.elements.workerId.value = workerId;
       form.elements.date.value = date;
       form.elements.clockType.value = clockType;
-      form.elements.time.value = record?.checkOut || settings.shiftEnd;
+      form.elements.time.value = record?.checkOut || workforceLocalTime();
       form.elements.earlyDepartureDecision.value = earlyViolation?.decision === "waived" ? "waived" : "official";
       form.querySelector("[data-early-departure-option]").hidden = false;
       form.querySelector("[data-early-departure-preview]").textContent = "";
@@ -6890,27 +7079,9 @@ function bindWorkforceActions(session) {
       button.disabled = false;
     }
   }));
-  root.querySelectorAll("[data-workforce-status]").forEach((button) => button.addEventListener("click", () => {
-    const workerId = button.dataset.workerId;
-    const date = button.dataset.attendanceDate;
-    const record = workforceAttendanceRecord(dashboardData, workerId, date);
-    const worker = workforceEmployees(dashboardData).find((entry) => entry.id === workerId);
-    if (!record && !worker) return;
-    const form = root.querySelector(".workforce-attendance-form");
-    const statusSelect = form.elements.status;
-    const isFriday = new Date(`${date}T00:00:00`).getDay() === 5;
-    const states = isFriday
-      ? ["friday_paid", "friday_unpaid", "friday_deducted"]
-      : ["present", "absent", "leave", "late"];
-    if (record?.status && !states.includes(record.status)) states.push(record.status);
-    statusSelect.innerHTML = `<option value="">اختر الحالة</option>${states.map((status) => `<option value="${status}">${escapeHtml(WORKFORCE_ATTENDANCE_LABELS[status])}</option>`).join("")}`;
-    statusSelect.required = true;
-    form.elements.workerId.value = workerId;
-    form.elements.date.value = date;
-    statusSelect.value = record?.status || (isFriday ? "" : "present");
-    form.elements.paidLeave.checked = record?.paidLeave !== false;
-    form.elements.notes.value = record?.notes || "";
-    root.querySelector("[data-workforce-attendance-modal]").hidden = false;
+  root.querySelectorAll("[data-workforce-edit-day]").forEach((button) => button.addEventListener("click", () => {
+    if (!workforceAttendanceUnlocked) return;
+    openWorkforceAttendanceEditor(root, dashboardData, button.dataset.workerId, button.dataset.attendanceDate);
   }));
   root.querySelectorAll("[data-close-workforce-attendance]").forEach((button) => button.addEventListener("click", () => {
     root.querySelector("[data-workforce-attendance-modal]").hidden = true;
@@ -6946,10 +7117,11 @@ function bindWorkforceActions(session) {
       workerName: worker.name,
       date,
       status,
-      checkIn: existing?.checkIn || "",
+      checkIn: existing?.checkIn || (["present", "late"].includes(status) ? workforceLocalTime() : ""),
       checkOut: existing?.checkOut || "",
       paidLeave: status === "leave" && form.elements.paidLeave.checked,
-      notes: form.elements.notes.value.trim()
+      notes: form.elements.notes.value.trim(),
+      recordedAt: new Date().toISOString()
     };
     const submit = form.querySelector('[type="submit"]');
     submit.disabled = true;
@@ -7027,7 +7199,8 @@ function bindWorkforceActions(session) {
         checkIn: existingAttendance?.checkIn || "",
         checkOut: existingAttendance?.checkOut || "",
         paidLeave: false,
-        notes: pending.notes
+        notes: pending.notes,
+        recordedAt: new Date().toISOString()
       }, existingAttendance?._recordId || null, workforceRecordOwnerId(worker, dashboardData));
       const existingViolation = dashboardData.workforceViolations.find((record) =>
         record.workerId === worker.id && record.ruleKey === "absence" && record.date === pending.date
@@ -7043,6 +7216,7 @@ function bindWorkforceActions(session) {
         deductionAmount: amount,
         deductionDays,
         permission: pending.permission,
+        recordedAt: new Date().toISOString(),
         notes: pending.notes
       }, existingViolation?._recordId || null, workforceRecordOwnerId(worker, dashboardData));
       pendingWorkforceAbsenceDecision = null;
@@ -7112,7 +7286,8 @@ function bindWorkforceActions(session) {
       date,
       checkIn: clockType === "in" ? time : existing.checkIn,
       checkOut: clockType === "out" ? time : existing.checkOut,
-      status: clockType === "in" ? delay > 0 ? "late" : "present" : existing.status || "present"
+      status: clockType === "in" ? delay > 0 ? "late" : "present" : existing.status || "present",
+      recordedAt: new Date().toISOString()
     };
     const earlyMinutes = clockType === "out" ? workforceEarlyDepartureMinutes(time, settings) : 0;
     const earlyDecision = form.elements.earlyDepartureDecision.value;
