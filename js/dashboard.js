@@ -4956,7 +4956,7 @@ function renderWorkerProductionAllocation(form) {
 
 function bindWorkerProductionAllocation(form) {
   renderWorkerProductionAllocation(form);
-  card?.addEventListener("input", (event) => {
+  form.addEventListener("input", (event) => {
     if (event.target.matches("[data-worker-production-count]")) {
       if (!workerProductionCountsAreValid(form)) {
         event.target.setCustomValidity("أدخل عدداً صحيحاً من صفر إلى 2,147,483,647.");
