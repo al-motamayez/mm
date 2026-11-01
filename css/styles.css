@@ -1018,6 +1018,30 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 #delivery-form [data-delivery-mode-field] { margin-top: 4px; }
 .client-order-card-colors { display: grid; gap: 5px; color: var(--muted); font-size: 11px; }
 .client-order-card > .button { justify-self: start; min-height: 38px; }
+.client-order-inline-details { grid-column: 1 / -1; min-width: 0; margin-top: 2px; padding-top: 14px; border-top: 1px solid var(--line); }
+.client-order-inline-details[hidden], .client-model-tab-panel[hidden] { display: none; }
+.client-model-details { display: grid; min-width: 0; gap: 12px; }
+.client-model-details .production-details-heading { padding: 0 0 12px; }
+.client-model-details .production-details-heading .model-image-trigger,
+.client-model-details .production-details-heading .model-thumbnail { width: 58px; height: 58px; flex-basis: 58px; }
+.client-model-details .production-details-heading h2 { font-size: 16px; }
+.client-model-details .production-details-heading p { line-height: 1.7; }
+.client-model-tabs { display: flex; gap: 4px; min-width: 0; overflow-x: auto; border-bottom: 1px solid var(--line); }
+.client-model-tabs [role="tab"] { flex: 0 0 auto; padding: 8px 10px; border: 0; border-bottom: 2px solid transparent; color: var(--muted); background: transparent; font: inherit; font-size: 12px; white-space: nowrap; cursor: pointer; }
+.client-model-tabs [role="tab"][aria-selected="true"] { border-bottom-color: var(--green); color: var(--green-dark); font-weight: 700; }
+.client-model-tab-panel { display: grid; min-width: 0; gap: 10px; }
+.client-model-tab-panel > .modal-subheading { margin: 0; }
+.client-model-fabric-type { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; margin: 0; padding: 8px 10px; border: 1px solid #dfe8e2; border-radius: 8px; background: #f8fbf8; font-size: 12px; }
+.client-model-fabric-type span { color: var(--muted); }
+.client-model-fabric-type strong { color: var(--green-dark); }
+.client-model-size-color .model-size-color-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)); gap: 7px; }
+.client-model-size-color .model-size-card { padding: 9px; }
+.client-model-size-color .model-size-color-list { gap: 6px; }
+.client-model-details .cutting-details-section { margin: 0; }
+.client-model-details .cutting-details-section .table-wrap { max-width: 100%; overflow-x: auto; }
+.client-model-details .cutting-details-section table { white-space: normal; }
+.client-model-details .cutting-details-section th,
+.client-model-details .cutting-details-section td { min-width: 78px; }
 .client-financial-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .client-ledger-tabs { margin-top: 4px; }
 .client-ledger-panel[hidden] { display: none; }
