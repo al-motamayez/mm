@@ -1,13 +1,34 @@
 (() => {
-  const CURRENT_VERSION = "2026.11.01.5";
+  const CURRENT_VERSION = new URL(document.currentScript.src).searchParams.get("v")?.trim() || "";
+  const VERSION_PATTERN = /^\d{4}\.\d{2}\.\d{2}\.\d+$/;
   const CHECK_INTERVAL = 5 * 60 * 1000;
   const versionUrl = new URL("../version.json", document.currentScript.src);
   let lastCheck = 0;
   let checking = false;
   let dismissedVersion = "";
 
+  function wasDismissed(version) {
+    if (dismissedVersion === version) return true;
+    try {
+      return window.localStorage.getItem(`site-update-dismissed:${version}`) === version;
+    } catch {
+      return false;
+    }
+  }
+
+  function isNewerVersion(candidate, current) {
+    const candidateParts = candidate.split(".").map(Number);
+    const currentParts = current.split(".").map(Number);
+    for (let index = 0; index < candidateParts.length; index += 1) {
+      if (candidateParts[index] !== currentParts[index]) {
+        return candidateParts[index] > currentParts[index];
+      }
+    }
+    return false;
+  }
+
   function showUpdateNotice(version) {
-    if (dismissedVersion === version || document.querySelector("#site-update-banner")) return;
+    if (wasDismissed(version) || document.querySelector("#site-update-banner")) return;
 
     const banner = document.createElement("aside");
     banner.id = "site-update-banner";
@@ -37,6 +58,11 @@
     laterButton.textContent = "لاحقًا";
     laterButton.addEventListener("click", () => {
       dismissedVersion = version;
+      try {
+        window.localStorage.setItem(`site-update-dismissed:${version}`, version);
+      } catch {
+        // Keep the dismissal for this page when persistent storage is unavailable.
+      }
       banner.remove();
     });
 
@@ -64,10 +90,11 @@
       if (!response.ok) return;
 
       const result = await response.json();
-      if (typeof result.version === "string"
-        && result.version.length <= 64
-        && result.version !== CURRENT_VERSION) {
-        showUpdateNotice(result.version);
+      const remoteVersion = typeof result.version === "string" ? result.version.trim() : "";
+      if (VERSION_PATTERN.test(CURRENT_VERSION)
+        && VERSION_PATTERN.test(remoteVersion)
+        && isNewerVersion(remoteVersion, CURRENT_VERSION)) {
+        showUpdateNotice(remoteVersion);
       }
     } catch {
       // An unavailable version check must not interrupt normal site use.

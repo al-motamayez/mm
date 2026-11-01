@@ -815,6 +815,7 @@ alter table public.orders
   add column if not exists factory_model_catalog_id uuid references public.factory_model_catalog (id) on delete set null,
   add column if not exists parent_order_id uuid references public.orders (id) on delete set null,
   add column if not exists client_model_code text not null default '',
+  add column if not exists partial_delivery_enabled boolean not null default false,
   add column if not exists workflow_archived_at timestamptz,
   add column if not exists sender_name text,
   add column if not exists original_total_pieces integer,
@@ -3371,7 +3372,13 @@ begin
   from public.orders
   where id = requested_order_id;
   if not found
-     or current_order.status <> 'جاهز للتسليم'
+     or not (
+       current_order.status = 'جاهز للتسليم'
+       or (
+         current_order.status = 'جاري الخياطة'
+         and current_order.partial_delivery_enabled
+       )
+     )
      or current_order.archived_at is not null
      or current_order.workflow_archived_at is not null
      or current_order.customer_id is null
@@ -3434,6 +3441,33 @@ begin
 end;
 $$;
 
+create or replace function public.enable_factory_order_partial_delivery(requested_order_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not public.is_active_factory_admin() then
+    raise exception 'Only active admins can enable partial delivery.';
+  end if;
+
+  update public.orders
+  set partial_delivery_enabled = true
+  where id = requested_order_id
+    and status = 'جاري الخياطة'
+    and archived_at is null
+    and workflow_archived_at is null
+    and total_pieces > delivered_pieces
+    and customer_id is not null;
+
+  if not found then
+    raise exception 'Partial delivery can only be enabled for an active sewing order with a client and remaining quantity.';
+  end if;
+end;
+$$;
+
+drop function if exists public.read_factory_worker_delivery_models();
 create or replace function public.read_factory_worker_delivery_models()
 returns table (
   order_id uuid,
@@ -3444,7 +3478,8 @@ returns table (
   delivery_balances jsonb,
   can_submit boolean,
   has_pending_submission boolean,
-  has_unallocated_deliveries boolean
+  has_unallocated_deliveries boolean,
+  partial_delivery_enabled boolean
 )
 language plpgsql
 stable
@@ -3467,12 +3502,19 @@ begin
          factory_order.factory_model_code,
          factory_order.status,
          coalesce(balance_data.delivery_balances, '[]'::jsonb),
-         factory_order.status = 'جاهز للتسليم'
+         (
+           factory_order.status = 'جاهز للتسليم'
+           or (
+             factory_order.status = 'جاري الخياطة'
+             and factory_order.partial_delivery_enabled
+           )
+         )
            and factory_order.delivered_pieces < factory_order.total_pieces
            and not coalesce(pending_data.has_pending_submission, false)
            and not coalesce(unallocated_data.has_unallocated_deliveries, false),
          coalesce(pending_data.has_pending_submission, false),
-         coalesce(unallocated_data.has_unallocated_deliveries, false)
+         coalesce(unallocated_data.has_unallocated_deliveries, false),
+         factory_order.partial_delivery_enabled
   from public.orders as factory_order
   left join lateral (
     select jsonb_agg(
@@ -3544,6 +3586,10 @@ begin
           where own_submission.order_id = factory_order.id
             and own_submission.worker_id = auth.uid()
         )
+      )
+      or (
+        factory_order.status = 'جاري الخياطة'
+        and factory_order.partial_delivery_enabled
       )
     )
   order by factory_order.created_at desc;
@@ -8768,6 +8814,8 @@ revoke all on function public.factory_order_original_delivery_cells(uuid) from p
 revoke all on function public.factory_order_worker_delivery_is_valid(uuid, integer, jsonb) from public, anon, authenticated;
 revoke all on function public.read_factory_worker_delivery_models() from public, anon, authenticated;
 grant execute on function public.read_factory_worker_delivery_models() to authenticated;
+revoke all on function public.enable_factory_order_partial_delivery(uuid) from public, anon, authenticated;
+grant execute on function public.enable_factory_order_partial_delivery(uuid) to authenticated;
 revoke all on function public.submit_factory_worker_order_delivery(uuid, integer, jsonb) from public, anon, authenticated;
 grant execute on function public.submit_factory_worker_order_delivery(uuid, integer, jsonb) to authenticated;
 revoke all on function public.confirm_factory_worker_order_delivery(uuid) from public, anon, authenticated;

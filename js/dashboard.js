@@ -760,6 +760,7 @@ async function readDashboardData(session) {
       deliveryHistory: data.deliveries
         .filter((delivery) => delivery.order_id === order.id)
         .sort((left, right) => new Date(left.delivered_at).getTime() - new Date(right.delivered_at).getTime()),
+      partialDeliveryEnabled: order.partial_delivery_enabled === true,
       archivedAt: order.archived_at || null,
       workflowArchivedAt: order.workflow_archived_at || null,
       remainingPieces: Math.max(Number(order.total_pieces) - Number(order.delivered_pieces || 0), 0),
@@ -2391,13 +2392,20 @@ function orderCards(models, withActions = false) {
       && !item.archivedAt
       && ["مكتمل", "تم القص"].includes(item.cuttingStageStatus)
       && !["متاح للخياطة", "قيد الخياطة", "مكتمل"].includes(item.sewingStageStatus);
+    const canEnablePartialDelivery = withActions
+      && !item.archivedAt
+      && !item.workflowArchivedAt
+      && item.status === "جاري الخياطة"
+      && item.sewingStageStatus === "قيد الخياطة"
+      && item.customerId
+      && item.remainingPieces > 0;
     return `<article class="order-card order-compact-row">
       <header class="production-compact-heading">${modelImageMarkup(item.modelImageUrls || item.modelImageUrl)}<h3>${escapeHtml(item.name || "موديل بدون اسم")}</h3></header>
       <strong class="production-compact-total">${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.quantity)} قطعة</strong>
       <div class="production-compact-facts"><div><span>الألوان</span>${colorSummaryMarkup(item.colors, item.colorNames, item.colorPlyData)}</div><div><span>المقاسات</span>${sizeBadgesMarkup(item.sizes)}</div></div>
       ${withActions ? `<button class="row-action order-expense-trigger" type="button" data-add-model-expense="${escapeHtml(item.id)}">＋ إضافة مصروف خارجي</button>` : ""}
       <button class="row-action" type="button" data-open-model-id="${escapeHtml(item.id)}">التفاصيل</button>
-      ${withActions ? `<div class="order-card-actions">${canMakeSewingAvailable ? `<button class="button button-secondary" type="button" data-make-sewing-available="${escapeHtml(item.id)}">إدخال للخياطة</button>` : ""}${item.archivedAt || item.workflowArchivedAt ? "" : `<button class="row-action" type="button" data-edit-kind="models" data-index="${index}">تعديل</button>`}${item.customerId ? `${item.archivedAt || item.workflowArchivedAt || LOCKED_FACTORY_ORDER_STATUSES.includes(item.status) ? "" : `<button class="row-action" type="button" data-action="record-delivery" data-index="${index}"${item.remainingPieces > 0 ? "" : " disabled"}>تسجيل تسليم</button><button class="row-action order-close-action" type="button" data-action="complete-handover" data-index="${index}"${item.quantity ? "" : " disabled"}>تسوية التسليم وإغلاق الطلب</button>`}` : '<span class="order-delete-protected">عيّن العميل قبل تسجيل أي تسليم</span>'}${item.workflowArchivedAt ? '<span class="status">مؤرشف تشغيلياً</span>' : ""}${item.archivedAt || LOCKED_FACTORY_ORDER_STATUSES.includes(item.status) ? '<span class="status">مغلق / تم التسليم</span>' : ""}${orderCanBeDeleted(item) ? `<button class="row-action order-delete-action" type="button" data-action="delete-order" data-order-id="${escapeHtml(item.id)}">حذف الموديل</button>` : !item.archivedAt && !item.workflowArchivedAt ? `<button class="row-action" type="button" data-archive-factory-order="${escapeHtml(item.id)}">إيقاف / أرشفة</button>` : ""}</div>` : ""}
+      ${withActions ? `<div class="order-card-actions">${canMakeSewingAvailable ? `<button class="button button-secondary" type="button" data-make-sewing-available="${escapeHtml(item.id)}">إدخال للخياطة</button>` : ""}${canEnablePartialDelivery ? item.partialDeliveryEnabled ? '<span class="partial-delivery-enabled" role="status">التسليم الجزئي متاح</span>' : `<button class="row-action partial-delivery-action" type="button" data-enable-partial-delivery="${escapeHtml(item.id)}">إتاحة للتسليم</button>` : ""}${item.archivedAt || item.workflowArchivedAt ? "" : `<button class="row-action" type="button" data-edit-kind="models" data-index="${index}">تعديل</button>`}${item.customerId ? `${item.archivedAt || item.workflowArchivedAt || LOCKED_FACTORY_ORDER_STATUSES.includes(item.status) ? "" : `<button class="row-action" type="button" data-action="record-delivery" data-index="${index}"${item.remainingPieces > 0 ? "" : " disabled"}>تسجيل تسليم</button><button class="row-action order-close-action" type="button" data-action="complete-handover" data-index="${index}"${item.quantity ? "" : " disabled"}>تسوية التسليم وإغلاق الطلب</button>`}` : '<span class="order-delete-protected">عيّن العميل قبل تسجيل أي تسليم</span>'}${item.workflowArchivedAt ? '<span class="status">مؤرشف تشغيلياً</span>' : ""}${item.archivedAt || LOCKED_FACTORY_ORDER_STATUSES.includes(item.status) ? '<span class="status">مغلق / تم التسليم</span>' : ""}${orderCanBeDeleted(item) ? `<button class="row-action order-delete-action" type="button" data-action="delete-order" data-order-id="${escapeHtml(item.id)}">حذف الموديل</button>` : !item.archivedAt && !item.workflowArchivedAt ? `<button class="row-action" type="button" data-archive-factory-order="${escapeHtml(item.id)}">إيقاف / أرشفة</button>` : ""}</div>` : ""}
     </article>`;
   }).join("")}</div>`;
 }
@@ -4811,9 +4819,14 @@ function workerOrderDeliveryForm(order) {
       ? "يوجد تسليم بانتظار مراجعة الإدارة لهذه الطلبية."
       : order.status === "تم التسليم"
         ? "اكتمل تسليم الطلبية."
+      : !order.can_submit
+        ? "لا توجد كمية قابلة للتسليم حالياً."
         : "لا توجد كمية متبقية قابلة للتسليم.";
+  const orderStatusLabel = order.partial_delivery_enabled && order.status === "جاري الخياطة"
+    ? "التسليم الجزئي متاح أثناء الخياطة"
+    : order.status;
   return `<article class="worker-order-delivery-card" data-delivery-order-card="${escapeHtml(order.order_id)}" hidden>
-    <header><div><h3>${escapeHtml(order.model_name || "موديل بدون اسم")}</h3><p>${escapeHtml(order.factory_model_code || order.model_number || "طلبية")}</p></div>${statusTag(order.status)}</header>
+    <header><div><h3>${escapeHtml(order.model_name || "موديل بدون اسم")}</h3><p>${escapeHtml(order.factory_model_code || order.model_number || "طلبية")}</p></div>${statusTag(orderStatusLabel)}</header>
     ${order.has_unallocated_deliveries
       ? '<div class="worker-delivery-locked-note">تعذر احتساب المتبقي لكل لون ومقاس بسبب دفعة قديمة بلا توزيع تفصيلي.</div>'
       : workerOrderDeliveryRowsMarkup(balances, !locked)}
@@ -4825,7 +4838,8 @@ function workerOrderDeliveryForm(order) {
 
 function workerOrderDeliveryPortalView(data) {
   const readyModels = (data.workerDeliveryModels || []).filter((order) =>
-    canonicalFactoryOrderStatus(order.status) === "جاهز للتسليم");
+    canonicalFactoryOrderStatus(order.status) === "جاهز للتسليم"
+    || (order.status === "جاري الخياطة" && order.partial_delivery_enabled === true));
   const modelCards = readyModels.map(workerOrderDeliveryForm);
   const modelOptions = readyModels.map((order) =>
     `<option value="${escapeHtml(order.order_id)}">${escapeHtml(order.model_name || "موديل بدون اسم")} · ${escapeHtml(order.factory_model_code || order.model_number || "بدون كود")}</option>`
@@ -4842,10 +4856,10 @@ function workerOrderDeliveryPortalView(data) {
     </article>`;
   });
   return `<section id="worker-production" class="dashboard-section worker-production-section">
-    ${panel("تسليم الطلبيات الجاهزة", modelCards.length
-      ? `<label class="field worker-delivery-model-select"><span>اختر الموديل الجاهز للتسليم</span><select data-worker-delivery-model required><option value="">اختر الموديل</option>${modelOptions}</select></label><div class="worker-order-delivery-list">${modelCards.join("")}</div>`
-      : '<div class="empty-state">لا توجد طلبيات جاهزة للتسليم مرتبطة بحسابك حالياً.</div>',
-    "اختر طلبية جاهزة؛ ستظهر ألوانها ومقاساتها من سجل القص مع المستلم سابقاً والمتبقي فقط. أدخل أعداد هذه الدفعة ثم أرسلها للإدارة؛ لا تُضاف إلى سجل العميل إلا بعد اعتمادها.")}
+    ${panel("تسليم الطلبيات الجاهزة والتسليم الجزئي", modelCards.length
+      ? `<label class="field worker-delivery-model-select"><span>اختر الطلبية الجاهزة أو المتاحة جزئياً</span><select data-worker-delivery-model required><option value="">اختر الموديل</option>${modelOptions}</select></label><div class="worker-order-delivery-list">${modelCards.join("")}</div>`
+      : '<div class="empty-state">لا توجد طلبيات جاهزة أو متاحة للتسليم الجزئي مرتبطة بحسابك حالياً.</div>',
+    "اختر الطلبية؛ ستظهر ألوانها ومقاساتها من سجل القص مع المستلم سابقاً والمتبقي فقط. أدخل أعداد هذه الدفعة الفعلية ثم أرسلها للإدارة؛ لا تُضاف إلى سجل العميل إلا بعد اعتمادها.")}
     ${panel("سجل تسليماتي", submissionRows.length
       ? `<div class="worker-order-delivery-history-list">${submissionRows.join("")}</div>`
       : '<div class="empty-state">لا توجد دفعات تسليم مرسلة بعد.</div>')}
@@ -9745,6 +9759,34 @@ function bindSewingStageActions(session) {
       if (button.isConnected) button.disabled = false;
     }
   }));
+  document.querySelectorAll("[data-enable-partial-delivery]").forEach((button) => button.addEventListener("click", async () => {
+    const orderId = button.dataset.enablePartialDelivery;
+    if (!orderId) {
+      window.factoryUI.toast("تعذر تحديد طلب الخياطة.", "error");
+      return;
+    }
+    if (!await window.factoryUI.confirmAction({
+      title: "إتاحة التسليم الجزئي",
+      message: "سيظهر هذا الموديل للمشرفين في صفحة تسليم الإنتاج. ستظل الكميات المسجلة خاضعة لمراجعة الإدارة.",
+      confirmLabel: "إتاحة للتسليم"
+    })) return;
+    button.disabled = true;
+    try {
+      const { error } = await supabaseClient.rpc("enable_factory_order_partial_delivery", {
+        requested_order_id: orderId
+      });
+      if (error?.code === "PGRST202") {
+        throw new Error("دالة إتاحة التسليم الجزئي غير موجودة. شغّل supabase/schema.sql المحدّث في SQL Editor.");
+      }
+      if (error) throw error;
+      await refreshDashboard(session);
+      window.factoryUI.toast("أصبح الموديل متاحاً للتسليم الجزئي أثناء الخياطة.");
+    } catch (error) {
+      reportDashboardFailure(session, "تعذر إتاحة التسليم الجزئي", error);
+    } finally {
+      if (button.isConnected) button.disabled = false;
+    }
+  }));
 }
 
 function productionColorsFromForm(form) {
@@ -11343,7 +11385,10 @@ function bindActions(session) {
   };
   const deliveryEligibleOrders = () => dashboardData.models.filter((order) =>
     !order.archivedAt
-    && canonicalFactoryOrderStatus(effectiveFactoryOrderStatus(order).status) === "جاهز للتسليم"
+    && (
+      canonicalFactoryOrderStatus(effectiveFactoryOrderStatus(order).status) === "جاهز للتسليم"
+      || (order.status === "جاري الخياطة" && order.partialDeliveryEnabled)
+    )
     && Number(order.remainingPieces ?? (Number(order.quantity || 0) - Number(order.deliveredPieces || 0))) > 0
   );
   const populateDeliveryOrderSelect = (selectedOrderId) => {

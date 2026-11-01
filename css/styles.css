@@ -518,6 +518,8 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .worker-order-delivery-list { display: grid; gap: 10px; }
 .worker-delivery-model-select { max-width: 520px; }
 .worker-delivery-model-select select { width: 100%; }
+.partial-delivery-action { border-color: #b7d8d0; color: var(--green); }
+.partial-delivery-enabled { display: inline-flex; align-items: center; padding: 6px 10px; border-radius: 999px; color: #155e45; background: #e5f4ed; font-size: 12px; font-weight: 700; }
 .worker-order-delivery-card, .worker-order-delivery-history { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
 .worker-order-delivery-card > header, .worker-order-delivery-history > header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
 .worker-order-delivery-card h3, .worker-order-delivery-card p, .worker-order-delivery-history p { margin: 0; }
