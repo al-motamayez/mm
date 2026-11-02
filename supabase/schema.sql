@@ -1547,7 +1547,7 @@ begin
       where length(btrim(selected_stage)) not between 1 and 50
          or selected_stage <> btrim(selected_stage)
          or lower(btrim(selected_stage)) = any(array[
-           'delivery', 'cutting', 'sewing', 'finishing', 'ironing', 'printing', 'packaging', 'sorting',
+           'delivery',
            'قص', 'خياطة', 'تشطيب', 'مكوى', 'طباعة', 'تكييس / أمبلاج', 'فرز',
            'التشطيب', 'المكواة', 'الكي', 'الطباعة', 'التكييس', 'الفرز'
          ]::text[])
@@ -9125,4 +9125,3 @@ alter table public.factory_client_model_requests replica identity full;
 alter table public.factory_cutting_stories replica identity full;
 
 notify pgrst, 'reload schema';
-        
