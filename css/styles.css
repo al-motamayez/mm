@@ -515,7 +515,19 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .worker-submission-review h3, .worker-submission-review p { margin: 0 0 5px; }
 .worker-submission-review .color-picker { grid-column: 1 / -1; }
 .worker-production-allocation { grid-column: 1 / -1; min-width: 0; }
-.worker-order-delivery-list { display: grid; gap: 10px; }
+.worker-order-delivery-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 190px), 1fr)); gap: 8px; }
+.worker-delivery-model-card { display: flex; min-width: 0; align-items: center; gap: 9px; padding: 8px; border: 1px solid var(--line); border-radius: 10px; color: inherit; background: #fff; text-align: right; transition: border-color .15s, background-color .15s; }
+.worker-delivery-model-card:hover, .worker-delivery-model-card:focus-visible { border-color: #7eac98; background: #f5faf6; }
+.worker-delivery-model-card:focus-visible { outline: 3px solid #5e9b8333; outline-offset: 2px; }
+.worker-delivery-model-card > img { flex: 0 0 48px; width: 48px; height: 48px; border-radius: 7px; background: #f1f4f2; object-fit: cover; }
+.worker-delivery-model-info { display: grid; min-width: 0; gap: 3px; }
+.worker-delivery-model-info strong, .worker-delivery-model-info small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.worker-delivery-model-info strong { color: var(--green-dark); font-size: 13px; }
+.worker-delivery-model-info small, .worker-delivery-model-code { color: var(--muted); font-size: 11px; }
+.worker-delivery-modal-card { width: min(940px, calc(100vw - 24px)); }
+.worker-delivery-modal-card > h2 { margin: 0; padding: 0 36px 0 0; color: var(--green-dark); font-size: 20px; }
+.worker-delivery-modal-card > .worker-delivery-model-code { margin: 5px 0 14px; }
+.worker-delivery-modal-card > .worker-order-delivery-card { padding: 0; border: 0; }
 .partial-delivery-action { border-color: #b7d8d0; color: var(--green); }
 .partial-delivery-enabled { display: inline-flex; align-items: center; padding: 6px 10px; border-radius: 999px; color: #155e45; background: #e5f4ed; font-size: 12px; font-weight: 700; }
 .worker-order-delivery-card, .worker-order-delivery-history { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
@@ -540,6 +552,10 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .worker-order-delivery-history { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
 .worker-order-delivery-history p, .worker-order-delivery-history .production-colors { grid-column: 1 / -1; }
 @media (max-width: 560px) {
+  .worker-order-delivery-list { grid-template-columns: repeat(auto-fill, minmax(min(100%, 150px), 1fr)); }
+  .worker-delivery-model-card { gap: 7px; padding: 7px; }
+  .worker-delivery-model-card > img { flex-basis: 42px; width: 42px; height: 42px; }
+  .worker-delivery-model-info strong { font-size: 12px; }
   .worker-order-delivery-card > .worker-order-model-heading { grid-template-columns: 52px minmax(0, 1fr); }
   .worker-order-model-heading > .model-image-trigger, .worker-order-model-heading > .model-image-gallery, .worker-order-model-heading .model-thumbnail { width: 52px; height: 52px; }
   .worker-order-model-heading > .status { grid-column: 2; justify-self: start; }

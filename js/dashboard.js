@@ -4955,7 +4955,18 @@ function workerOrderDeliveryForm(order) {
   const modelName = order.model_name || "موديل بدون اسم";
   const modelNumber = order.model_number || order.model_serial || "—";
   const modelImageUrls = [order.model_image_url, order.model_image_url_2].filter(Boolean);
-  return `<article class="worker-order-delivery-card">
+  const imageUrl = modelImageUrls[0] || DEFAULT_MODEL_IMAGE_URL;
+  const orderId = escapeHtml(order.order_id);
+  return `<button class="worker-delivery-model-card" type="button" data-open-worker-delivery="${orderId}" aria-haspopup="dialog" aria-controls="worker-delivery-modal-${orderId}">
+    <img src="${escapeHtml(imageUrl)}" alt="" loading="lazy">
+    <span class="worker-delivery-model-info"><strong>${escapeHtml(modelName)}</strong><small>${escapeHtml(order.factory_model_code || order.client_model_code || modelNumber)}</small></span>
+  </button>
+  <div class="modal-backdrop worker-delivery-modal" id="worker-delivery-modal-${orderId}" data-worker-delivery-modal="${orderId}" hidden>
+  <section class="modal-card worker-delivery-modal-card" role="dialog" aria-modal="true" aria-labelledby="worker-delivery-title-${orderId}">
+    <button class="modal-close" type="button" data-close-worker-delivery aria-label="إغلاق">×</button>
+    <h2 id="worker-delivery-title-${orderId}">${escapeHtml(modelName)}</h2>
+    <p class="worker-delivery-model-code">كود الموديل: ${escapeHtml(order.factory_model_code || order.client_model_code || modelNumber)}</p>
+    <article class="worker-order-delivery-card">
     <header class="worker-order-model-heading">${modelImageMarkup(modelImageUrls.length ? modelImageUrls : "", `صورة ${modelName}`)}<div class="worker-order-model-info"><h3>${escapeHtml(modelName)}</h3><div class="worker-model-identifiers"><span><small>كود المصنع</small><strong>${escapeHtml(order.factory_model_code || "—")}</strong></span><span><small>كود العميل</small><strong>${escapeHtml(order.client_model_code || "—")}</strong></span><span><small>رقم الموديل</small><strong>${escapeHtml(modelNumber)}</strong></span></div></div>${statusTag(orderStatusLabel)}</header>
     ${order.has_unallocated_deliveries
       ? '<div class="worker-delivery-locked-note">تعذر احتساب المتبقي لكل لون ومقاس بسبب دفعة قديمة بلا توزيع تفصيلي.</div>'
@@ -4963,7 +4974,9 @@ function workerOrderDeliveryForm(order) {
     ${locked
       ? `<p class="worker-delivery-locked-note">${escapeHtml(lockMessage)}</p>`
       : `<form class="worker-order-delivery-form" data-worker-order-delivery="${escapeHtml(order.order_id)}"><label class="field"><span>إجمالي التسليم لهذه الدفعة</span><output data-order-delivery-total>0</output></label><div class="form-actions"><button class="button button-primary" type="submit">إرسال للإدارة للتأكيد</button></div></form>`}
-  </article>`;
+    </article>
+  </section>
+  </div>`;
 }
 
 function workerOrderDeliveryPortalView(data) {
@@ -10127,6 +10140,34 @@ function productionColorsFromForm(form) {
 
 function bindWorkerOrderDeliveryActions(session) {
   if (!session.canSubmitProduction) return;
+  document.querySelectorAll("[data-open-worker-delivery]").forEach((button) => button.addEventListener("click", () => {
+    const modal = document.querySelector(`[data-worker-delivery-modal="${CSS.escape(button.dataset.openWorkerDelivery)}"]`);
+    if (!modal) {
+      window.factoryUI.toast("تعذر العثور على تفاصيل الطلبية.", "error");
+      return;
+    }
+    modal.hidden = false;
+    modal.querySelector("[data-close-worker-delivery]")?.focus();
+  }));
+  document.querySelectorAll("[data-worker-delivery-modal]").forEach((modal) => {
+    const close = () => {
+      modal.hidden = true;
+      document.querySelector(`[data-open-worker-delivery="${CSS.escape(modal.dataset.workerDeliveryModal)}"]`)?.focus();
+    };
+    modal.querySelectorAll("[data-close-worker-delivery]").forEach((button) => button.addEventListener("click", close));
+    modal.addEventListener("click", (event) => {
+      if (event.target === modal) close();
+    });
+  });
+  if (document.documentElement.dataset.workerDeliveryModalEscapeBound !== "true") {
+    document.documentElement.dataset.workerDeliveryModalEscapeBound = "true";
+    document.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      document.querySelectorAll("[data-worker-delivery-modal]:not([hidden])").forEach((modal) => {
+        modal.hidden = true;
+      });
+    });
+  }
   document.querySelectorAll("[data-worker-order-delivery]").forEach((form) => {
     const card = form.closest(".worker-order-delivery-card");
     const countInputs = [...(card?.querySelectorAll("[data-order-delivery-count]") || [])];
