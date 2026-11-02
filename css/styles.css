@@ -516,14 +516,21 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .worker-submission-review .color-picker { grid-column: 1 / -1; }
 .worker-production-allocation { grid-column: 1 / -1; min-width: 0; }
 .worker-order-delivery-list { display: grid; gap: 10px; }
-.worker-delivery-model-select { max-width: 520px; }
-.worker-delivery-model-select select { width: 100%; }
 .partial-delivery-action { border-color: #b7d8d0; color: var(--green); }
 .partial-delivery-enabled { display: inline-flex; align-items: center; padding: 6px 10px; border-radius: 999px; color: #155e45; background: #e5f4ed; font-size: 12px; font-weight: 700; }
 .worker-order-delivery-card, .worker-order-delivery-history { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
 .worker-order-delivery-card > header, .worker-order-delivery-history > header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
 .worker-order-delivery-card h3, .worker-order-delivery-card p, .worker-order-delivery-history p { margin: 0; }
 .worker-order-delivery-card header p { color: var(--muted); font-size: 12px; }
+.worker-order-delivery-card > .worker-order-model-heading { display: grid; grid-template-columns: 58px minmax(0, 1fr) auto; align-items: center; }
+.worker-order-model-heading > .model-image-trigger, .worker-order-model-heading > .model-image-gallery, .worker-order-model-heading .model-thumbnail { width: 58px; height: 58px; }
+.worker-order-model-heading .model-thumbnail { object-fit: cover; }
+.worker-order-model-info { display: grid; min-width: 0; gap: 5px; }
+.worker-order-model-info h3 { overflow-wrap: anywhere; color: var(--green-dark); font-size: 15px; }
+.worker-model-identifiers { display: flex; flex-wrap: wrap; gap: 5px 12px; }
+.worker-model-identifiers > span { display: grid; min-width: 0; gap: 1px; }
+.worker-model-identifiers small { color: var(--muted); font-size: 10px; }
+.worker-model-identifiers strong { overflow-wrap: anywhere; color: #34453e; font-size: 12px; }
 .worker-order-delivery-table { min-width: 560px; }
 .worker-order-delivery-form { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
 .worker-order-delivery-form .field { margin: 0; }
@@ -532,6 +539,11 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .worker-order-delivery-history-list { display: grid; gap: 8px; }
 .worker-order-delivery-history { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
 .worker-order-delivery-history p, .worker-order-delivery-history .production-colors { grid-column: 1 / -1; }
+@media (max-width: 560px) {
+  .worker-order-delivery-card > .worker-order-model-heading { grid-template-columns: 52px minmax(0, 1fr); }
+  .worker-order-model-heading > .model-image-trigger, .worker-order-model-heading > .model-image-gallery, .worker-order-model-heading .model-thumbnail { width: 52px; height: 52px; }
+  .worker-order-model-heading > .status { grid-column: 2; justify-self: start; }
+}
 .submission-comparison { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: #f8faf8; }
 .submission-comparison > p { margin: 0; }
 .submission-comparison-totals { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }

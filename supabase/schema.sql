@@ -3458,14 +3458,13 @@ begin
   update public.orders
   set partial_delivery_enabled = true
   where id = requested_order_id
-    and status = 'جاري الخياطة'
     and archived_at is null
     and workflow_archived_at is null
     and total_pieces > delivered_pieces
     and customer_id is not null;
 
   if not found then
-    raise exception 'Partial delivery can only be enabled for an active sewing order with a client and remaining quantity.';
+    raise exception 'Partial delivery can only be enabled for an active order with a client and remaining quantity.';
   end if;
 end;
 $$;
@@ -3476,7 +3475,11 @@ returns table (
   order_id uuid,
   model_name text,
   model_number text,
+  model_serial bigint,
   factory_model_code text,
+  client_model_code text,
+  model_image_url text,
+  model_image_url_2 text,
   status text,
   delivery_balances jsonb,
   can_submit boolean,
@@ -3502,7 +3505,11 @@ begin
   select factory_order.id,
          factory_order.model_name,
          factory_order.model_number,
+         factory_order.model_serial,
          factory_order.factory_model_code,
+         factory_order.client_model_code,
+         factory_order.model_image_url,
+         factory_order.model_image_url_2,
          factory_order.status,
          coalesce(balance_data.delivery_balances, '[]'::jsonb),
          (
@@ -3590,10 +3597,7 @@ begin
             and own_submission.worker_id = auth.uid()
         )
       )
-      or (
-        factory_order.status = 'جاري الخياطة'
-        and factory_order.partial_delivery_enabled
-      )
+      or factory_order.partial_delivery_enabled
     )
   order by factory_order.created_at desc;
 end;
