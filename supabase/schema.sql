@@ -3377,10 +3377,7 @@ begin
   if not found
      or not (
        current_order.status = 'جاهز للتسليم'
-       or (
-         current_order.status = 'جاري الخياطة'
-         and current_order.partial_delivery_enabled
-       )
+       or current_order.partial_delivery_enabled
      )
      or current_order.archived_at is not null
      or current_order.workflow_archived_at is not null
@@ -3514,10 +3511,7 @@ begin
          coalesce(balance_data.delivery_balances, '[]'::jsonb),
          (
            factory_order.status = 'جاهز للتسليم'
-           or (
-             factory_order.status = 'جاري الخياطة'
-             and factory_order.partial_delivery_enabled
-           )
+           or factory_order.partial_delivery_enabled
          )
            and factory_order.delivered_pieces < factory_order.total_pieces
            and not coalesce(pending_data.has_pending_submission, false)

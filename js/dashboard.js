@@ -780,6 +780,9 @@ async function readDashboardData(session) {
       ledgerStatus: effectiveStatus.status,
       cuttingStageStatus: cuttingStage?.status || "",
       sewingStageStatus,
+      completedAdditionalStages: orderStages
+        .filter((stage) => stage.status === "مكتمل")
+        .map((stage) => stage.stage_name),
       deliveryStatus: order.delivery_status || "",
       storedStatus,
       displayStatus: effectiveStatus.status === "قيد الفرش" && Number(cuttingStage?.layer_count) > 0
@@ -3059,11 +3062,14 @@ function modelStatusReviewView(data) {
       const allOrderStatuses = factoryOrderStatusSequence(order);
       const additionalStages = (order.workStages || []).filter((stage) => stage !== "cutting" && stage !== "sewing");
       const additionalStatuses = additionalStages.flatMap(workStageStatusLabels);
+      const additionalStagesComplete = additionalStages.every((stage) =>
+        (order.completedAdditionalStages || []).includes(stage)
+      );
       const canManageStageStatus = selectedStatus === "تمت الخياطة"
         || (!order.workStages?.includes("sewing") && order.workStages?.includes("cutting") && selectedStatus === "تم القص" && additionalStages.length > 0)
         || additionalStatuses.includes(selectedStatus);
       const statuses = canManageStageStatus
-        ? [...new Set([selectedStatus, ...additionalStatuses, "جاهز للتسليم"])]
+        ? [...new Set([selectedStatus, ...additionalStatuses, ...(additionalStagesComplete ? ["جاهز للتسليم"] : [])])]
         : selectedStatus === "قيد الانتظار"
           ? ["قيد الانتظار", "قيد الفرش"]
           : allOrderStatuses.filter((status) => status !== "تم التسليم");
@@ -3076,6 +3082,7 @@ function modelStatusReviewView(data) {
       <button class="button button-secondary" type="button" data-save-model-status="${escapeHtml(order.id)}"${isLocked || workflowManaged ? " disabled" : ""}>حفظ الحالة</button>
       ${isLocked ? '<span class="order-delete-protected">لا يمكن تغيير حالة موديل تم تسليمه أو إغلاقه.</span>' : ""}
       ${workflowManaged ? '<span class="order-delete-protected">تُحدّث الحالة من إجراءات القص والخياطة.</span>' : ""}
+      ${canManageStageStatus && !additionalStagesComplete ? '<span class="order-delete-protected">لا يمكن اختيار «جاهز للتسليم» قبل اكتمال جميع المراحل الإضافية.</span>' : ""}
     </article>`;
     }).join("")}</div>` : '<div class="empty-state">لا توجد موديلات لمراجعتها.</div>'}`;
 }
@@ -4938,12 +4945,12 @@ function workerOrderDeliveryForm(order) {
       : order.status === "تم التسليم"
         ? "اكتمل تسليم الطلبية."
       : !order.can_submit && order.partial_delivery_enabled
-        ? "تمت إتاحة الموديل؛ سيصبح التسليم متاحاً عند وصول الطلبية إلى مرحلة الخياطة أو الجاهزية."
+    ? "تمت إتاحة التسليم الجزئي، ولا توجد كمية متبقية قابلة للتسليم حالياً."
     : !order.can_submit
       ? "لا توجد كمية قابلة للتسليم حالياً."
       : "لا توجد كمية متبقية قابلة للتسليم.";
-  const orderStatusLabel = order.partial_delivery_enabled && order.status === "جاري الخياطة"
-    ? "التسليم الجزئي متاح أثناء الخياطة"
+  const orderStatusLabel = order.partial_delivery_enabled && order.status !== "جاهز للتسليم"
+    ? `التسليم الجزئي متاح · ${order.status}`
     : order.status;
   const modelName = order.model_name || "موديل بدون اسم";
   const modelNumber = order.model_number || order.model_serial || "—";
