@@ -3755,7 +3755,7 @@ function fabricStockView(data, isAdmin) {
   const incomingSection = `<section id="incoming-fabric" class="dashboard-section">
     <div class="stats-grid">${stat("سجلات القماش الداخل", incomingFabrics.length, "مرتبطة بعميل أو بانتظار التحديد")}${stat("الأثواب المتاحة للقص", totalForUnit(incomingFabrics, "توب"), "عدد أثواب منفصل")}${stat("الأمتار المتاحة للقص", totalForUnit(incomingFabrics, "متر"), "بعد خصم القماش المستخدم")}${isAdmin ? stat("حركات القماش", totalTransactions, "استلام وسحب") : ""}</div>
     ${panel("القماش الداخل", incomingForm, "اكتب نوع القماش مرة واحدة، ثم أضف لوناً وكمية ووحدة لكل لون. يمكن تسجيل عدة أنواع في الشحنة نفسها.")}
-    ${panel("مخزون القماش الحالي للقص", filteredIncomingStock)}
+    ${panel(isAdmin ? "مخزون القماش الحالي للقص" : "مخزن القماش", filteredIncomingStock)}
     ${isAdmin ? panel("حركات المخزون", table(["القماش","الحركة","الكمية","رقم الطلب","البيان","التاريخ والوقت","إجراء"], transactionRows, "fabric-history-table")) : ""}
   </section>`;
   if (!isAdmin) return incomingSection;
@@ -5546,6 +5546,7 @@ function navigationItems(role, info, session = null) {
       { id: "records", icon: "▣", label: "سجلات الموديلات والقصات" },
       { id: "cutting-requests", icon: "✉", label: "طلبات القص الجديدة" },
       { id: "admin-requests", icon: "✂", label: "طلبات الإدارة" },
+      { id: "incoming-fabric", icon: "▧", label: "مخزن القماش" },
       { id: "new-cutting", icon: "＋", label: "قصة جديدة" },
       ...(session?.canSubmitProduction ? [{ id: "worker-production", icon: "✓", label: "تسليم الإنتاج" }] : []),
       { id: "personal-account", icon: "◷", label: "متابعة الحساب والراتب", last: true }
