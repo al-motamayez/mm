@@ -1082,9 +1082,12 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .fabric-customer-filter select { min-height: 38px; padding: 7px 10px; border: 1px solid #d5e2d9; border-radius: 8px; background: #fff; color: var(--ink); font: inherit; font-weight: 400; }
 .fabric-stock-card-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
 .fabric-stock-card-list [data-fabric-card][hidden] { display: none; }
-.fabric-stock-card { display: grid; grid-template-columns: minmax(130px, 1.15fr) minmax(115px, 1fr) minmax(110px, .9fr) minmax(110px, .8fr) minmax(150px, 1.2fr) auto; align-items: center; gap: 10px 16px; min-width: 0; padding: 12px 14px; border: 1px solid #dfe8e2; border-radius: 9px; background: linear-gradient(120deg, #fff, #f8fbf8); }
-.fabric-stock-card-main, .fabric-stock-card-kind, .fabric-stock-card-color, .fabric-stock-card-quantity, .fabric-stock-card-owner { display: grid; min-width: 0; gap: 3px; }
-.fabric-stock-card-main small, .fabric-stock-card-kind small, .fabric-stock-card-color small, .fabric-stock-card-quantity small, .fabric-stock-card-owner small { color: var(--muted); font-size: 10px; }
+.fabric-stock-card { display: grid; grid-template-columns: minmax(145px, 1fr) minmax(130px, 1fr) minmax(110px, .9fr) minmax(110px, .8fr) minmax(140px, 1fr) auto; align-items: center; gap: 10px 14px; min-width: 0; padding: 12px 14px; border: 1px solid #dfe8e2; border-radius: 9px; background: linear-gradient(120deg, #fff, #f8fbf8); }
+.fabric-stock-card-main, .fabric-stock-card-date, .fabric-stock-card-kind, .fabric-stock-card-color, .fabric-stock-card-quantity, .fabric-stock-card-owner { display: grid; min-width: 0; gap: 3px; }
+.fabric-stock-card-main small, .fabric-stock-card-date small, .fabric-stock-card-kind small, .fabric-stock-card-color small, .fabric-stock-card-quantity small, .fabric-stock-card-owner small { color: var(--muted); font-size: 10px; }
+.fabric-stock-card-date time, .fabric-history-datetime, .digital-date-time { color: #274c3a; direction: ltr; font-size: 12px; font-variant-numeric: tabular-nums; font-weight: 700; text-align: left; unicode-bidi: isolate; white-space: nowrap; }
+.production-record-date { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px; margin-top: 7px; color: #53635a; font-size: 11px; }
+.client-fabric-stock-date { grid-column: 1 / -1; display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px; font-size: 11px; }
 .fabric-stock-card-main strong { overflow: hidden; color: var(--green-dark); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .fabric-stock-card-kind small, .fabric-stock-card-owner small { color: var(--green-dark); font-size: 11px; font-weight: 700; }
 .fabric-stock-card-kind span, .fabric-stock-card-owner span { overflow-wrap: anywhere; color: #34483f; font-size: 13px; font-weight: 600; }
@@ -1222,6 +1225,7 @@ input, select, .modal-form textarea { color: #1d3028; font-size: 16px; }
 @media (max-width: 650px) {
   .client-financial-summary { grid-template-columns: minmax(0, 1fr); }
   .fabric-stock-card { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px 12px; }
+  .fabric-stock-card-date { grid-column: 1 / -1; }
   .fabric-stock-card-main { grid-column: 1 / -1; }
   .fabric-edit-form { grid-template-columns: minmax(0, 1fr); }
   .login-layout { grid-template-columns: 1fr; }

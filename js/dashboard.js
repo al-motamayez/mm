@@ -849,7 +849,8 @@ async function readDashboardData(session) {
       status: stage.status,
       orderStatus: ordersById.get(stage.order_id)?.status || stage.status,
       senderName: ordersById.get(stage.order_id)?.sender_name || "",
-      createdAt: ordersById.get(stage.order_id)?.created_at || ""
+      createdAt: ordersById.get(stage.order_id)?.created_at || "",
+      updatedAt: stage.updated_at || ordersById.get(stage.order_id)?.created_at || ""
     }));
   data.sewing = stages
     .filter((stage) => stageNames.get(stage.stage_name) === "sewing")
@@ -899,7 +900,8 @@ async function readDashboardData(session) {
         stageStatus: stage.status === "قيد التنفيذ" ? "قيد الخياطة" : stage.status,
         status: stage.status === "متاح للخياطة"
           ? "في انتظار الخياطة"
-          : stage.status === "قيد التنفيذ" ? "قيد الخياطة" : stage.status
+          : stage.status === "قيد التنفيذ" ? "قيد الخياطة" : stage.status,
+        updatedAt: stage.updated_at || order?.created_at || ""
       };
     });
 
@@ -2072,6 +2074,14 @@ function formatDateTime(value) {
     hour: "numeric",
     minute: "2-digit"
   }).format(date);
+}
+
+function formatDigitalDateTime(value) {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return escapeHtml(value);
+  const pad = (part) => String(part).padStart(2, "0");
+  return `${date.getFullYear()}/${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
 function formatDateOnly(value) {
@@ -3326,8 +3336,8 @@ function clientDetailsView(client, data) {
     <div data-client-profile-panel="overview"${activeClientProfileTab === "overview" ? "" : " hidden"}>
     <section class="client-detail-section"><header class="section-heading"><div><h2>الموديلات التي تم تسعيرها</h2><p>يُحتسب المطلوب المالي على الكمية التي تم تسليمها.</p></div><button class="button button-secondary" type="button" data-open-order-for-client="${escapeHtml(client.id)}">＋ إضافة موديل للعميل</button></header>${pricedOrders.length ? `<div class="order-cards">${pricedOrders.map((order) => orderCard(order)).join("")}</div>` : '<div class="empty-state">لا توجد موديلات مسعّرة في الفترة الحالية.</div>'}</section>
     <section class="client-detail-section"><header class="section-heading"><div><h2>موديلات لم تُسعّر بعد</h2><p>طلبات في القص أو مراحل التشغيل الأخرى.</p></div></header>${unpricedOrders.filter((order) => !waitingOrderIds.has(order.id)).length ? `<div class="order-cards">${unpricedOrders.filter((order) => !waitingOrderIds.has(order.id)).map((order) => orderCard(order)).join("")}</div>` : '<div class="empty-state">لا توجد موديلات بانتظار التسعير.</div>'}</section>
-    <section class="client-detail-section">${panel("الموديلات المسلّمة", deliveries.length ? table(["الصورة","الموديل","كود الموديل","الكمية","سعر القطعة","القيمة المستحقة","المستلم","التاريخ"], deliveries.map((delivery) => { const order = clientOrdersById.get(delivery.order_id); return `<tr><td>${modelImageMarkup(order?.modelImageUrls || order?.modelImageUrl, `صورة ${order?.name || "الموديل"}`) || "—"}</td><td>${escapeHtml(order?.name || "طلب مؤرشف")}</td><td>${escapeHtml(order?.factoryModelCode || order?.clientModelCode || order?.modelNumber || "—")}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(delivery.quantity)} قطعة</td><td>${money(delivery.price_per_piece)}</td><td>${money(delivery.amount ?? Number(delivery.quantity || 0) * Number(delivery.price_per_piece || 0))}</td><td>${escapeHtml(delivery.recipient_name || "—")}</td><td>${formatDateTime(delivery.delivered_at)}</td></tr>`; })) : '<div class="empty-state">لا توجد تسليمات مسجلة لهذا العميل.</div>')}</section>
-    <section class="client-detail-section">${panel("سجل القماش الداخل للعميل", clientFabrics.length ? table(["القماش / اللون","المتاح","الحركة","الكمية","التاريخ"], clientFabricTransactions.map((transaction) => { const fabric = clientFabrics.find((item) => item.id === transaction.fabric_id); return `<tr><td>${escapeHtml(fabric?.name || "—")} · ${escapeHtml(fabric?.color_name || "لون غير مسمى")}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(fabric?.quantity_available || 0)} ${escapeHtml(fabric?.unit || "")}</td><td>${escapeHtml(transaction.transaction_type)}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(transaction.quantity)} ${escapeHtml(fabric?.unit || "")}</td><td>${formatDateTime(transaction.created_at)}</td></tr>`; })) : '<div class="empty-state">لا يوجد قماش مرتبط بهذا العميل.</div>')}</section>
+    <section class="client-detail-section">${panel("الموديلات المسلّمة", deliveries.length ? table(["الصورة","الموديل","كود الموديل","الكمية","سعر القطعة","القيمة المستحقة","المستلم","التاريخ"], deliveries.map((delivery) => { const order = clientOrdersById.get(delivery.order_id); return `<tr><td>${modelImageMarkup(order?.modelImageUrls || order?.modelImageUrl, `صورة ${order?.name || "الموديل"}`) || "—"}</td><td>${escapeHtml(order?.name || "طلب مؤرشف")}</td><td>${escapeHtml(order?.factoryModelCode || order?.clientModelCode || order?.modelNumber || "—")}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(delivery.quantity)} قطعة</td><td>${money(delivery.price_per_piece)}</td><td>${money(delivery.amount ?? Number(delivery.quantity || 0) * Number(delivery.price_per_piece || 0))}</td><td>${escapeHtml(delivery.recipient_name || "—")}</td><td>${formatDigitalDateTime(delivery.delivered_at)}</td></tr>`; })) : '<div class="empty-state">لا توجد تسليمات مسجلة لهذا العميل.</div>')}</section>
+    <section class="client-detail-section">${panel("سجل القماش الداخل للعميل", clientFabrics.length ? table(["القماش / اللون","المتاح","الحركة","الكمية","التاريخ"], clientFabricTransactions.map((transaction) => { const fabric = clientFabrics.find((item) => item.id === transaction.fabric_id); return `<tr><td>${escapeHtml(fabric?.name || "—")} · ${escapeHtml(fabric?.color_name || "لون غير مسمى")}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(fabric?.quantity_available || 0)} ${escapeHtml(fabric?.unit || "")}</td><td>${escapeHtml(transaction.transaction_type)}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(transaction.quantity)} ${escapeHtml(fabric?.unit || "")}</td><td><time class="fabric-history-datetime digital-date-time" datetime="${escapeHtml(transaction.created_at || "")}">${formatDigitalDateTime(transaction.created_at)}</time></td></tr>`; })) : '<div class="empty-state">لا يوجد قماش مرتبط بهذا العميل.</div>')}</section>
     <section class="client-detail-section">${panel("ملاحظات وتنبيهات خاصة بالعميل", `${clientNotes.length ? `<div class="client-note-list">${clientNotes.map((note) => `<article><p>${escapeHtml(note.note || "")}</p><time>${formatDateTime(note._createdAt || note.created_at)}</time></article>`).join("")}</div>` : '<div class="empty-state">لا توجد ملاحظات مسجلة.</div>'}<form class="client-note-form" data-client-note="${escapeHtml(client.id)}"><label for="client-note-${escapeHtml(client.id)}">إضافة ملاحظة أو تنبيه</label><textarea id="client-note-${escapeHtml(client.id)}" name="note" rows="3" required></textarea><button class="button button-secondary" type="submit">حفظ الملاحظة</button></form>`)}</section>
     <section class="client-detail-section"><header class="section-heading"><div><h2>الفترات المالية السابقة</h2><p>الأوامر والتسليمات محفوظة في الأرشيف ولا تُحذف عند التصفية.</p></div><button class="button button-primary" type="button" data-settle-client="${escapeHtml(client.id)}">تصفية الحساب وترحيل الرصيد</button></header>
       ${summary.settlements.length ? `<div class="settlement-history">${summary.settlements.map((entry) => `<article class="settlement-card"><div><strong>رصيد سابق مرحّل</strong><small>${formatDateTime(entry.date || entry._createdAt)}</small></div><div><span>رصيد افتتاحي</span><strong>${money(entry.openingBalance)}</strong></div><div><span>قيمة التسليمات</span><strong>${money(entry.deliveredTotal)}</strong></div><div><span>مصروفات وعهد</span><strong>${money(entry.clientExpensesTotal || 0)}</strong></div><div><span>خصومات التسوية</span><strong>${money(entry.accountAdjustmentsTotal || 0)}</strong></div><div><span>المدفوع</span><strong>${money(Number(entry.orderPaidTotal || 0) + Number(entry.paymentsTotal || 0))}</strong></div><div><span>رصيد الفترة الختامي</span><strong>${money(entry.balance)}</strong></div></article>`).join("")}</div>` : '<div class="empty-state">لم تتم تصفية حساب العميل سابقًا.</div>'}
@@ -3454,7 +3464,7 @@ function modelDetailsModalView(order, showPricingBreakdown = false) {
     }).join("")
     : "";
   const deliveryHistory = order.deliveryHistory?.length
-    ? table(["#", "الكمية", "المستلم", "تاريخ التسليم", ...(canEditDeliveryQuantities ? ["تعديل التسليم"] : [])], order.deliveryHistory.map((delivery, index) => `<tr><td>${index + 1}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(delivery.quantity)} قطعة</td><td>${escapeHtml(delivery.recipient_name || "—")}</td><td>${formatDateTime(delivery.delivered_at)}</td>${canEditDeliveryQuantities ? `<td><label class="field"><span>كمية الدفعة ${index + 1} (صفر لحذفها)</span><input type="number" min="0" step="1" value="${delivery.quantity}" data-edit-delivery-quantity="${escapeHtml(delivery.id)}"></label><button class="row-action" type="button" data-save-delivery-quantity="${escapeHtml(delivery.id)}">حفظ التسليم</button></td>` : ""}</tr>`))
+    ? table(["#", "الكمية", "المستلم", "تاريخ التسليم", ...(canEditDeliveryQuantities ? ["تعديل التسليم"] : [])], order.deliveryHistory.map((delivery, index) => `<tr><td>${index + 1}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(delivery.quantity)} قطعة</td><td>${escapeHtml(delivery.recipient_name || "—")}</td><td>${formatDigitalDateTime(delivery.delivered_at)}</td>${canEditDeliveryQuantities ? `<td><label class="field"><span>كمية الدفعة ${index + 1} (صفر لحذفها)</span><input type="number" min="0" step="1" value="${delivery.quantity}" data-edit-delivery-quantity="${escapeHtml(delivery.id)}"></label><button class="row-action" type="button" data-save-delivery-quantity="${escapeHtml(delivery.id)}">حفظ التسليم</button></td>` : ""}</tr>`))
     : '<div class="empty-state">لا توجد دفعات تسليم مسجلة.</div>';
   return `<header class="modal-view-heading">${modelImageMarkup(order.modelImageUrls || order.modelImageUrl)}<div><small>تفاصيل الطلبية / الفرشة</small><h2 id="model-details-title">${escapeHtml(order.name || "موديل بدون اسم")}</h2><p>كود الموديل بالنظام: ${escapeHtml(order.factoryModelCode || "—")} · كود/رقم الموديل للعميل: ${escapeHtml(order.clientModelCode || "—")}</p><p>العميل: ${escapeHtml(order.client || "—")}</p></div>${statusTag(order.displayStatus || order.status)}</header>
     <div class="compact-detail-grid">
@@ -3694,7 +3704,7 @@ function ownerFabricReceiptLineMarkup(fabrics) {
   </div>`;
 }
 
-function fabricStockCardMarkup(fabric, category, isAdmin, customerName) {
+function fabricStockCardMarkup(fabric, category, isAdmin, customerName, receivedAt) {
   const colorHex = /^#[0-9A-F]{6}$/i.test(fabric.color_hex || "") ? fabric.color_hex : "";
   const color = `<span class="fabric-color">${colorHex ? `<i style="--fabric-color:${escapeHtml(colorHex)}" aria-hidden="true"></i>` : ""}${escapeHtml(fabric.color_name || "لون غير مسمى")}</span>`;
   const quantity = `${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(fabric.quantity_available || 0)} ${escapeHtml(fabric.unit || "")}`;
@@ -3702,7 +3712,9 @@ function fabricStockCardMarkup(fabric, category, isAdmin, customerName) {
   const actions = isAdmin
     ? `<div class="fabric-stock-card-actions"><button class="row-action" type="button" data-edit-fabric="${escapeHtml(fabric.id)}">تعديل</button><button class="row-action order-delete-action" type="button" data-delete-fabric="${escapeHtml(fabric.id)}">حذف</button></div>`
     : "";
+  const stockDate = receivedAt || fabric.received_at || fabric.created_at;
   return `<article class="fabric-stock-card" data-fabric-card data-fabric-customer="${escapeHtml(fabric.customer_id || "__unassigned__")}">
+    <div class="fabric-stock-card-date"><small>تاريخ الدخول</small><time class="digital-date-time" datetime="${escapeHtml(stockDate || "")}">${formatDigitalDateTime(stockDate)}</time></div>
     <div class="fabric-stock-card-kind"><small>نوع القماش</small><span>${escapeHtml(type)}</span></div>
     <div class="fabric-stock-card-color"><small>اللون</small>${color}</div>
     <div class="fabric-stock-card-quantity"><small>المتاح</small><strong>${quantity}</strong></div>
@@ -3726,11 +3738,17 @@ function fabricStockView(data, isAdmin) {
   const availableIncomingFabrics = incomingFabrics.filter((fabric) => Number(fabric.quantity_available) > 0);
   const totalTransactions = data.fabricTransactions.length;
   const customerName = (customerId) => data.clients.find((client) => client.id === customerId)?.name || "";
+  const latestReceiptAt = new Map();
+  data.fabricTransactions.forEach((transaction) => {
+    if (transaction.transaction_type === "receipt" && !latestReceiptAt.has(transaction.fabric_id)) {
+      latestReceiptAt.set(transaction.fabric_id, transaction.created_at);
+    }
+  });
   const totalForUnit = (fabrics, unit) => new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 })
     .format(fabrics.filter((fabric) => fabric.unit === unit)
       .reduce((sum, fabric) => sum + Number(fabric.quantity_available), 0));
   const incomingCards = availableIncomingFabrics.map((fabric) =>
-    fabricStockCardMarkup(fabric, "incoming", isAdmin, customerName)).join("");
+    fabricStockCardMarkup(fabric, "incoming", isAdmin, customerName, latestReceiptAt.get(fabric.id))).join("");
   const filteredIncomingStock = `<div class="fabric-stock-filter">${fabricCustomerFilterMarkup(data.clients)}</div>
     <div class="fabric-stock-card-list" data-fabric-customer-list>${incomingCards}</div>
     <div class="empty-state" data-fabric-filter-empty${incomingCards ? " hidden" : ""}>لا يوجد قماش متاح للعميل المحدد.</div>`;
@@ -3749,14 +3767,18 @@ function fabricStockView(data, isAdmin) {
     const movementAction = transaction.order_id || !isAdmin
       ? `<span class="order-delete-protected">${transaction.order_id ? "مرتبطة بأمر قص" : "حركة مسجلة"}</span>`
       : `<button class="row-action order-delete-action" type="button" data-delete-fabric-transaction="${escapeHtml(transaction.id)}">حذف الحركة</button>`;
-    return `<tr><td>${escapeHtml(fabric?.name || "خامة محذوفة")}</td><td>${escapeHtml(labels[transaction.transaction_type] || transaction.transaction_type)}</td><td>${amount}</td><td>${escapeHtml(order?.name || (transaction.order_id ? transaction.order_id.slice(0, 8) : "—"))}</td><td>${escapeHtml(transaction.notes || "—")}</td><td>${formatDateTime(transaction.created_at)}</td><td>${movementAction}</td></tr>`;
+    return `<tr><td>${escapeHtml(fabric?.name || "خامة محذوفة")}</td><td>${escapeHtml(labels[transaction.transaction_type] || transaction.transaction_type)}</td><td>${amount}</td><td>${escapeHtml(order?.name || (transaction.order_id ? transaction.order_id.slice(0, 8) : "—"))}</td><td>${escapeHtml(transaction.notes || "—")}</td><td><time class="fabric-history-datetime digital-date-time" datetime="${escapeHtml(transaction.created_at || "")}">${formatDigitalDateTime(transaction.created_at)}</time></td>${isAdmin ? `<td>${movementAction}</td>` : ""}</tr>`;
   });
+  const incomingTransactions = transactionRows.filter((transaction) =>
+    incomingFabrics.some((fabric) => fabric.id === transaction.fabric_id));
   const incomingForm = `<form class="form-grid fabric-form incoming-fabric-form" id="incoming-fabric-form"><div class="field"><label for="incoming-fabric-client">اسم العميل</label><select id="incoming-fabric-client" name="customerId"><option value="">عميل غير معروف / غير محدد حالياً</option>${data.clients.map((client) => `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)}</option>`).join("")}</select></div><div class="field"><label for="incoming-fabric-date">تاريخ ووقت الاستلام</label><input id="incoming-fabric-date" name="receivedAt" type="datetime-local" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}" required></div><div class="field wide"><label for="incoming-fabric-notes">ملاحظات الحركة</label><input id="incoming-fabric-notes" name="notes" maxlength="500"></div><div class="wide incoming-fabric-groups" data-incoming-fabric-groups>${incomingFabricGroupMarkup(data.fabrics)}</div><div class="form-actions"><button class="button button-secondary" type="button" data-add-incoming-type>＋ إضافة نوع قماش جديد</button><button class="button button-primary" type="submit">＋ تسجيل القماش الداخل</button></div></form>`;
   const incomingSection = `<section id="incoming-fabric" class="dashboard-section">
     <div class="stats-grid">${stat("سجلات القماش الداخل", incomingFabrics.length, "مرتبطة بعميل أو بانتظار التحديد")}${stat("الأثواب المتاحة للقص", totalForUnit(incomingFabrics, "توب"), "عدد أثواب منفصل")}${stat("الأمتار المتاحة للقص", totalForUnit(incomingFabrics, "متر"), "بعد خصم القماش المستخدم")}${isAdmin ? stat("حركات القماش", totalTransactions, "استلام وسحب") : ""}</div>
     ${panel("القماش الداخل", incomingForm, "اكتب نوع القماش مرة واحدة، ثم أضف لوناً وكمية ووحدة لكل لون. يمكن تسجيل عدة أنواع في الشحنة نفسها.")}
     ${panel(isAdmin ? "مخزون القماش الحالي للقص" : "مخزن القماش", filteredIncomingStock)}
-    ${isAdmin ? panel("حركات المخزون", table(["القماش","الحركة","الكمية","رقم الطلب","البيان","التاريخ والوقت","إجراء"], transactionRows, "fabric-history-table")) : ""}
+    ${isAdmin
+      ? panel("حركات المخزون", table(["القماش","الحركة","الكمية","رقم الطلب","البيان","التاريخ والوقت","إجراء"], transactionRows, "fabric-history-table"))
+      : panel("سجل القماش والحركات", table(["القماش","الحركة","الكمية","رقم الطلب","البيان","التاريخ والوقت"], incomingTransactions, "fabric-history-table"))}
   </section>`;
   if (!isAdmin) return incomingSection;
   const unitQuantity = (fabrics, unit) => Number(fabrics
@@ -3774,8 +3796,6 @@ function fabricStockView(data, isAdmin) {
   ).join("");
   const ownerTransactions = transactionRows.filter((transaction) =>
     ownerFabrics.some((fabric) => fabric.id === transaction.fabric_id));
-  const incomingTransactions = transactionRows.filter((transaction) =>
-    incomingFabrics.some((fabric) => fabric.id === transaction.fabric_id));
   const adminFabricForms = `<div class="fabric-admin-tools">
       ${panel("تعريف صنف قماش", `<form class="form-grid fabric-form" id="fabric-form"><input type="hidden" name="fabricId"><div class="field"><label for="fabric-name">اسم القماش</label><input id="fabric-name" name="name" maxlength="120" required></div><div class="field"><label for="fabric-type">نوع القماش</label><input id="fabric-type" name="type" maxlength="120" placeholder="قطن، كتان، بوليستر..." required></div><div class="field fabric-color-name-field"><label for="fabric-color-name">اسم اللون</label><input id="fabric-color-name" name="colorName" maxlength="64"></div><label class="field fabric-color-picker-field"><span>درجة اللون</span>${customColorControlMarkup("#FFFFFF", 'name="colorHex"')}</label><div class="field"><label for="fabric-unit">وحدة القياس</label><select id="fabric-unit" name="unit" required><option value="متر">متر</option><option value="توب">توب</option></select></div><div class="form-actions"><button class="button button-primary" type="submit">حفظ بيانات القماش</button><button class="row-action" type="button" data-cancel-fabric-edit hidden>إلغاء التعديل</button></div></form>`, "تغيير الوحدة غير متاح بعد تسجيل حركات على الصنف")}
       ${panel("إضافة كمية لمخزون الإدارة", `<form class="form-grid fabric-form" id="fabric-receipt-form"><div class="field"><label for="fabric-receipt-date">تاريخ الإدخال</label><input id="fabric-receipt-date" name="receivedAt" type="datetime-local" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}" required></div><div class="field"><label for="fabric-receipt-notes">ملاحظات / مرجع</label><input id="fabric-receipt-notes" name="notes" maxlength="500"></div><div class="wide fabric-entry-list" data-fabric-entry-list>${ownerFabricReceiptLineMarkup(ownerFabrics)}</div><div class="form-actions"><button class="button button-secondary" type="button" data-add-fabric-row>＋ إضافة صنف</button><button class="button button-primary" type="submit">＋ تسجيل الكميات الداخلة</button></div></form>`, "هذا رصيد الإدارة فقط، ولا يظهر في سجل القماش الداخل الخاص بمشرف القص")}
@@ -3792,7 +3812,7 @@ function fabricStockView(data, isAdmin) {
       <div class="stats-grid">${stat("أصناف قماش الإدارة", availableOwnerFabrics.length, "مخزون المصنع")}${stat("أثواب الإدارة", totalForUnit(availableOwnerFabrics, "توب"))}${stat("أمتار الإدارة", totalForUnit(availableOwnerFabrics, "متر"))}${stat("سجلات قماش العملاء", availableIncomingFabrics.length, "المتاح فعلياً لكل عميل")}</div>
       ${panel("إجمالي المتاح حسب العميل", clientStockSummary ? `<div class="fabric-client-stock-summary-list">${clientStockSummary}</div>` : '<div class="empty-state">لا توجد أرصدة قماش مسجلة للعملاء.</div>')}
       ${panel("قماش العملاء المتاح حالياً", filteredIncomingStock)}
-      ${panel("مخزون المصنع المتاح حالياً", availableOwnerFabrics.length ? `<div class="fabric-stock-card-list">${availableOwnerFabrics.map((fabric) => fabricStockCardMarkup(fabric, "owner", isAdmin, customerName)).join("")}</div>` : '<div class="empty-state">لا يوجد قماش مسجل في مخزون الإدارة.</div>')}
+      ${panel("مخزون المصنع المتاح حالياً", availableOwnerFabrics.length ? `<div class="fabric-stock-card-list">${availableOwnerFabrics.map((fabric) => fabricStockCardMarkup(fabric, "owner", isAdmin, customerName, latestReceiptAt.get(fabric.id))).join("")}</div>` : '<div class="empty-state">لا يوجد قماش مسجل في مخزون الإدارة.</div>')}
     </div>
     <div id="fabric-panel-history" role="tabpanel" aria-labelledby="fabric-tab-history" data-fabric-inventory-panel="history" hidden>
       <div class="stats-grid">${stat("إجمالي حركات القماش", totalTransactions, "دخول وسحب وتسوية")}</div>
@@ -4078,7 +4098,7 @@ function workerOrderDeliveryReviewView(data) {
     const order = data.models.find((item) => item.id === submission.order_id);
     const hasUnallocated = factoryOrderHasUnallocatedDeliveries(submission.order_id, data.deliveries);
     return `<article class="worker-submission-card worker-order-delivery-review">
-      <header><div><h3>${escapeHtml(order?.name || "طلبية")}</h3><p>${escapeHtml(order?.factoryModelCode || order?.modelNumber || "—")} · ${escapeHtml(submission.worker_name)} · ${formatDateTime(submission.created_at)}</p></div>${statusTag("قيد مراجعة الإدارة")}</header>
+      <header><div><h3>${escapeHtml(order?.name || "طلبية")}</h3><p>${escapeHtml(order?.factoryModelCode || order?.modelNumber || "—")} · ${escapeHtml(submission.worker_name)} · <time class="digital-date-time" datetime="${escapeHtml(submission.created_at || "")}">${formatDigitalDateTime(submission.created_at)}</time></p></div>${statusTag("قيد مراجعة الإدارة")}</header>
       ${workerOrderDeliveryComparisonMarkup(submission, order, data.deliveries)}
       <div class="form-actions"><button class="button button-primary" type="button" data-confirm-worker-order-delivery="${escapeHtml(submission.id)}" ${hasUnallocated ? "disabled" : ""}>تأكيد التسليم وتحديث الطلبية</button><button class="button button-danger" type="button" data-reject-worker-order-delivery="${escapeHtml(submission.id)}">رفض الدفعة</button></div>
     </article>`;
@@ -4093,7 +4113,7 @@ function workerProductionReviewView(data) {
   const pending = data.productionSubmissions.filter((item) => item.status === "pending");
   const rejected = data.productionSubmissions.filter((item) => item.status === "rejected");
   const confirmedRows = data.finishedGoods.map((item) =>
-    `<tr><td>${escapeHtml(item.model_name)}${item.model_number ? `<small class="worker-model-number">${escapeHtml(item.model_number)}</small>` : ""}${data.productionSubmissions.find((submission) => submission.id === item.submission_id)?.parent_submission_id ? '<small class="submission-parent-note">تسليم تابع للتسليم السابق</small>' : ""}</td><td>${escapeHtml(data.clients.find((client) => client.id === item.customer_id)?.name || "—")}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.quantity)} قطعة</td><td>${workerProductionColorMarkup(item.colors)}</td><td>${modelImageMarkup(item.imageUrl, `صورة القطعة ${item.model_name}`, "submission-image-preview") || "—"}</td><td>${escapeHtml(item.worker_name)}</td><td>${formatDateTime(item.confirmed_at)}</td></tr>`
+    `<tr><td>${escapeHtml(item.model_name)}${item.model_number ? `<small class="worker-model-number">${escapeHtml(item.model_number)}</small>` : ""}${data.productionSubmissions.find((submission) => submission.id === item.submission_id)?.parent_submission_id ? '<small class="submission-parent-note">تسليم تابع للتسليم السابق</small>' : ""}</td><td>${escapeHtml(data.clients.find((client) => client.id === item.customer_id)?.name || "—")}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.quantity)} قطعة</td><td>${workerProductionColorMarkup(item.colors)}</td><td>${modelImageMarkup(item.imageUrl, `صورة القطعة ${item.model_name}`, "submission-image-preview") || "—"}</td><td>${escapeHtml(item.worker_name)}</td><td>${formatDigitalDateTime(item.confirmed_at)}</td></tr>`
   );
   const cards = pending.map((item) => {
     const matchedOrder = findProductionSubmissionOrder(item, data.models);
@@ -4129,7 +4149,7 @@ function workerProductionReviewView(data) {
       `<option value="${escapeHtml(client.id)}"${matchedCustomerId === client.id ? " selected" : ""}>${escapeHtml(client.name)}${client.brand_name ? ` · ${escapeHtml(client.brand_name)}` : ""}</option>`
     ).join("");
     return `<form class="worker-submission-review" data-worker-submission="${escapeHtml(item.id)}">
-      <header>${modelImageMarkup(item.imageUrl, `صورة القطعة ${item.model_name}`, "submission-image-preview")}<div><h3>${escapeHtml(item.model_name)}</h3><p>${escapeHtml(item.worker_name)} · ${escapeHtml(item.job_title || "عامل")} · ${formatDateTime(item.created_at)}</p>${item.parentSubmission ? `<span class="submission-parent-note">تسليم تابع للتسليم السابق · ${escapeHtml(item.parentSubmission.model_name)} · ${formatDateTime(item.parentSubmission.created_at)}</span>` : ""}</div></header>
+      <header>${modelImageMarkup(item.imageUrl, `صورة القطعة ${item.model_name}`, "submission-image-preview")}<div><h3>${escapeHtml(item.model_name)}</h3><p>${escapeHtml(item.worker_name)} · ${escapeHtml(item.job_title || "عامل")} · <time class="digital-date-time" datetime="${escapeHtml(item.created_at || "")}">${formatDigitalDateTime(item.created_at)}</time></p>${item.parentSubmission ? `<span class="submission-parent-note">تسليم تابع للتسليم السابق · ${escapeHtml(item.parentSubmission.model_name)} · ${formatDigitalDateTime(item.parentSubmission.created_at)}</span>` : ""}</div></header>
       <div class="form-grid">
         <label class="field"><span>الموديل / الوصف</span><input name="modelName" maxlength="160" value="${escapeHtml(item.model_name)}" required></label>
         <label class="field"><span>كود/رقم الموديل للعميل (اختياري)</span><input name="modelNumber" maxlength="120" value="${escapeHtml(item.model_number || "")}"></label>
@@ -4150,7 +4170,7 @@ function workerProductionReviewView(data) {
     </form>`;
   });
   const rejectedCards = rejected.map((item) =>
-    `<article class="worker-submission-card"><header>${modelImageMarkup(item.imageUrl, `صورة القطعة ${item.model_name}`, "submission-image-preview")}<div><h3>${escapeHtml(item.model_name)}</h3><p>${escapeHtml(item.worker_name)} · ${formatDateTime(item.created_at)}</p>${item.parentSubmission ? '<span class="submission-parent-note">تسليم تابع للتسليم السابق</span>' : ""}${statusTag("مرفوض")}</div></header><div class="worker-submission-actions"><button class="button button-secondary" type="button" data-delete-production-submission="${escapeHtml(item.id)}">حذف الطلب</button></div></article>`
+    `<article class="worker-submission-card"><header>${modelImageMarkup(item.imageUrl, `صورة القطعة ${item.model_name}`, "submission-image-preview")}<div><h3>${escapeHtml(item.model_name)}</h3><p>${escapeHtml(item.worker_name)} · ${formatDigitalDateTime(item.created_at)}</p>${item.parentSubmission ? '<span class="submission-parent-note">تسليم تابع للتسليم السابق</span>' : ""}${statusTag("مرفوض")}</div></header><div class="worker-submission-actions"><button class="button button-secondary" type="button" data-delete-production-submission="${escapeHtml(item.id)}">حذف الطلب</button></div></article>`
   );
   return `${workerOrderDeliveryReviewView(data)}${panel("تسليمات العامل الواردة للمراجعة", cards.length
     ? `<div class="worker-submission-list">${cards.join("")}</div>`
@@ -4331,6 +4351,7 @@ function cuttingView(data) {
     <header class="production-compact-heading">${modelImageMarkup(item.modelImageUrls || item.modelImageUrl)}<h3>${escapeHtml(item.model)}</h3>${statusTag(displayStatus)}</header>
     <strong class="production-compact-total">${item.total > 0 ? `${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.total)} قطعة` : "بانتظار الحصر"}</strong>
     <div class="production-compact-facts"><div><span>الألوان</span>${colorSummaryMarkup(item.colors, item.colorNames, item.colorPlyData)}</div><div><span>المقاسات</span>${sizeBadgesMarkup(item.sizes)}</div></div>
+    <div class="production-record-date"><span>آخر تحديث:</span><time class="digital-date-time" datetime="${escapeHtml(item.updatedAt || "")}">${formatDigitalDateTime(item.updatedAt)}</time></div>
     <div class="form-actions">${productionDetailsButton("cutting", item)}<button class="button button-secondary" type="button" data-open-cutting-editor="${escapeHtml(item.order)}">تعديل / استكمال القص</button></div>
     </article>
     <div class="modal-backdrop cutting-editor-modal" data-cutting-editor-modal="${escapeHtml(item.order)}" hidden>
@@ -4630,9 +4651,9 @@ function dispatchedCuttingRequestsView(data, canManageRecords = false) {
       <td>${escapeHtml(fabricName)}</td>
       <td>${escapeHtml(rollSummary)}</td>
       <td>${escapeHtml(request.operational_notes || "—")}</td>
-      <td>${formatDateTime(request.created_at)}</td>
+      <td><time class="digital-date-time" datetime="${escapeHtml(request.created_at || "")}">${formatDigitalDateTime(request.created_at)}</time></td>
       <td>${statusTag(statusLabel)}</td>
-      <td>${request.submitted_at ? formatDateTime(request.submitted_at) : "—"}</td>
+      <td>${request.submitted_at ? `<time class="digital-date-time" datetime="${escapeHtml(request.submitted_at)}">${formatDigitalDateTime(request.submitted_at)}</time>` : "—"}</td>
       ${canManageRecords ? `<td><div class="form-actions"><button class="row-action" type="button" data-edit-cutting-request="${escapeHtml(request.id)}"${request.archived_at || request.status !== "pending" ? " disabled" : ""}>تعديل</button><button class="row-action order-delete-action" type="button" data-delete-cutting-request="${escapeHtml(request.id)}"${request.archived_at ? " disabled" : ""}>${request.archived_at ? "محفوظ بالأرشيف" : "حذف / أرشفة"}</button></div></td>` : ""}
     </tr>`;
   });
@@ -4717,6 +4738,7 @@ function cuttingRequestsView(data) {
     return `<article class="cutting-story-card production-compact-card">
       <header class="production-compact-heading">${modelImageMarkup(model?.modelImageUrls || model?.modelImageUrl)}<h3>${escapeHtml(model?.name || "موديل غير متاح")}</h3>${statusTag("بانتظار استلام القص")}</header>
       <div class="production-compact-facts"><div><span>كود الموديل بالنظام</span><strong>${escapeHtml(model?.factoryModelCode || "—")}</strong></div><div><span>العميل</span><strong>${escapeHtml(model?.client || "—")}</strong></div></div>
+      <div class="production-record-date"><span>تاريخ الطلب:</span><time class="digital-date-time" datetime="${escapeHtml(request.created_at || "")}">${formatDigitalDateTime(request.created_at)}</time></div>
       ${fabricName || rolls.length || request.operational_notes ? `<div class="cutting-request-details">${fabricName ? `<p><strong>الخامة:</strong> ${escapeHtml(fabricName)}</p>` : ""}${rolls.length ? `<p><strong>الأتواب والألوان:</strong> ${escapeHtml(rolls.map((roll) => `توب ${roll.roll_number || "—"}${roll.color_name ? ` · ${roll.color_name}` : ""}`).join("، "))}</p>` : ""}${request.operational_notes ? `<p><strong>ملاحظات تشغيلية:</strong> ${escapeHtml(request.operational_notes)}</p>` : ""}</div>` : ""}
       <div class="form-actions"><button class="button button-primary" type="button" data-open-cutting-request="${escapeHtml(request.id)}"${model ? "" : " disabled"}>استلام وبدء بيانات القصة</button></div>
     </article>`;
@@ -4782,6 +4804,7 @@ function sewingOrderRows(orders, actionLabel = "", action = "", compact = false)
       <header class="production-compact-heading">${modelImageMarkup(item.modelImageUrls || item.modelImageUrl)}<div class="sewing-model-monitor-info"><h3>${escapeHtml(item.model)}</h3><p>كود الموديل: <strong>${escapeHtml(item.factoryModelCode || "—")}</strong></p></div>${statusTag(item.stageStatus === "مكتمل" && item.orderStatus ? item.orderStatus : item.status)}</header>
       ${compact ? "" : `<strong class="production-compact-total">${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.target)} قطعة</strong>
       <div class="production-compact-facts"><div><span>الألوان</span>${colorSummaryMarkup(item.colors, item.colorNames, item.colorPlyData)}</div><div><span>المقاسات</span>${sizeBadgesMarkup(item.sizes)}</div></div>`}
+      <div class="production-record-date"><span>آخر تحديث:</span><time class="digital-date-time" datetime="${escapeHtml(item.updatedAt || "")}">${formatDigitalDateTime(item.updatedAt)}</time></div>
       <div class="form-actions">${compact ? "" : `${productionDetailsButton("sewing", sewingDetailsProjection(item))}${canEdit ? `<button class="button button-secondary" type="button" data-open-sewing-editor="${escapeHtml(item.order)}">تعديل</button>` : ""}`}${action ? `<button class="button button-primary" type="button" data-sewing-action="${action}" data-sewing-order="${escapeHtml(item.order)}">${actionLabel}</button>` : ""}</div>
     </article>
     ${canEdit ? `<div class="modal-backdrop sewing-editor-modal" data-sewing-editor-modal="${escapeHtml(item.order)}" hidden>
@@ -4918,7 +4941,7 @@ function adminCuttingTransferView(data) {
       const actions = story.status === "pending" && !story.archived_at
         ? `<div class="form-actions"><button class="button button-primary" type="button" data-action="approve-cutting-story-model" data-story-id="${escapeHtml(story.id)}">تأكيد وإضافة للموديلات</button><button class="button button-secondary" type="button" data-action="approve-cutting-story-sewing" data-story-id="${escapeHtml(story.id)}">تأكيد وإرسال للخياطة</button><button class="button button-danger" type="button" data-action="reject-cutting-story" data-story-id="${escapeHtml(story.id)}">رفض القصة</button></div>`
         : story.approved_order_id ? '<a class="row-action" href="#orders">الانتقال إلى الموديلات</a>' : "";
-      return `<article class="cutting-story-card"><header class="cutting-story-heading">${modelImageMarkup(story.model_image_url)}<div><h3>${escapeHtml(story.model_name || story.model_number || "قصة بدون اسم")}</h3><p>كود الموديل بالنظام: ${escapeHtml(story.factory_model_code || "—")} · كود/رقم الموديل للعميل: ${escapeHtml(story.model_number || "—")} · العميل: ${escapeHtml(story.customer_name || "—")}</p><small>المشرف المسؤول: ${escapeHtml(story.submitted_by_name || "مشرف القص")}</small></div><span>${statusTag(statusLabel)}</span></header><div class="cutting-story-facts"><div><span>إجمالي القطع</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(story.total_pieces)} قطعة</strong></div><div><span>المقاسات</span><strong>${escapeHtml(sizeSummary(story.size_data) || "—")}</strong></div></div><div class="form-actions">${productionDetailsButton("story", story)}${actions}</div></article>`;
+      return `<article class="cutting-story-card"><header class="cutting-story-heading">${modelImageMarkup(story.model_image_url)}<div><h3>${escapeHtml(story.model_name || story.model_number || "قصة بدون اسم")}</h3><p>كود الموديل بالنظام: ${escapeHtml(story.factory_model_code || "—")} · كود/رقم الموديل للعميل: ${escapeHtml(story.model_number || "—")} · العميل: ${escapeHtml(story.customer_name || "—")}</p><small>المشرف المسؤول: ${escapeHtml(story.submitted_by_name || "مشرف القص")}</small><div class="production-record-date"><span>تاريخ الإرسال:</span><time class="digital-date-time" datetime="${escapeHtml(story.created_at || "")}">${formatDigitalDateTime(story.created_at)}</time></div></div><span>${statusTag(statusLabel)}</span></header><div class="cutting-story-facts"><div><span>إجمالي القطع</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(story.total_pieces)} قطعة</strong></div><div><span>المقاسات</span><strong>${escapeHtml(sizeSummary(story.size_data) || "—")}</strong></div></div><div class="form-actions">${productionDetailsButton("story", story)}${actions}</div></article>`;
     }).join("")}</div>`
     : '<div class="empty-state">لا توجد قصص في هذا السجل.</div>';
   const activeTab = activeAdminCuttingTab === "active";
@@ -5039,7 +5062,7 @@ function workerOrderDeliveryPortalView(data) {
         : "مرفوض";
     return `<article class="worker-order-delivery-history">
       <header><strong>${escapeHtml(orderNameById.get(submission.order_id) || "طلبية")}</strong>${statusTag(status)}</header>
-      <p>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(submission.quantity)} قطعة · ${formatDateTime(submission.created_at)}</p>
+      <p>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(submission.quantity)} قطعة · <time class="digital-date-time" datetime="${escapeHtml(submission.created_at || "")}">${formatDigitalDateTime(submission.created_at)}</time></p>
       ${workerProductionColorMarkup(submission.color_size_data)}
     </article>`;
   });
@@ -5222,7 +5245,7 @@ function authorizedProductionSubmissionView(data, session) {
   if (!session.canSubmitProduction || !["cutting", "sewing"].includes(session.role)) return "";
   const legacyRows = data.productionSubmissions.map((submission) =>
     `<article class="worker-submission-card">
-      <header>${modelImageMarkup(submission.imageUrl, `صورة القطعة ${submission.model_name}`, "submission-image-preview")}<div><h3>${escapeHtml(submission.model_name)}${submission.model_number ? `<small class="worker-model-number">${escapeHtml(submission.model_number)}</small>` : ""}</h3><p>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(submission.quantity)} قطعة · ${formatDateTime(submission.created_at)}</p>${statusTag(submission.status === "pending" ? "قيد مراجعة الإدارة" : submission.status === "confirmed" ? "تم الاستلام النهائي" : "مرفوض")}</div></header>
+      <header>${modelImageMarkup(submission.imageUrl, `صورة القطعة ${submission.model_name}`, "submission-image-preview")}<div><h3>${escapeHtml(submission.model_name)}${submission.model_number ? `<small class="worker-model-number">${escapeHtml(submission.model_number)}</small>` : ""}</h3><p>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(submission.quantity)} قطعة · <time class="digital-date-time" datetime="${escapeHtml(submission.created_at || "")}">${formatDigitalDateTime(submission.created_at)}</time></p>${statusTag(submission.status === "pending" ? "قيد مراجعة الإدارة" : submission.status === "confirmed" ? "تم الاستلام النهائي" : "مرفوض")}</div></header>
       ${workerProductionColorMarkup(submission.colors)}
     </article>`
   );
@@ -5405,7 +5428,7 @@ function clientView(data, session) {
   const deliveryRows = clientDeliveries.map((entry) => {
     const order = clientOrdersById.get(entry.order_id);
     const amount = Number(entry.amount ?? Number(entry.quantity || 0) * Number(entry.price_per_piece || 0));
-    return `<tr><td>${modelImageMarkup(order?.modelImageUrls || order?.modelImageUrl, `صورة ${order?.name || "الموديل"}`) || "—"}</td><td>${escapeHtml(order?.name || "طلبية مؤرشفة")}</td><td>${escapeHtml(order?.factoryModelCode || order?.clientModelCode || order?.modelNumber || "—")}</td><td>${statusTag(order?.displayStatus || order?.status || "تم التسليم")}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(Number(entry.quantity || 0))}</td><td>${money(entry.price_per_piece)}</td><td>${money(amount)}</td><td>${formatDateTime(entry.delivered_at)}</td></tr>`;
+    return `<tr><td>${modelImageMarkup(order?.modelImageUrls || order?.modelImageUrl, `صورة ${order?.name || "الموديل"}`) || "—"}</td><td>${escapeHtml(order?.name || "طلبية مؤرشفة")}</td><td>${escapeHtml(order?.factoryModelCode || order?.clientModelCode || order?.modelNumber || "—")}</td><td>${statusTag(order?.displayStatus || order?.status || "تم التسليم")}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(Number(entry.quantity || 0))}</td><td>${money(entry.price_per_piece)}</td><td>${money(amount)}</td><td>${formatDigitalDateTime(entry.delivered_at)}</td></tr>`;
   });
   const paymentRowsForClient = allClientPayments.map((entry) =>
     `<tr><td>${formatDateTime(entry._createdAt || entry.created_at || entry.date)}</td><td>${money(entry.amount)}</td><td>${escapeHtml(entry.method || "غير محددة")}</td><td>${escapeHtml(entry.reference || entry.orderReference || "—")}</td><td>${escapeHtml(entry.notes || "—")}</td></tr>`
@@ -5447,7 +5470,7 @@ function clientView(data, session) {
     ${stat(remaining > 0 ? "المتبقي / المديونية" : remaining < 0 ? "الرصيد الدائن" : "المتبقي", money(Math.abs(remaining)), remaining === 0 ? "تمت تسوية الحساب" : "الرصيد بعد احتساب الدفعات")}
   </div>`;
   const finishedGoodsRows = data.finishedGoods.map((item) =>
-    `<tr><td>${escapeHtml(item.model_name)}${item.model_number ? `<small class="worker-model-number">${escapeHtml(item.model_number)}</small>` : ""}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.quantity)} قطعة</td><td>${workerProductionColorMarkup(item.colors)}</td><td>${modelImageMarkup(item.imageUrl, `صورة القطعة ${item.model_name}`) || "—"}</td><td>${escapeHtml(item.worker_name)}</td><td>${formatDateTime(item.confirmed_at)}</td></tr>`
+    `<tr><td>${escapeHtml(item.model_name)}${item.model_number ? `<small class="worker-model-number">${escapeHtml(item.model_number)}</small>` : ""}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.quantity)} قطعة</td><td>${workerProductionColorMarkup(item.colors)}</td><td>${modelImageMarkup(item.imageUrl, `صورة القطعة ${item.model_name}`) || "—"}</td><td>${escapeHtml(item.worker_name)}</td><td>${formatDigitalDateTime(item.confirmed_at)}</td></tr>`
   );
   const fabricStockRows = [...new Map(data.clientFabricStock.map((item) => [item.fabric_id, item])).values()];
   const fabricMovementRows = data.clientFabricStock.filter((item) => item.movement_id);
@@ -5459,6 +5482,7 @@ function clientView(data, session) {
       : '<span class="client-fabric-swatch client-fabric-swatch-unset" aria-hidden="true"></span>';
     return `<article class="client-fabric-stock-card">
       <div class="client-fabric-stock-kind"><small>نوع القماش</small><strong>${escapeHtml(item.fabric_name || "قماش")}</strong></div>
+      <div class="client-fabric-stock-date"><span>تاريخ الدخول:</span> <time class="digital-date-time" datetime="${escapeHtml(item.received_at || item.updated_at || "")}">${formatDigitalDateTime(item.received_at || item.updated_at)}</time></div>
       <div class="client-fabric-stock-color">${swatch}<strong>${escapeHtml(item.color_name || "لون غير مسمى")}</strong></div>
       <div class="client-fabric-stock-quantity"><small>الرصيد المتاح</small><strong>${fabricQuantity(item.quantity_available)} <span>${escapeHtml(item.unit || "")}</span></strong></div>
     </article>`;
@@ -5468,7 +5492,7 @@ function clientView(data, session) {
     : '<div class="empty-state">لا يوجد رصيد قماش مسجل على ملفك حالياً.</div>')}
     ${panel("حركات القماش", fabricMovementRows.length
       ? table(["القماش / اللون","الحركة","الكمية","ملاحظات","التاريخ"], fabricMovementRows.map((item) =>
-        `<tr><td>${escapeHtml(item.fabric_name)} · ${escapeHtml(item.color_name || "—")}</td><td>${escapeHtml(item.transaction_type)}</td><td>${fabricQuantity(item.movement_quantity)} ${escapeHtml(item.unit)}</td><td>${escapeHtml(item.movement_notes || "—")}</td><td>${formatDateTime(item.movement_created_at)}</td></tr>`
+        `<tr><td>${escapeHtml(item.fabric_name)} · ${escapeHtml(item.color_name || "—")}</td><td>${escapeHtml(item.transaction_type)}</td><td>${fabricQuantity(item.movement_quantity)} ${escapeHtml(item.unit)}</td><td>${escapeHtml(item.movement_notes || "—")}</td><td><time class="fabric-history-datetime digital-date-time" datetime="${escapeHtml(item.movement_created_at || "")}">${formatDigitalDateTime(item.movement_created_at)}</time></td></tr>`
       ))
       : '<div class="empty-state">لا توجد حركات قماش مسجلة.</div>')}</section>`;
   const clientModelRequests = (data.clientModelRequests || []).filter((request) => request.user_id === session.accountId);
