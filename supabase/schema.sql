@@ -5183,7 +5183,7 @@ begin
     end if;
 
     perform pg_advisory_xact_lock(hashtextextended(
-      concat_ws('|', coalesce(requested_customer_id::text, ''), item_name, item_color_name, item_color_hex, item_unit),
+      concat_ws('|', coalesce(requested_customer_id::text, ''), lower(item_name), lower(item_color_name), item_color_hex, item_unit),
       0
     ));
 
@@ -5191,9 +5191,9 @@ begin
     from public.factory_fabrics
     where stock_scope = 'incoming'
       and customer_id is not distinct from requested_customer_id
-      and name = item_name
-      and fabric_type = item_name
-      and color_name = item_color_name
+      and lower(trim(name)) = lower(item_name)
+      and lower(trim(fabric_type)) = lower(item_name)
+      and lower(trim(color_name)) = lower(item_color_name)
       and color_hex = item_color_hex
       and unit = item_unit
     order by created_at, id

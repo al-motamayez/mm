@@ -3765,6 +3765,28 @@ function fabricStockCardMarkup(fabric, category, isAdmin, customerName, received
   </article>`;
 }
 
+function incomingFabricTypeCardMarkup(fabrics, isAdmin, customerName, latestReceiptAt) {
+  const firstFabric = fabrics[0];
+  const type = firstFabric.fabric_type || firstFabric.name || "غير محدد";
+  const colorRows = fabrics.map((fabric) => {
+    const colorHex = /^#[0-9A-F]{6}$/i.test(fabric.color_hex || "") ? fabric.color_hex : "";
+    const color = `<span class="fabric-color">${colorHex ? `<i style="--fabric-color:${escapeHtml(colorHex)}" aria-hidden="true"></i>` : ""}${escapeHtml(fabric.color_name || "لون غير مسمى")}</span>`;
+    const quantity = `${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(fabric.quantity_available || 0)} ${escapeHtml(fabric.unit || "")}`;
+    const receiptDate = latestReceiptAt.get(fabric.id) || fabric.received_at || fabric.created_at;
+    return `<div class="fabric-stock-color-row">
+      <div class="fabric-stock-card-color"><small>اللون</small>${color}</div>
+      <div class="fabric-stock-card-quantity"><small>المتاح</small><strong>${quantity}</strong></div>
+      <div class="fabric-stock-card-date"><small>تاريخ الدخول</small><time class="digital-date-time" datetime="${escapeHtml(receiptDate || "")}">${formatDigitalDateTime(receiptDate)}</time></div>
+      ${isAdmin ? `<div class="fabric-stock-card-actions"><button class="row-action" type="button" data-edit-fabric="${escapeHtml(fabric.id)}">تعديل</button><button class="row-action order-delete-action" type="button" data-delete-fabric="${escapeHtml(fabric.id)}">حذف</button></div>` : ""}
+    </div>`;
+  }).join("");
+  return `<article class="fabric-stock-card fabric-stock-type-card" data-fabric-card data-fabric-customer="${escapeHtml(firstFabric.customer_id || "__unassigned__")}">
+    <div class="fabric-stock-card-kind"><small>نوع القماش</small><span>${escapeHtml(type)}</span></div>
+    <div class="fabric-stock-card-owner"><small>المالك / العميل</small><span>${escapeHtml(customerName(firstFabric.customer_id) || "غير محدد")}</span></div>
+    <div class="fabric-stock-colors">${colorRows}</div>
+  </article>`;
+}
+
 function fabricCustomerFilterMarkup(clients) {
   return `<label class="fabric-customer-filter"><span>تصفية حسب العميل</span><select data-fabric-customer-filter aria-label="تصفية مخزون القماش حسب العميل">
     <option value="__all__" selected>كل العملاء (الإجمالي)</option>
@@ -3789,8 +3811,16 @@ function fabricStockView(data, isAdmin) {
   const totalForUnit = (fabrics, unit) => new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 })
     .format(fabrics.filter((fabric) => fabric.unit === unit)
       .reduce((sum, fabric) => sum + Number(fabric.quantity_available), 0));
-  const incomingCards = availableIncomingFabrics.map((fabric) =>
-    fabricStockCardMarkup(fabric, "incoming", isAdmin, customerName, latestReceiptAt.get(fabric.id))).join("");
+  const incomingFabricGroups = new Map();
+  for (const fabric of availableIncomingFabrics) {
+    const key = JSON.stringify([fabric.customer_id || "", String(fabric.fabric_type || fabric.name || "").trim().toLocaleLowerCase()]);
+    const group = incomingFabricGroups.get(key) || [];
+    group.push(fabric);
+    incomingFabricGroups.set(key, group);
+  }
+  const incomingCards = [...incomingFabricGroups.values()]
+    .map((group) => incomingFabricTypeCardMarkup(group, isAdmin, customerName, latestReceiptAt))
+    .join("");
   const filteredIncomingStock = `<div class="fabric-stock-filter">${fabricCustomerFilterMarkup(data.clients)}</div>
     <div class="fabric-stock-card-list" data-fabric-customer-list>${incomingCards}</div>
     <div class="empty-state" data-fabric-filter-empty${incomingCards ? " hidden" : ""}>لا يوجد قماش متاح للعميل المحدد.</div>`;

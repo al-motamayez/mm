@@ -1099,6 +1099,11 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .fabric-stock-card-quantity { justify-items: end; }
 .fabric-stock-card-quantity strong { color: #205b40; font-size: 14px; white-space: nowrap; }
 .fabric-stock-card-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.fabric-stock-type-card { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
+.fabric-stock-colors { display: grid; grid-column: 1 / -1; gap: 6px; width: 100%; }
+.fabric-stock-color-row { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(110px, .7fr) minmax(170px, 1fr) auto; align-items: center; gap: 8px 14px; padding: 8px 10px; border: 1px solid #e6ece8; border-radius: 8px; background: #fff; }
+.fabric-stock-color-row .fabric-stock-card-quantity { justify-items: start; }
+.fabric-stock-color-row .fabric-stock-card-actions { justify-content: flex-end; }
 .fabric-edit-modal .modal-card { width: min(720px, 100%); }
 .fabric-edit-form { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 16px; }
 .fabric-edit-form .form-actions { grid-column: 1 / -1; }
@@ -1225,12 +1230,17 @@ input, select, .modal-form textarea { color: #1d3028; font-size: 16px; }
   .incoming-fabric-color-row { grid-template-columns: minmax(100px, 1fr) 64px minmax(85px, .7fr) minmax(80px, .6fr) auto; }
   .fabric-stock-card { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .fabric-stock-card-actions { grid-column: 1 / -1; justify-content: flex-end; padding-top: 7px; border-top: 1px solid var(--line); }
+  .fabric-stock-type-card { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .fabric-stock-color-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 650px) {
   .client-financial-summary { grid-template-columns: minmax(0, 1fr); }
   .fabric-stock-card { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px 12px; }
   .fabric-stock-card-date { grid-column: 1 / -1; }
   .fabric-stock-card-main { grid-column: 1 / -1; }
+  .fabric-stock-type-card { grid-template-columns: minmax(0, 1fr); }
+  .fabric-stock-color-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .fabric-stock-color-row .fabric-stock-card-actions { grid-column: 1 / -1; }
   .fabric-edit-form { grid-template-columns: minmax(0, 1fr); }
   .login-layout { grid-template-columns: 1fr; }
   .login-intro { min-height: 330px; gap: 12px; padding: 28px 26px; }
