@@ -668,7 +668,7 @@ async function readDashboardData(session) {
   if (session.role === "admin" || orders.length) {
     const stageColumns = session.role === "sewing"
       ? "id, order_id, stage_name, color_ply_data, line_name, target_quantity, completed_quantity, status, updated_at"
-      : "id, order_id, stage_name, worker_name, cutter_name, fabric, fabric_details, fabric_id, external_fabric_source, external_fabric_unit, fabric_quantity, bolt_count, layer_count, color_ply_data, technical_notes, line_name, target_quantity, completed_quantity, status, updated_at";
+      : "id, order_id, stage_name, worker_name, cutter_name, fabric, fabric_details, fabric_id, external_fabric_source, external_fabric_unit, fabric_quantity, fabric_lines, bolt_count, layer_count, color_ply_data, technical_notes, line_name, target_quantity, completed_quantity, status, updated_at";
     let stagesQuery = supabaseClient
       .from("production_stages")
       .select(stageColumns);
@@ -796,6 +796,7 @@ async function readDashboardData(session) {
       externalFabricUnit: cuttingStage?.external_fabric_unit || "متر",
       fabricUnit: cuttingStage?.external_fabric_unit || data.fabrics.find((fabric) => fabric.id === cuttingStage?.fabric_id)?.unit || "متر",
       fabricQuantity: Number(cuttingStage?.fabric_quantity || 0),
+      fabricLines: Array.isArray(cuttingStage?.fabric_lines) ? cuttingStage.fabric_lines : [],
       boltCount: Number(cuttingStage?.bolt_count || 0),
       layerCount: Number(cuttingStage?.layer_count || 0),
       colorPlyData: cuttingStage?.color_ply_data || null,
@@ -832,6 +833,7 @@ async function readDashboardData(session) {
       externalFabricUnit: stage.external_fabric_unit || "متر",
       fabricUnit: stage.external_fabric_unit || data.fabrics.find((fabric) => fabric.id === stage.fabric_id)?.unit || "متر",
       fabricQuantity: Number(stage.fabric_quantity || 0),
+      fabricLines: Array.isArray(stage.fabric_lines) ? stage.fabric_lines : [],
       boltCount: Number(stage.bolt_count || 0),
       layerCount: Number(stage.layer_count || 0),
       colorPlyData: stage.color_ply_data || null,
@@ -885,6 +887,7 @@ async function readDashboardData(session) {
         fabricId: cuttingStage?.fabric_id || (cuttingStage?.external_fabric_source ? "external" : ""),
         externalFabricSource: cuttingStage?.external_fabric_source || "",
         fabricQuantity: Number(cuttingStage?.fabric_quantity || 0),
+        fabricLines: Array.isArray(cuttingStage?.fabric_lines) ? cuttingStage.fabric_lines : [],
         fabricUnit: cuttingStage?.external_fabric_unit || data.fabrics.find((fabric) => fabric.id === cuttingStage?.fabric_id)?.unit || "متر",
         boltCount: Number(cuttingStage?.bolt_count || 0),
         layerCount: Number(cuttingStage?.layer_count || 0),
@@ -3432,16 +3435,22 @@ function modelExpenseTypeLabel(expenseType) {
 }
 
 function adminCuttingEditFormMarkup(order, expanded = false, pickerPrefix = `admin-cutting-${order.id}`) {
+  const savedFabricLines = Array.isArray(order.fabricLines) && order.fabricLines.length
+    ? order.fabricLines
+    : order.fabricQuantity > 0
+      ? [{
+        fabricId: order.fabricId === "external" ? null : order.fabricId,
+        source: order.externalFabricSource,
+        name: order.fabric,
+        quantity: order.fabricQuantity,
+        unit: order.fabricUnit
+      }]
+      : [];
   return `<details class="admin-cutting-edit"${expanded ? " open" : ""}>
     <summary class="button button-secondary">تعديل البيانات</summary>
-    <form class="admin-cutting-editor-form" data-admin-cutting-edit="${escapeHtml(order.id)}" data-customer-id="${escapeHtml(order.customerId || "")}" data-saved-fabric="false">
+    <form class="admin-cutting-editor-form" data-admin-cutting-edit="${escapeHtml(order.id)}" data-customer-id="${escapeHtml(order.customerId || "")}" data-existing-fabric-lines="${escapeHtml(JSON.stringify(savedFabricLines))}" data-saved-fabric="false" data-multi-fabric="true">
       <div class="form-section-grid cutting-bed-inputs">
-        <label class="field"><span>الخامة المستخدمة</span><select name="fabricId" data-fabric-select required>${fabricSelectOptions(dashboardData.fabrics, order.fabricId || "", dashboardData.clients, true)}</select><small data-fabric-stock-hint></small></label>
-        <label class="field"><span>وحدة السحب</span><select name="fabricUnit" data-fabric-unit-select><option value="توب" ${order.fabricUnit === "توب" ? "selected" : ""}>عدد التوب</option><option value="متر" ${order.fabricUnit !== "توب" ? "selected" : ""}>الكمية بالمتر</option></select></label>
-        <label class="field"><span>الكمية المستخدمة</span><input name="fabricQuantity" type="number" min="0.001" step="0.001" value="${order.fabricQuantity || ""}" required></label>
-        <input type="hidden" name="boltCount" value="${order.boltCount || 0}">
-        <label class="field" data-external-fabric-source-field hidden><span>اسم المورد / مصدر الخامة الخارجية</span><input name="externalFabricSource" maxlength="120" value="${escapeHtml(order.externalFabricSource || "")}"></label>
-        <input type="hidden" name="externalFabricUnit" value="${order.externalFabricUnit || "متر"}">
+        ${cuttingBedFabricLinesMarkup(dashboardData.fabrics, order.customerId || "", savedFabricLines)}
       </div>
       <label class="field"><span>المورد / تفاصيل مصدر القماش</span><input name="fabricDetails" maxlength="240" value="${escapeHtml(order.fabricDetails || "")}"></label>
       ${sizePickerMarkup(order.sizes, pickerPrefix, false, true)}
@@ -3662,6 +3671,39 @@ function cuttingFabricLineMarkup(fabrics, typeKey, customerId) {
         <label class="field"><span>الكمية لهذا اللون</span><input data-fabric-line-quantity type="number" min="0.001" step="0.001" required></label>`}
     <button type="button" class="row-action" data-remove-cutting-fabric-line>حذف اللون</button>
   </div>`;
+}
+
+function cuttingBedFabricLineMarkup(fabrics, customerId, line = {}, existingLines = []) {
+  const selectedId = line.fabricId || line.fabric_id || (line.source ? "external" : "");
+  const options = fabrics
+    .filter((fabric) => fabric.stock_scope === "incoming"
+      && fabric.customer_id === customerId
+      && (Number(fabric.quantity_available) > 0 || fabric.id === selectedId))
+    .map((fabric) => {
+      const priorQuantity = existingLines
+        .filter((entry) => (entry.fabricId || entry.fabric_id) === fabric.id)
+        .reduce((sum, entry) => sum + Number(entry.quantity || 0), 0);
+      const available = Number(fabric.quantity_available) + priorQuantity;
+      return `<option value="${escapeHtml(fabric.id)}" data-name="${escapeHtml(fabric.name)}" data-fabric-type="${escapeHtml(fabric.fabric_type || "")}" data-unit="${escapeHtml(fabric.unit)}" data-available="${escapeHtml(available)}" data-color="${escapeHtml(fabric.color_name || "")}" data-color-hex="${escapeHtml(fabric.color_hex || "")}" ${fabric.id === selectedId ? "selected" : ""}>${escapeHtml(fabric.name)}${fabric.fabric_type ? ` · ${escapeHtml(fabric.fabric_type)}` : ""} · ${escapeHtml(fabric.color_name || "لون غير مسمى")} · متاح ${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(available)} ${escapeHtml(fabric.unit)}</option>`;
+    }).join("");
+  const external = selectedId === "external";
+  const unit = line.unit || line.fabric_unit || "متر";
+  const quantity = line.quantity || "";
+  return `<div class="cutting-fabric-line cutting-bed-fabric-line" data-cutting-fabric-line>
+    <label class="field"><span>نوع / لون القماش</span><select data-fabric-line-id required><option value="">اختر صنف القماش</option>${options}<option value="external" ${external ? "selected" : ""}>خامة خارجية / غير مسجلة بالمخزون</option></select><small data-fabric-line-stock></small></label>
+    <label class="field"><span>الكمية المستخدمة</span><input data-fabric-line-quantity type="number" min="${unit === "توب" ? "1" : "0.001"}" step="${unit === "توب" ? "1" : "0.001"}" value="${escapeHtml(quantity)}" required></label>
+    <label class="field cutting-external-fabric-field" data-external-fabric-field ${external ? "" : "hidden"}><span>المورد / مصدر الخامة الخارجية</span><input data-external-fabric-source maxlength="120" value="${escapeHtml(line.source || line.name || "")}" ${external ? "required" : ""}></label>
+    <label class="field cutting-external-fabric-field" data-external-fabric-field ${external ? "" : "hidden"}><span>لون الخامة الخارجية</span><input data-external-fabric-color maxlength="64" value="${escapeHtml(line.colorName || line.color_name || "")}" ${external ? "required" : ""}></label>
+    <label class="field cutting-external-fabric-field" data-external-fabric-field ${external ? "" : "hidden"}><span>وحدة الخامة الخارجية</span><select data-fabric-line-unit><option value="متر" ${unit === "متر" ? "selected" : ""}>متر</option><option value="توب" ${unit === "توب" ? "selected" : ""}>توب</option></select></label>
+    <button type="button" class="row-action" data-remove-cutting-fabric-line>حذف الصنف</button>
+  </div>`;
+}
+
+function cuttingBedFabricLinesMarkup(fabrics, customerId, lines = []) {
+  const initialLines = lines.length ? lines : [{}];
+  return `<div class="cutting-bed-fabric-lines" data-cutting-fabric-lines>${initialLines
+    .map((line) => cuttingBedFabricLineMarkup(fabrics, customerId, line, lines)).join("")}</div>
+    <button type="button" class="row-action" data-add-cutting-bed-fabric-line>＋ إضافة نوع قماش للفرشة</button>`;
 }
 
 function incomingFabricColorRowMarkup() {
@@ -4343,7 +4385,17 @@ function cuttingView(data) {
   const cards = activeCutting.length ? `<div class="cutting-order-grid">${activeCutting.map((item) => {
     const orderStatus = canonicalFactoryOrderStatus(item.orderStatus);
     const bedReady = orderStatus === readyStatus;
-    const hasSavedFabric = item.fabricQuantity > 0 && Boolean(item.fabricId);
+    const hasSavedFabric = item.fabricLines.length > 0
+      || (item.fabricQuantity > 0 && Boolean(item.fabricId || item.externalFabricSource));
+    const inputFabricLines = item.fabricLines.length ? item.fabricLines : item.fabricQuantity > 0
+      ? [{
+        fabricId: item.fabricId === "external" ? null : item.fabricId,
+        source: item.externalFabricSource,
+        name: item.fabric,
+        quantity: item.fabricQuantity,
+        unit: item.fabricUnit
+      }]
+      : [];
     const displayStatus = orderStatus === "قيد الفرش" && item.layerCount > 0
       ? `قيد الفرش - تم فرش ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.layerCount)} راقات`
       : orderStatus;
@@ -4358,17 +4410,14 @@ function cuttingView(data) {
       <section class="modal-card production-editor-modal-card" role="dialog" aria-modal="true" aria-label="تعديل بيانات القص">
       <button class="modal-close" type="button" data-close-cutting-editor aria-label="إغلاق">×</button>
       <h2>تعديل بيانات القص · ${escapeHtml(item.model)}</h2>
-    <form class="cutting-finish-form" data-finish-cutting="${escapeHtml(item.order)}" data-customer-id="${escapeHtml(item.customerId || "")}" data-saved-fabric="${hasSavedFabric ? "true" : "false"}" data-saved-fabric-id="${escapeHtml(item.fabricId || "")}" data-saved-fabric-name="${escapeHtml(item.fabric || "")}" data-saved-fabric-quantity="${escapeHtml(item.fabricQuantity || "")}" data-saved-fabric-unit="${escapeHtml(item.fabricUnit || "")}" data-saved-fabric-bolt-count="${escapeHtml(item.boltCount || 0)}" data-saved-external-fabric-source="${escapeHtml(item.externalFabricSource || "")}" data-saved-external-fabric-unit="${escapeHtml(item.externalFabricUnit || "")}">
+    <form class="cutting-finish-form" data-finish-cutting="${escapeHtml(item.order)}" data-customer-id="${escapeHtml(item.customerId || "")}" data-existing-fabric-lines="${escapeHtml(JSON.stringify(inputFabricLines))}" data-multi-fabric="true" data-saved-fabric="${bedReady && hasSavedFabric ? "true" : "false"}" data-saved-fabric-id="${escapeHtml(item.fabricId || "")}" data-saved-fabric-name="${escapeHtml(item.fabric || "")}" data-saved-fabric-quantity="${escapeHtml(item.fabricQuantity || "")}" data-saved-fabric-unit="${escapeHtml(item.fabricUnit || "")}" data-saved-fabric-bolt-count="${escapeHtml(item.boltCount || 0)}" data-saved-external-fabric-source="${escapeHtml(item.externalFabricSource || "")}" data-saved-external-fabric-unit="${escapeHtml(item.externalFabricUnit || "")}">
       ${bedReady && hasSavedFabric
-        ? `<div class="cutting-saved-fabric"><strong>الخامة المعتمدة لهذه القصة</strong><span>${escapeHtml(item.fabric || "—")} · ${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(item.fabricQuantity || 0)} ${escapeHtml(item.fabricUnit || "")}${item.fabricId === "external" ? " · خامة خارجية" : " · مسجلة بالمخزن"}</span><small>سيتم إنهاء القص باستخدام السحب المسجل مسبقًا دون إعادة خصم القماش.</small></div>`
-        : `<div class="form-section-grid cutting-bed-inputs">
-          <label class="field"><span>اختيار قماش الفرشة</span><select name="fabricId" data-fabric-select required>${fabricSelectOptions(data.fabrics, item.fabricId, data.clients, true)}</select><small data-fabric-stock-hint></small></label>
-          <label class="field"><span>وحدة السحب</span><select name="fabricUnit" data-fabric-unit-select><option value="توب" ${item.fabricUnit === "توب" ? "selected" : ""}>عدد التوب</option><option value="متر" ${item.fabricUnit === "متر" ? "selected" : ""}>الكمية بالمتر</option></select></label>
-          <label class="field"><span>الكمية المستخدمة</span><input name="fabricQuantity" type="number" min="0.001" step="0.001" value="${item.fabricQuantity || ""}" required></label>
-          <input type="hidden" name="boltCount" value="${item.boltCount || 0}">
-          <label class="field" data-external-fabric-source-field hidden><span>اسم المورد / مصدر الخامة الخارجية</span><input name="externalFabricSource" maxlength="120" value="${escapeHtml(item.externalFabricSource || "")}" placeholder="اسم المورد أو مصدر القماش"></label>
-          <input type="hidden" name="externalFabricUnit" value="متر">
-        </div>`}
+        ? `<div class="cutting-saved-fabric"><strong>الخامات المعتمدة لهذه الفرشة</strong>${cuttingFabricBreakdownMarkup(item.fabricLines, item.fabric || "")}<small>سيتم إنهاء القص باستخدام السحوبات المسجلة مسبقًا دون إعادة خصم القماش.</small></div>`
+        : `<div class="form-section-grid cutting-bed-inputs">${cuttingBedFabricLinesMarkup(
+          data.fabrics,
+          item.customerId || "",
+          inputFabricLines
+        )}</div>`}
       ${sizePickerMarkup(item.sizes, `cutting-${item.order}`, false, true)}
       ${cuttingColorPlyMarkup(item.colorPlyData, item.colors, item.layerCount, `cutting-${item.order}`)}
       <p class="cutting-calculated-total">إجمالي الراقات: <strong data-cutting-plys>0</strong> · إجمالي قطع القصة الناتجة: <strong data-cutting-total>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.total)}</strong> قطعة</p>
@@ -8657,29 +8706,29 @@ function bindCuttingActions(session) {
   const readCuttingInputs = (form, requireFinal = false, notifyOnInvalid = true) => {
     const cuttingData = updateCuttingCalculation(form);
     const useSavedFabric = form.classList.contains("cutting-finish-form") && form.dataset.savedFabric === "true";
-    const hasMultiFabricPicker = form.dataset.multiFabric === "true";
+    const hasMultiFabricPicker = form.dataset.multiFabric === "true" && !useSavedFabric;
     const fabricLines = hasMultiFabricPicker
       ? [...form.querySelectorAll("[data-cutting-fabric-line]")].map((line) => {
-        const colorSelect = line.querySelector("[data-fabric-line-id]");
-        const selectedColor = colorSelect?.selectedOptions[0];
+        const fabricSelect = line.querySelector("[data-fabric-line-id]");
+        const selectedFabric = fabricSelect?.selectedOptions[0];
+        const external = fabricSelect?.value === "external";
         const externalColor = line.querySelector("[data-external-fabric-color]");
-        const external = !colorSelect;
         const unit = external
           ? line.querySelector("[data-fabric-line-unit]").value
-          : selectedColor?.dataset.unit || "";
+          : selectedFabric?.dataset.unit || "";
         return {
-          fabricId: external ? null : colorSelect.value || null,
+          fabricId: external ? null : fabricSelect?.value || null,
           name: external
-            ? String(form.elements.externalFabricSource.value).trim()
-            : selectedColor?.dataset.name || "",
-          fabricType: external ? "external" : selectedColor?.dataset.fabricType || "",
+            ? String(line.querySelector("[data-external-fabric-source]").value).trim()
+            : selectedFabric?.dataset.name || "",
+          fabricType: external ? "external" : selectedFabric?.dataset.fabricType || "",
           colorName: external
             ? String(externalColor.value).trim()
-            : selectedColor?.dataset.color || "",
-          colorHex: external ? "" : selectedColor?.dataset.colorHex || "",
+            : selectedFabric?.dataset.color || "",
+          colorHex: external ? "" : selectedFabric?.dataset.colorHex || "",
           quantity: Number(line.querySelector("[data-fabric-line-quantity]").value),
           unit,
-          source: external ? String(form.elements.externalFabricSource.value).trim() : ""
+          source: external ? String(line.querySelector("[data-external-fabric-source]").value).trim() : ""
         };
       })
       : [];
@@ -8778,56 +8827,94 @@ function bindCuttingActions(session) {
       requested_technical_notes: cuttingData.technicalNotes,
       requested_fabric_id: cuttingData.fabricId,
       requested_fabric_quantity: cuttingData.fabricQuantity,
-      requested_external_fabric_unit: cuttingData.externalFabricUnit
+      requested_external_fabric_unit: cuttingData.externalFabricUnit,
+      requested_fabric_lines: cuttingData.fabricLines.map((line) => ({
+        fabric_id: line.fabricId,
+        name: line.name,
+        fabric_type: line.fabricType,
+        color_name: line.colorName,
+        color_hex: line.colorHex || null,
+        quantity: line.quantity,
+        unit: line.unit,
+        source: line.source
+      }))
     });
     if (error?.code === "PGRST202") throw new Error("دالة تحديث الفرش غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
     if (error) throw error;
     return data;
   };
+  const bindCuttingBedFabricPicker = (form) => {
+    if (form.dataset.fabricPickerBound === "true") return;
+    form.dataset.fabricPickerBound = "true";
+    const refreshLine = (line) => {
+      const select = line.querySelector("[data-fabric-line-id]");
+      const external = select.value === "external";
+      const selected = select.selectedOptions[0];
+      const quantity = line.querySelector("[data-fabric-line-quantity]");
+      const unit = external
+        ? line.querySelector("[data-fabric-line-unit]").value
+        : selected?.dataset.unit || "متر";
+      quantity.step = unit === "توب" ? "1" : "0.001";
+      quantity.min = unit === "توب" ? "1" : "0.001";
+      for (const field of line.querySelectorAll("[data-external-fabric-field]")) {
+        field.hidden = !external;
+        const input = field.querySelector("input");
+        if (input) input.required = external;
+      }
+      const hint = line.querySelector("[data-fabric-line-stock]");
+      if (hint) hint.textContent = external
+        ? "الخامة الخارجية لا تخصم من مخزون العملاء."
+        : selected?.value
+          ? `المتاح لهذا الصنف: ${selected.dataset.available} ${unit}`
+          : "اختر صنفًا من مخزون العميل.";
+    };
+    const refreshAll = () => form.querySelectorAll("[data-cutting-fabric-line]").forEach(refreshLine);
+    form.addEventListener("change", (event) => {
+      const line = event.target.closest("[data-cutting-fabric-line]");
+      if (line && (event.target.matches("[data-fabric-line-id]") || event.target.matches("[data-fabric-line-unit]"))) {
+        refreshLine(line);
+      }
+    });
+    form.addEventListener("click", (event) => {
+      if (event.target.closest("[data-add-cutting-bed-fabric-line]")) {
+        if (form.querySelectorAll("[data-cutting-fabric-line]").length >= 100) {
+          window.factoryUI.toast("الحد الأقصى 100 صنف قماش للفرشة الواحدة.", "error");
+          return;
+        }
+        form.querySelector("[data-cutting-fabric-lines]").insertAdjacentHTML(
+          "beforeend",
+          cuttingBedFabricLineMarkup(
+            dashboardData.fabrics,
+            form.dataset.customerId || "",
+            {},
+            JSON.parse(form.dataset.existingFabricLines || "[]")
+          )
+        );
+        refreshAll();
+        return;
+      }
+      const removeButton = event.target.closest("[data-remove-cutting-fabric-line]");
+      if (removeButton && form.contains(removeButton)) {
+        const lines = form.querySelectorAll("[data-cutting-fabric-line]");
+        if (lines.length <= 1) {
+          const line = lines[0];
+          line.querySelector("[data-fabric-line-id]").value = "";
+          line.querySelector("[data-fabric-line-quantity]").value = "";
+          line.querySelector("[data-external-fabric-source]").value = "";
+          line.querySelector("[data-external-fabric-color]").value = "";
+          refreshLine(line);
+        } else {
+          removeButton.closest("[data-cutting-fabric-line]").remove();
+        }
+      }
+    });
+    refreshAll();
+  };
   const bindAdminCuttingEditor = (form) => {
     if (form.dataset.bound === "true") return;
     form.dataset.bound = "true";
     bindPickers(form);
-    const fabricSelect = form.elements.fabricId;
-    const applyFabricClientFilter = () => {
-      const customerId = form.dataset.customerId || "";
-      [...fabricSelect.options].forEach((option) => {
-        if (!option.value || option.value === "external") return;
-        const allowed = !customerId || option.dataset.customer === customerId;
-        option.disabled = !allowed;
-        option.hidden = !allowed;
-      });
-    };
-    const refreshFabricFields = () => {
-      const selected = fabricSelect.selectedOptions[0];
-      const external = fabricSelect.value === "external";
-      const fabricUnit = form.elements.fabricUnit;
-      const quantity = form.elements.fabricQuantity;
-      if (!external && fabricSelect.value) {
-        fabricUnit.value = selected.dataset.unit || "متر";
-        fabricUnit.disabled = true;
-      } else {
-        fabricUnit.disabled = false;
-        if (!fabricUnit.value) fabricUnit.value = "متر";
-      }
-      quantity.step = fabricUnit.value === "توب" ? "1" : "0.001";
-      quantity.min = fabricUnit.value === "توب" ? "1" : "0.001";
-      form.elements.boltCount.value = fabricUnit.value === "توب" ? quantity.value || "0" : "0";
-      form.elements.externalFabricUnit.value = external ? fabricUnit.value : "";
-      form.querySelectorAll("[data-external-fabric-source-field]").forEach((field) => { field.hidden = !external; });
-      if (form.elements.externalFabricSource) form.elements.externalFabricSource.required = external;
-      const hint = form.querySelector("[data-fabric-stock-hint]");
-      if (hint) hint.textContent = external
-        ? "الخامة الخارجية لا تخصم من مخزون القماش."
-        : selected?.dataset.available
-          ? `المتاح حاليًا: ${selected.dataset.available} ${selected.dataset.unit || ""}`
-          : "اختر صنفًا من مخزون القماش.";
-    };
-    fabricSelect.addEventListener("change", refreshFabricFields);
-    form.elements.fabricUnit.addEventListener("change", refreshFabricFields);
-    form.elements.fabricQuantity.addEventListener("input", refreshFabricFields);
-    applyFabricClientFilter();
-    refreshFabricFields();
+    bindCuttingBedFabricPicker(form);
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       const cuttingData = readCuttingInputs(form, true);
@@ -8846,7 +8933,17 @@ function bindCuttingActions(session) {
           requested_fabric_id: cuttingData.fabricId,
           requested_fabric_quantity: cuttingData.fabricQuantity,
           requested_external_fabric_unit: cuttingData.externalFabricUnit,
-          requested_cutter_name: String(form.elements.cutterName.value || "").trim()
+          requested_cutter_name: String(form.elements.cutterName.value || "").trim(),
+          requested_fabric_lines: cuttingData.fabricLines.map((line) => ({
+            fabric_id: line.fabricId,
+            name: line.name,
+            fabric_type: line.fabricType,
+            color_name: line.colorName,
+            color_hex: line.colorHex || null,
+            quantity: line.quantity,
+            unit: line.unit,
+            source: line.source
+          }))
         });
         if (error?.code === "PGRST202") {
           throw new Error("دالة تعديل بيانات القص غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
@@ -8893,7 +8990,9 @@ function bindCuttingActions(session) {
       button.disabled = false;
     }
   }));
-  document.querySelectorAll(".cutting-finish-form").forEach((form) => form.addEventListener("submit", async (event) => {
+  document.querySelectorAll(".cutting-finish-form").forEach((form) => {
+    bindCuttingBedFabricPicker(form);
+    form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const cuttingData = readCuttingInputs(form, true);
     if (!cuttingData) return;
@@ -8917,7 +9016,17 @@ function bindCuttingActions(session) {
         requested_fabric_id: cuttingData.usesSavedFabric ? null : cuttingData.fabricId,
         requested_fabric_quantity: cuttingData.usesSavedFabric ? null : cuttingData.fabricQuantity,
         requested_external_fabric_unit: cuttingData.usesSavedFabric ? null : cuttingData.externalFabricUnit,
-        requested_cutter_name: String(form.elements.cutterName?.value || "").trim()
+        requested_cutter_name: String(form.elements.cutterName?.value || "").trim(),
+        requested_fabric_lines: cuttingData.usesSavedFabric ? [] : cuttingData.fabricLines.map((line) => ({
+          fabric_id: line.fabricId,
+          name: line.name,
+          fabric_type: line.fabricType,
+          color_name: line.colorName,
+          color_hex: line.colorHex || null,
+          quantity: line.quantity,
+          unit: line.unit,
+          source: line.source
+        }))
       });
       if (error) logSupabaseRpcError("finish_factory_cutting", error);
       if (error?.code === "PGRST202") throw new Error("دالة إنهاء القص غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
@@ -8928,7 +9037,8 @@ function bindCuttingActions(session) {
       button.disabled = false;
       reportDashboardFailure(session, imageUploaded ? "تم رفع الصورة لكن لم يُسجل إنهاء القص" : "تعذر إنهاء القص", error);
     }
-  }));
+    });
+  });
   document.querySelectorAll("[data-repeat-cut]").forEach((button) => button.addEventListener("click", () => {
     const sourceModel = dashboardData.models.find((model) => model.id === button.dataset.repeatCut);
     if (!sourceModel) {
