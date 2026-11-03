@@ -2261,10 +2261,8 @@ function workStageLabel(stage) {
 }
 
 function workStageOptionMarkup(stage, label, checked = true, custom = false) {
-  const fixed = ["cutting", "sewing"].includes(stage);
   return `<div class="work-stage-option"${custom ? ' data-custom-work-stage-option' : ""} data-work-stage-option>
-    <label><input type="checkbox" name="workStage" value="${escapeHtml(stage)}"${checked ? " checked" : ""}><span>${escapeHtml(label)}</span></label>
-    <span class="work-stage-order-controls"><button type="button" data-move-work-stage="up" aria-label="تقديم مرحلة ${escapeHtml(label)}"${fixed ? " disabled" : ""}>↑</button><button type="button" data-move-work-stage="down" aria-label="تأخير مرحلة ${escapeHtml(label)}"${fixed ? " disabled" : ""}>↓</button></span>
+    <label><input type="checkbox" name="workStage" value="${escapeHtml(stage)}"${checked ? " checked" : ""}><span>${escapeHtml(label)}</span><strong class="work-stage-selection-order" data-work-stage-order hidden></strong></label>
     ${custom ? `<button type="button" class="work-stage-remove" data-remove-work-stage aria-label="حذف مرحلة ${escapeHtml(label)}">×</button>` : ""}
   </div>`;
 }
@@ -4193,7 +4191,7 @@ function adminView(data, accounts) {
         </div></section>
         <section class="form-section"><h3>التفاصيل التشغيلية <span>اختياري</span></h3><div class="form-section-grid">
           <div class="field wide"><label for="model-production-type">مسار التشغيل</label><select id="model-production-type" name="productionType"><option value="full_cutting">قص وفرش داخل المصنع</option><option value="cutting_only">قص بس (بدون خياطة داخلية)</option><option value="ready_sewing">موديل جاهز ومقصوص مسبقاً</option></select><small>اختر «قص بس» لتسليم الموديل بعد اكتمال القص دون إدخاله للخياطة؛ أو رتّب المراحل المطلوبة أدناه.</small></div>
-          <fieldset class="field work-stage-picker"><legend>مراحل الموديل المطلوبة</legend><div class="work-stage-options" data-work-stage-options>${WORK_STAGES.map(([key, label]) => workStageOptionMarkup(key, label, ["cutting", "sewing", "finishing"].includes(key))).join("")}</div><div class="work-stage-custom-entry"><input type="text" data-custom-work-stage maxlength="50" aria-label="اسم مرحلة مخصصة" placeholder="مرحلة إضافية مثل تركيب حبل"><button class="row-action" type="button" data-add-work-stage>＋ إضافة مرحلة</button></div><small>رتّب المراحل بأسهم التقديم والتأخير؛ ينفذ النظام المراحل الإضافية بالترتيب المختار.</small></fieldset>
+          <fieldset class="field work-stage-picker"><legend>مراحل الموديل المطلوبة</legend><div class="work-stage-options" data-work-stage-options>${WORK_STAGES.map(([key, label]) => workStageOptionMarkup(key, label, ["cutting", "sewing", "finishing"].includes(key))).join("")}</div><div class="work-stage-custom-entry"><input type="text" data-custom-work-stage maxlength="50" aria-label="اسم مرحلة مخصصة" placeholder="مرحلة إضافية مثل تركيب حبل"><button class="row-action" type="button" data-add-work-stage>＋ إضافة مرحلة</button></div><small>اختر المراحل بالترتيب المطلوب؛ يظهر رقم كل مرحلة حسب أسبقية اختيارها.</small></fieldset>
           ${colorPickerMarkup("", "model-colors")}
           ${sizePickerMarkup("", "model-sizes", true, true)}
           <div class="model-allocation field"><label>توزيع العدد على الألوان والمقاسات</label><div data-model-allocation-grid><p class="muted">أدخل العدد الكلي واختر الألوان والمقاسات لعرض التوزيع.</p></div><input type="hidden" name="colorSizeDistribution" value='{"colors":[]}'></div>
@@ -11191,33 +11189,38 @@ function bindActions(session) {
   }));
   const orderForm = document.querySelector("#model-form");
   const customWorkStageOptions = orderForm.querySelector("[data-work-stage-options]");
-  const updateWorkStageOrderControls = () => {
-    [...customWorkStageOptions.children].forEach((option, index, options) => {
-      const fixed = ["cutting", "sewing"].includes(option.querySelector('[name="workStage"]').value);
-      option.querySelector('[data-move-work-stage="up"]').disabled = fixed || index === 0
-        || options[index - 1].querySelector('[name="workStage"]').value === "sewing";
-      option.querySelector('[data-move-work-stage="down"]').disabled = fixed || index === options.length - 1
-        || option.nextElementSibling?.querySelector('[name="workStage"]').value === "cutting";
+  let selectedWorkStageOrder = [...customWorkStageOptions.querySelectorAll('[name="workStage"]:checked')]
+    .map((input) => input.value);
+  const syncWorkStageOrder = (preferredOrder = selectedWorkStageOrder) => {
+    const checkedStages = [...customWorkStageOptions.querySelectorAll('[name="workStage"]:checked')]
+      .map((input) => input.value);
+    const checkedStageSet = new Set(checkedStages);
+    selectedWorkStageOrder = preferredOrder.filter((stage, index) =>
+      checkedStageSet.has(stage) && preferredOrder.indexOf(stage) === index);
+    checkedStages.forEach((stage) => {
+      if (!selectedWorkStageOrder.includes(stage)) selectedWorkStageOrder.push(stage);
+    });
+    const positions = new Map(selectedWorkStageOrder.map((stage, index) => [stage, index + 1]));
+    customWorkStageOptions.querySelectorAll("[data-work-stage-option]").forEach((option) => {
+      const input = option.querySelector('[name="workStage"]');
+      const position = positions.get(input.value);
+      const orderIndicator = option.querySelector("[data-work-stage-order]");
+      option.classList.toggle("is-selected", Boolean(position));
+      orderIndicator.hidden = !position;
+      orderIndicator.textContent = position ? `✓ مرحلة ${position}` : "";
     });
   };
   const orderWorkStageOptions = (stages) => {
-    const optionsByStage = new Map([...customWorkStageOptions.children]
-      .map((option) => [option.querySelector('[name="workStage"]').value, option]));
-    const pinnedStages = ["cutting", "sewing"].filter((stage) => stages.includes(stage));
-    const selectedStages = [...pinnedStages, ...stages.filter((stage) => !["cutting", "sewing"].includes(stage))];
-    [...selectedStages].reverse().forEach((stage) => {
-      const option = optionsByStage.get(stage);
-      if (option) customWorkStageOptions.insertBefore(option, customWorkStageOptions.firstChild);
-    });
-    updateWorkStageOrderControls();
+    selectedWorkStageOrder = [...stages];
+    syncWorkStageOrder();
   };
   const removeCustomWorkStageOptions = () => {
     customWorkStageOptions.querySelectorAll("[data-custom-work-stage-option]").forEach((option) => option.remove());
-    updateWorkStageOrderControls();
+    syncWorkStageOrder();
   };
   const addCustomWorkStageOption = (stage, checked = true) => {
     customWorkStageOptions.insertAdjacentHTML("beforeend", workStageOptionMarkup(stage, stage, checked, true));
-    updateWorkStageOrderControls();
+    syncWorkStageOrder();
   };
   const syncCustomStageStatusOptions = () => {
     orderForm.elements.status.querySelectorAll("[data-custom-work-stage-status]").forEach((option) => option.remove());
@@ -11305,6 +11308,7 @@ function bindActions(session) {
       orderForm.elements.status.disabled = Boolean(existingOrder
         && (LOCKED_FACTORY_ORDER_STATUSES.includes(existingOrder.status) || isFactoryOrderWorkflowManaged(existingOrder)));
     }
+    syncWorkStageOrder();
     updateStagePricing(orderForm);
     updateOrderConditionalFields();
   };
@@ -11320,6 +11324,10 @@ function bindActions(session) {
   });
   orderForm.addEventListener("change", (event) => {
     if (event.target.matches('[name="workStage"]')) {
+      const selectedStages = selectedWorkStageOrder.filter((stage) =>
+        stage !== event.target.value && customWorkStageOptions.querySelector(`[name="workStage"][value="${CSS.escape(stage)}"]`)?.checked);
+      if (event.target.checked) selectedStages.push(event.target.value);
+      syncWorkStageOrder(selectedStages);
       syncCustomStageStatusOptions();
       updateStagePricing(orderForm);
       updateOrderTotals();
@@ -11334,20 +11342,6 @@ function bindActions(session) {
     }
   });
   orderForm.addEventListener("click", (event) => {
-    const moveButton = event.target.closest("[data-move-work-stage]");
-    if (moveButton) {
-      const option = moveButton.closest("[data-work-stage-option]");
-      if (["cutting", "sewing"].includes(option.querySelector('[name="workStage"]').value)) return;
-      const neighbor = moveButton.dataset.moveWorkStage === "up"
-        ? option.previousElementSibling
-        : option.nextElementSibling;
-      if (neighbor) {
-        if (moveButton.dataset.moveWorkStage === "up") customWorkStageOptions.insertBefore(option, neighbor);
-        else customWorkStageOptions.insertBefore(neighbor, option);
-        updateWorkStageOrderControls();
-      }
-      return;
-    }
     const addButton = event.target.closest("[data-add-work-stage]");
     if (addButton) {
       const input = orderForm.querySelector("[data-custom-work-stage]");
@@ -11374,7 +11368,7 @@ function bindActions(session) {
     }
     if (event.target.closest("[data-remove-work-stage]")) {
       event.target.closest("[data-custom-work-stage-option]")?.remove();
-      updateWorkStageOrderControls();
+      syncWorkStageOrder();
       syncCustomStageStatusOptions();
       updateStagePricing(orderForm);
       updateOrderTotals();
@@ -11448,6 +11442,8 @@ function bindActions(session) {
     setOrderQuantityEditingLocked(false);
     removeWorkflowStatusOptions();
     orderForm.reset();
+    selectedWorkStageOrder = [...customWorkStageOptions.querySelectorAll('[name="workStage"]:checked')]
+      .map((input) => input.value);
     removeCustomWorkStageOptions();
     updateProductionPathFields();
     const cuttingEditor = orderForm.parentElement.querySelector("[data-order-cutting-editor]");
@@ -12137,6 +12133,10 @@ function bindActions(session) {
     if (newOrderButton) {
       removeWorkflowStatusOptions();
       orderForm.reset();
+      selectedWorkStageOrder = [...customWorkStageOptions.querySelectorAll('[name="workStage"]:checked')]
+        .map((input) => input.value);
+      removeCustomWorkStageOptions();
+      updateProductionPathFields();
       resetModelImageSlots();
       orderForm.elements.editIndex.value = "";
       orderForm.elements.operationalExpenses.readOnly = false;
@@ -12223,7 +12223,8 @@ function bindActions(session) {
     const productionType = cuttingOnly ? "full_cutting" : selectedProductionType;
     const workStages = cuttingOnly
       ? ["cutting"]
-      : [...form.querySelectorAll('[name="workStage"]:checked')].map((input) => input.value);
+      : selectedWorkStageOrder.filter((stage) =>
+        form.querySelector(`[name="workStage"][value="${CSS.escape(stage)}"]`)?.checked);
     const directSewingEntry = Boolean(existingOrder
       && requestedStatus === "في انتظار الخياطة"
       && productionType === "ready_sewing"

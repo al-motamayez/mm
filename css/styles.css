@@ -945,14 +945,13 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .order-form .stage-prices-field { grid-column: 1 / -1; }
 .work-stage-picker { min-width: 0; margin: 0; padding: 0; border: 0; }
 .work-stage-picker legend { margin-bottom: 6px; color: #465651; font-size: 13px; font-weight: 600; }
-.work-stage-options { display: flex; flex-wrap: wrap; gap: 6px; }
-.work-stage-options label { display: inline-flex; align-items: center; gap: 5px; margin: 0; padding: 6px 9px; border: 1px solid var(--line); border-radius: 7px; background: #fff; font-size: 12px; }
+.work-stage-options { display: flex; flex-wrap: wrap; gap: 7px; }
+.work-stage-options label { display: inline-flex; align-items: center; gap: 6px; margin: 0; padding: 7px 10px; border: 1px solid var(--line); border-radius: 7px; background: #fff; font-size: 12px; cursor: pointer; }
 .work-stage-options input { width: 15px; min-height: auto !important; height: 15px; margin: 0; accent-color: var(--green); }
-.work-stage-options [data-work-stage-option] { display: inline-flex; align-items: center; gap: 3px; padding: 2px 5px 2px 0; border: 1px solid var(--line); border-radius: 7px; background: #fff; }
-.work-stage-options [data-work-stage-option] label { padding: 4px 2px 4px 8px; border: 0; background: transparent; }
-.work-stage-order-controls { display: inline-flex; gap: 2px; }
-.work-stage-order-controls button { width: 23px; height: 23px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: #fff; color: var(--ink); cursor: pointer; }
-.work-stage-order-controls button:disabled { opacity: .4; cursor: default; }
+.work-stage-options [data-work-stage-option] { display: inline-flex; align-items: center; gap: 3px; border: 1px solid var(--line); border-radius: 7px; background: #fff; transition: border-color .15s, background-color .15s, color .15s; }
+.work-stage-options [data-work-stage-option].is-selected { border-color: #16834a; background: #eaf7ef; color: #12663b; }
+.work-stage-options [data-work-stage-option].is-selected label { color: #12663b; }
+.work-stage-selection-order { display: inline-flex; align-items: center; margin-inline-end: 8px; padding: 2px 6px; border-radius: 10px; background: #16834a; color: #fff; font-size: 11px; line-height: 1.4; white-space: nowrap; }
 .work-stage-custom-entry { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-top: 9px; }
 .work-stage-custom-entry input { flex: 1 1 220px; min-height: 38px; }
 .work-stage-picker > small { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; }
