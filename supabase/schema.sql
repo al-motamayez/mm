@@ -5236,6 +5236,107 @@ $$;
 
 revoke all on function public.assign_factory_incoming_fabric(uuid, uuid) from public, anon, authenticated;
 
+create or replace function public.update_factory_fabric_inventory(
+  requested_fabric_id uuid,
+  requested_name text,
+  requested_type text,
+  requested_color_name text,
+  requested_color_hex text,
+  requested_unit text,
+  requested_customer_id uuid,
+  requested_quantity numeric
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  current_fabric public.factory_fabrics%rowtype;
+  quantity_delta numeric;
+  reserved_quantity numeric;
+begin
+  if not public.is_active_factory_admin() then
+    raise exception 'Only active admins can edit fabric inventory.';
+  end if;
+  if requested_fabric_id is null
+     or length(trim(coalesce(requested_name, ''))) not between 1 and 120
+     or length(trim(coalesce(requested_type, ''))) not between 1 and 120
+     or length(coalesce(requested_color_name, '')) > 64
+     or upper(coalesce(requested_color_hex, '')) !~ '^#[0-9A-F]{6}$'
+     or requested_unit is null
+     or requested_unit not in ('متر', 'توب')
+     or requested_quantity is null
+     or requested_quantity < 0
+     or requested_quantity > 99999999999.999
+     or (requested_unit = 'توب' and requested_quantity <> trunc(requested_quantity)) then
+    raise exception 'Enter valid fabric details and a non-negative stock quantity.';
+  end if;
+  if requested_customer_id is not null and not exists (
+    select 1 from public.factory_clients where id = requested_customer_id
+  ) then
+    raise exception 'Selected client was not found.';
+  end if;
+
+  select *
+    into current_fabric
+  from public.factory_fabrics
+  where id = requested_fabric_id
+  for update;
+  if not found then
+    raise exception 'Fabric stock item not found.';
+  end if;
+  if current_fabric.stock_scope = 'owner' and requested_customer_id is not null then
+    raise exception 'Owner fabric stock cannot be assigned to a client.';
+  end if;
+  if current_fabric.unit is distinct from requested_unit and exists (
+    select 1 from public.factory_fabric_transactions
+    where fabric_id = requested_fabric_id
+  ) then
+    raise exception 'The stock unit cannot be changed after inventory transactions exist.';
+  end if;
+  select coalesce(sum(quantity), 0)
+    into reserved_quantity
+  from public.factory_cutting_request_reservations
+  where fabric_id = requested_fabric_id;
+  if requested_quantity < reserved_quantity then
+    raise exception 'The stock quantity cannot be lower than fabric already reserved for cutting.';
+  end if;
+  if current_fabric.customer_id is distinct from requested_customer_id
+     and reserved_quantity > 0 then
+    raise exception 'A fabric assigned to an active cutting request cannot be reassigned.';
+  end if;
+
+  quantity_delta := requested_quantity - current_fabric.quantity_available;
+  update public.factory_fabrics
+  set name = trim(requested_name),
+      fabric_type = trim(requested_type),
+      color_name = trim(coalesce(requested_color_name, '')),
+      color_hex = upper(requested_color_hex),
+      unit = requested_unit,
+      customer_id = case when stock_scope = 'incoming' then requested_customer_id else null end,
+      quantity_available = requested_quantity,
+      updated_at = now()
+  where id = requested_fabric_id;
+
+  if quantity_delta <> 0 then
+    insert into public.factory_fabric_transactions (
+      fabric_id, transaction_type, quantity, notes, actor_id, created_at
+    )
+    values (
+      requested_fabric_id,
+      case when quantity_delta > 0 then 'adjustment_in' else 'adjustment_out' end,
+      abs(quantity_delta),
+      'تعديل رصيد القماش من نافذة المخزن',
+      auth.uid(),
+      now()
+    );
+  end if;
+end;
+$$;
+
+revoke all on function public.update_factory_fabric_inventory(uuid, text, text, text, text, text, uuid, numeric) from public, anon, authenticated;
+
 create or replace function public.adjust_factory_fabric_stock(
   requested_fabric_id uuid,
   requested_adjustment numeric,
@@ -8956,6 +9057,8 @@ revoke all on function public.register_factory_incoming_fabrics(uuid, jsonb, tim
 grant execute on function public.register_factory_incoming_fabrics(uuid, jsonb, timestamptz, text) to authenticated;
 revoke all on function public.assign_factory_incoming_fabric(uuid, uuid) from public, anon, authenticated;
 grant execute on function public.assign_factory_incoming_fabric(uuid, uuid) to authenticated;
+revoke all on function public.update_factory_fabric_inventory(uuid, text, text, text, text, text, uuid, numeric) from public, anon, authenticated;
+grant execute on function public.update_factory_fabric_inventory(uuid, text, text, text, text, text, uuid, numeric) to authenticated;
 revoke all on function public.adjust_factory_fabric_stock(uuid, numeric, timestamptz, text) from public, anon, authenticated;
 grant execute on function public.adjust_factory_fabric_stock(uuid, numeric, timestamptz, text) to authenticated;
 revoke all on function public.record_factory_fabric_withdrawal(uuid, numeric, timestamptz, text) from public, anon, authenticated;

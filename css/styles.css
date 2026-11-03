@@ -1077,18 +1077,20 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .fabric-client-stock-summary-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 280px)); gap: 8px; justify-content: start; }
 .fabric-client-stock-summary { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; min-width: 0; padding: 9px 11px; border: 1px solid #dfe8e2; border-radius: 9px; background: #f8fbf8; font-size: 12px; }
 .fabric-client-stock-summary strong { flex: 1 1 100%; color: var(--green-dark); }
-.fabric-stock-card-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 250px), 320px)); gap: 8px; justify-content: start; }
-.fabric-stock-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; min-width: 0; padding: 10px 12px; border: 1px solid #dfe8e2; border-radius: 9px; background: linear-gradient(120deg, #fff, #f8fbf8); }
+.fabric-stock-card-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+.fabric-stock-card { display: grid; grid-template-columns: minmax(130px, 1.15fr) minmax(115px, 1fr) minmax(110px, .9fr) minmax(110px, .8fr) minmax(150px, 1.2fr) auto; align-items: center; gap: 10px 16px; min-width: 0; padding: 12px 14px; border: 1px solid #dfe8e2; border-radius: 9px; background: linear-gradient(120deg, #fff, #f8fbf8); }
 .fabric-stock-card-main, .fabric-stock-card-kind, .fabric-stock-card-color, .fabric-stock-card-quantity, .fabric-stock-card-owner { display: grid; min-width: 0; gap: 3px; }
 .fabric-stock-card-main small, .fabric-stock-card-kind small, .fabric-stock-card-color small, .fabric-stock-card-quantity small, .fabric-stock-card-owner small { color: var(--muted); font-size: 10px; }
 .fabric-stock-card-main strong { overflow: hidden; color: var(--green-dark); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
-.fabric-stock-card-kind, .fabric-stock-card-owner { grid-column: 1 / -1; }
-.fabric-stock-card-kind span, .fabric-stock-card-owner span { overflow-wrap: anywhere; color: #34483f; font-size: 12px; }
+.fabric-stock-card-kind small, .fabric-stock-card-owner small { color: var(--green-dark); font-size: 11px; font-weight: 700; }
+.fabric-stock-card-kind span, .fabric-stock-card-owner span { overflow-wrap: anywhere; color: #34483f; font-size: 13px; font-weight: 600; }
 .fabric-stock-card-color .fabric-color { color: #34483f; font-size: 12px; }
 .fabric-stock-card-quantity { justify-items: end; }
 .fabric-stock-card-quantity strong { color: #205b40; font-size: 14px; white-space: nowrap; }
-.fabric-stock-card-actions { display: flex; grid-column: 1 / -1; flex-wrap: wrap; align-items: center; gap: 5px; padding-top: 7px; border-top: 1px solid var(--line); }
-.fabric-stock-card-actions select { flex: 1 1 100%; min-width: 0; min-height: 36px; }
+.fabric-stock-card-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.fabric-edit-modal .modal-card { width: min(720px, 100%); }
+.fabric-edit-form { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 16px; }
+.fabric-edit-form .form-actions { grid-column: 1 / -1; }
 .client-financial-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .client-ledger-tabs { margin-top: 4px; }
 .client-ledger-panel[hidden] { display: none; }
@@ -1206,9 +1208,14 @@ input, select, .modal-form textarea { color: #1d3028; font-size: 16px; }
   .fabric-entry-row > .field:first-child { grid-column: span 2; }
   .fabric-entry-row > .row-action { justify-self: start; }
   .incoming-fabric-color-row { grid-template-columns: minmax(100px, 1fr) 64px minmax(85px, .7fr) minmax(80px, .6fr) auto; }
+  .fabric-stock-card { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .fabric-stock-card-actions { grid-column: 1 / -1; justify-content: flex-end; padding-top: 7px; border-top: 1px solid var(--line); }
 }
 @media (max-width: 650px) {
   .client-financial-summary { grid-template-columns: minmax(0, 1fr); }
+  .fabric-stock-card { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px 12px; }
+  .fabric-stock-card-main { grid-column: 1 / -1; }
+  .fabric-edit-form { grid-template-columns: minmax(0, 1fr); }
   .login-layout { grid-template-columns: 1fr; }
   .login-intro { min-height: 330px; gap: 12px; padding: 28px 26px; }
   .login-logo { width: 130px; height: 135px; }

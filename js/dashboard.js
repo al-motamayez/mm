@@ -3757,9 +3757,7 @@ function fabricStockView(data, isAdmin) {
     const color = `<span class="fabric-color">${colorHex ? `<i style="--fabric-color:${colorHex}" aria-hidden="true"></i>` : ""}${escapeHtml(fabric.color_name || "لون غير مسمى")}</span>`;
     const quantity = `${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(fabric.quantity_available || 0)} ${escapeHtml(fabric.unit || "")}`;
     const type = fabric.fabric_type || fabric.name || "غير محدد";
-    const actions = category === "incoming"
-      ? `<div class="fabric-stock-card-actions"><select aria-label="تعيين العميل للقماش" data-incoming-customer="${escapeHtml(fabric.id)}"><option value="">عميل غير معروف / غير محدد حالياً</option>${data.clients.map((client) => `<option value="${escapeHtml(client.id)}" ${client.id === fabric.customer_id ? "selected" : ""}>${escapeHtml(client.name)}</option>`).join("")}</select><button class="row-action" type="button" data-edit-fabric="${escapeHtml(fabric.id)}">تعديل</button><button class="row-action order-delete-action" type="button" data-delete-fabric="${escapeHtml(fabric.id)}">حذف</button></div>`
-      : `<div class="fabric-stock-card-actions"><button class="row-action" type="button" data-edit-fabric="${escapeHtml(fabric.id)}">تعديل</button><button class="row-action order-delete-action" type="button" data-delete-fabric="${escapeHtml(fabric.id)}">حذف</button></div>`;
+    const actions = `<div class="fabric-stock-card-actions"><button class="row-action" type="button" data-edit-fabric="${escapeHtml(fabric.id)}">تعديل</button><button class="row-action order-delete-action" type="button" data-delete-fabric="${escapeHtml(fabric.id)}">حذف</button></div>`;
     return `<article class="fabric-stock-card"><div class="fabric-stock-card-main"><small>${escapeHtml(category === "incoming" ? "قماش العميل" : "مخزون الإدارة")}</small><strong>${escapeHtml(fabric.name)}</strong></div><div class="fabric-stock-card-kind"><small>النوع</small><span>${escapeHtml(type)}</span></div><div class="fabric-stock-card-color"><small>اللون</small>${color}</div><div class="fabric-stock-card-quantity"><small>المتاح</small><strong>${quantity}</strong></div><div class="fabric-stock-card-owner"><small>العميل / المالك</small><span>${escapeHtml(customerName(fabric.customer_id) || (category === "owner" ? "مخزون الإدارة" : "غير محدد"))}</span></div>${actions}</article>`;
   };
   const ownerTransactions = transactionRows.filter((transaction) =>
@@ -3790,6 +3788,24 @@ function fabricStockView(data, isAdmin) {
       ${panel("حركات مخزون الإدارة", table(["القماش","نوع الحركة","الكمية","رقم الطلب","ملاحظات","التاريخ والوقت","إجراء"], ownerTransactions))}
     </div>
     <div id="fabric-panel-add" role="tabpanel" aria-labelledby="fabric-tab-add" data-fabric-inventory-panel="add" hidden>${adminFabricForms}</div>
+    <div class="modal-backdrop fabric-edit-modal" data-fabric-edit-modal hidden>
+      <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="fabric-edit-title">
+        <button class="modal-close" type="button" data-close-fabric-edit aria-label="إغلاق">×</button>
+        <h2 id="fabric-edit-title">تعديل بيانات القماش</h2>
+        <p>عدّل العميل والصنف واللون والرصيد المتاح. يُسجل فرق الرصيد في سجل القماش.</p>
+        <form class="form-grid fabric-form fabric-edit-form" data-fabric-edit-form>
+          <input type="hidden" name="fabricId">
+          <label class="field"><span>اسم القماش</span><input name="name" maxlength="120" required></label>
+          <label class="field"><span>النوع</span><input name="type" maxlength="120" required></label>
+          <label class="field"><span>المالك / العميل</span><select name="customerId"><option value="">مخزون المصنع / غير محدد</option>${data.clients.map((client) => `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)}</option>`).join("")}</select></label>
+          <label class="field"><span>اسم اللون</span><input name="colorName" maxlength="64"></label>
+          <label class="field"><span>درجة اللون</span>${customColorControlMarkup("#FFFFFF", 'name="colorHex"')}</label>
+          <label class="field"><span>وحدة القياس</span><select name="unit" required><option value="متر">متر</option><option value="توب">توب</option></select></label>
+          <label class="field"><span>الرصيد المتاح</span><input name="quantity" type="number" min="0" max="99999999999.999" step="0.001" required></label>
+          <div class="form-actions"><button class="button button-primary" type="submit">حفظ التعديلات</button><button class="row-action" type="button" data-close-fabric-edit>إلغاء</button></div>
+        </form>
+      </section>
+    </div>
   </section>`;
 }
 
@@ -5498,8 +5514,7 @@ function navigationItems(role, info, session = null) {
       { id: "workers-production", icon: "⌁", label: "العمال والإنتاج" },
       { id: "workforce", icon: "◷", label: "شؤون العمال والحضور" },
       { id: "finance", icon: "ج.م", label: "حسابات العملاء / المصاريف" },
-      { id: "owner-fabric", icon: "▧", label: "قماش الإدارة" },
-      { id: "incoming-fabric", icon: "↘", label: "القماش الداخل" },
+      { id: "owner-fabric", icon: "▧", label: "مخزن القماش" },
       { id: "accounts", icon: "♙", label: "الطلبات والمستخدمون والنظام", last: true }
     ];
   }
@@ -5521,7 +5536,6 @@ function navigationItems(role, info, session = null) {
       { id: "admin-requests", icon: "✂", label: "طلبات الإدارة" },
       { id: "new-cutting", icon: "＋", label: "قصة جديدة" },
       ...(session?.canSubmitProduction ? [{ id: "worker-production", icon: "✓", label: "تسليم الإنتاج" }] : []),
-      { id: "incoming-fabric", icon: "↘", label: "القماش الداخل" },
       { id: "personal-account", icon: "◷", label: "متابعة الحساب والراتب", last: true }
     ];
   }
@@ -9823,7 +9837,9 @@ function bindFabricAdminActions(session) {
   const fabricForm = document.querySelector("#fabric-form");
   const receiptForm = document.querySelector("#fabric-receipt-form");
   const adjustmentForm = document.querySelector("#fabric-adjustment-form");
-  if (!fabricForm || !receiptForm || !adjustmentForm) return;
+  const fabricEditModal = document.querySelector("[data-fabric-edit-modal]");
+  const fabricEditForm = fabricEditModal?.querySelector("[data-fabric-edit-form]");
+  if (!fabricForm || !receiptForm || !adjustmentForm || !fabricEditModal || !fabricEditForm) return;
 
   document.querySelectorAll("[data-fabric-inventory-tab]").forEach((tab) => tab.addEventListener("click", () => {
     const section = tab.closest(".fabric-admin-dashboard");
@@ -9844,6 +9860,66 @@ function bindFabricAdminActions(session) {
     fabricForm.querySelector('[type="submit"]').textContent = "حفظ بيانات القماش";
     fabricForm.querySelector("[data-cancel-fabric-edit]").hidden = true;
   };
+  const closeFabricEditModal = () => {
+    fabricEditModal.hidden = true;
+  };
+  const openFabricEditModal = (fabric) => {
+    fabricEditForm.reset();
+    fabricEditForm.elements.fabricId.value = fabric.id;
+    fabricEditForm.elements.name.value = fabric.name;
+    fabricEditForm.elements.type.value = fabric.fabric_type || fabric.name;
+    fabricEditForm.elements.customerId.value = fabric.customer_id || "";
+    fabricEditForm.elements.customerId.disabled = fabric.stock_scope === "owner";
+    fabricEditForm.elements.colorName.value = fabric.color_name || "";
+    fabricEditForm.elements.colorHex.value = fabric.color_hex || "#FFFFFF";
+    syncCustomColorTrigger(fabricEditForm.elements.colorHex);
+    fabricEditForm.elements.unit.value = fabric.unit;
+    fabricEditForm.elements.quantity.value = String(fabric.quantity_available);
+    fabricEditForm.elements.quantity.step = fabric.unit === "توب" ? "1" : "0.001";
+    fabricEditModal.hidden = false;
+    fabricEditForm.elements.name.focus();
+  };
+  fabricEditModal.querySelectorAll("[data-close-fabric-edit]").forEach((button) =>
+    button.addEventListener("click", closeFabricEditModal));
+  fabricEditModal.addEventListener("click", (event) => {
+    if (event.target === fabricEditModal) closeFabricEditModal();
+  });
+  fabricEditModal.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeFabricEditModal();
+  });
+  fabricEditForm.elements.unit.addEventListener("change", () => {
+    fabricEditForm.elements.quantity.step = fabricEditForm.elements.unit.value === "توب" ? "1" : "0.001";
+  });
+  fabricEditForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = fabricEditForm.querySelector('[type="submit"]');
+    button.disabled = true;
+    let saved = false;
+    try {
+      const { error } = await supabaseClient.rpc("update_factory_fabric_inventory", {
+        requested_fabric_id: fabricEditForm.elements.fabricId.value,
+        requested_name: String(fabricEditForm.elements.name.value).trim(),
+        requested_type: String(fabricEditForm.elements.type.value).trim(),
+        requested_color_name: String(fabricEditForm.elements.colorName.value).trim(),
+        requested_color_hex: fabricEditForm.elements.colorHex.value,
+        requested_unit: fabricEditForm.elements.unit.value,
+        requested_customer_id: fabricEditForm.elements.customerId.value || null,
+        requested_quantity: Number(fabricEditForm.elements.quantity.value)
+      });
+      if (error?.code === "PGRST202") throw new Error("دالة تعديل مخزون القماش غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+      if (error) throw error;
+      saved = true;
+      closeFabricEditModal();
+      await refreshDashboard(session);
+      window.factoryUI.toast("تم تحديث بيانات القماش والرصيد.");
+    } catch (error) {
+      reportDashboardFailure(session, saved
+        ? "تم حفظ بيانات القماش، لكن تعذر تحديث الشاشة"
+        : "تعذر حفظ تعديلات القماش", error);
+    } finally {
+      button.disabled = false;
+    }
+  });
   fabricForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const button = fabricForm.querySelector('[type="submit"]');
@@ -9943,18 +10019,7 @@ function bindFabricAdminActions(session) {
       window.factoryUI.toast("تعذر العثور على صنف القماش.", "error");
       return;
     }
-    fabricForm.elements.fabricId.value = fabric.id;
-    fabricForm.elements.name.value = fabric.name;
-    fabricForm.elements.type.value = fabric.fabric_type || fabric.name;
-    fabricForm.elements.colorName.value = fabric.color_name;
-    fabricForm.elements.colorHex.value = fabric.color_hex;
-    syncCustomColorTrigger(fabricForm.elements.colorHex);
-    fabricForm.elements.unit.value = fabric.unit;
-    fabricForm.querySelector('[type="submit"]').textContent = "حفظ التعديلات";
-    fabricForm.querySelector("[data-cancel-fabric-edit]").hidden = false;
-    fabricForm.scrollIntoView({ behavior: "smooth", block: "center" });
-    fabricForm.elements.name.focus({ preventScroll: true });
-
+    openFabricEditModal(fabric);
   }));
   document.querySelectorAll("[data-delete-fabric]").forEach((button) => button.addEventListener("click", async () => {
     const fabric = dashboardData.fabrics.find((item) => item.id === button.dataset.deleteFabric);
