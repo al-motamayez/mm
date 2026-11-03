@@ -1547,7 +1547,7 @@ begin
       where length(btrim(selected_stage)) not between 1 and 50
          or selected_stage <> btrim(selected_stage)
          or lower(btrim(selected_stage)) = any(array[
-           'delivery',
+           'delivery', 'cutting', 'sewing', 'finishing', 'ironing', 'printing', 'packaging', 'sorting',
            'قص', 'خياطة', 'تشطيب', 'مكوى', 'طباعة', 'تكييس / أمبلاج', 'فرز',
            'التشطيب', 'المكواة', 'الكي', 'الطباعة', 'التكييس', 'الفرز'
          ]::text[])
@@ -5782,18 +5782,11 @@ begin
   if requested_final_batch_qty > remaining_quantity then
     raise exception 'The final delivery quantity cannot exceed the remaining order quantity.';
   end if;
-  if has_prior_deliveries
-     and requested_final_batch_qty <> remaining_quantity then
-    raise exception 'The final handover must record delivery of all remaining pieces.';
-  end if;
   if not has_prior_deliveries
-     and requested_final_batch_qty <> current_order.total_pieces then
-    raise exception 'The first handover must deliver the full order; record partial batches with record_factory_delivery.';
+     and requested_final_batch_qty < 1 then
+    raise exception 'The first handover must record at least one delivered piece.';
   end if;
   final_delivered_quantity := current_order.delivered_pieces + requested_final_batch_qty;
-  if final_delivered_quantity <> current_order.total_pieces then
-    raise exception 'An order cannot be closed until all pieces have been delivered.';
-  end if;
   if requested_final_batch_qty > 0 then
     if length(trim(coalesce(requested_recipient_name, ''))) = 0 then
       raise exception 'A recipient name is required when recording an additional delivery.';
@@ -5810,12 +5803,17 @@ begin
   end if;
 
   update public.orders
-  set delivered_pieces = final_delivered_quantity,
+  set original_total_pieces = case
+        when original_total_pieces = 0 then current_order.total_pieces
+        else original_total_pieces
+      end,
+      total_pieces = final_delivered_quantity,
+      delivered_pieces = final_delivered_quantity,
       status = 'تم التسليم'
   where id = current_order.id;
 
   update public.production_stages
-  set target_quantity = greatest(target_quantity, final_delivered_quantity),
+  set target_quantity = final_delivered_quantity,
       completed_quantity = final_delivered_quantity,
       status = 'مكتمل',
       updated_at = now()
