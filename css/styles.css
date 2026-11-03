@@ -948,8 +948,11 @@ td { padding: 9px 12px; border-top: 1px solid #f0f2ef; color: #44514b; font-size
 .work-stage-options { display: flex; flex-wrap: wrap; gap: 6px; }
 .work-stage-options label { display: inline-flex; align-items: center; gap: 5px; margin: 0; padding: 6px 9px; border: 1px solid var(--line); border-radius: 7px; background: #fff; font-size: 12px; }
 .work-stage-options input { width: 15px; min-height: auto !important; height: 15px; margin: 0; accent-color: var(--green); }
-.work-stage-options [data-custom-work-stage-option] { display: inline-flex; align-items: center; gap: 3px; padding: 2px 6px 2px 0; border: 1px solid var(--line); border-radius: 7px; background: #fff; }
-.work-stage-options [data-custom-work-stage-option] label { padding: 4px 2px 4px 8px; border: 0; background: transparent; }
+.work-stage-options [data-work-stage-option] { display: inline-flex; align-items: center; gap: 3px; padding: 2px 5px 2px 0; border: 1px solid var(--line); border-radius: 7px; background: #fff; }
+.work-stage-options [data-work-stage-option] label { padding: 4px 2px 4px 8px; border: 0; background: transparent; }
+.work-stage-order-controls { display: inline-flex; gap: 2px; }
+.work-stage-order-controls button { width: 23px; height: 23px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: #fff; color: var(--ink); cursor: pointer; }
+.work-stage-order-controls button:disabled { opacity: .4; cursor: default; }
 .work-stage-custom-entry { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-top: 9px; }
 .work-stage-custom-entry input { flex: 1 1 220px; min-height: 38px; }
 .work-stage-picker > small { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; }

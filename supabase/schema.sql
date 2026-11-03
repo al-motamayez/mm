@@ -3407,6 +3407,32 @@ begin
     return false;
   end if;
 
+  if not exists (
+    select 1
+    from public.factory_order_original_delivery_cells(requested_order_id)
+  ) then
+    if jsonb_array_length(requested_colors) <> 1
+       or requested_colors -> 0 ->> 'hex' <> '#000000'
+       or jsonb_object_length(requested_colors -> 0 -> 'sizes') <> 1
+       or not ((requested_colors -> 0 -> 'sizes') ? 'الإجمالي') then
+      return false;
+    end if;
+    if exists (
+      select 1
+      from public.factory_deliveries as delivery
+      cross join lateral jsonb_array_elements(delivery.color_size_data) as color_entry(value)
+      where delivery.order_id = requested_order_id
+        and (
+          color_entry.value ->> 'hex' <> '#000000'
+          or jsonb_object_length(color_entry.value -> 'sizes') <> 1
+          or not ((color_entry.value -> 'sizes') ? 'الإجمالي')
+        )
+    ) then
+      return false;
+    end if;
+    return true;
+  end if;
+
   for requested_cell in
     select upper(color_entry.value ->> 'hex') as color_hex,
            case size_entry.key when 'SX' then 'XS' else size_entry.key end as size_name,
@@ -3437,6 +3463,7 @@ begin
       return false;
     end if;
   end loop;
+
   return true;
 end;
 $$;
@@ -3457,11 +3484,10 @@ begin
   where id = requested_order_id
     and archived_at is null
     and workflow_archived_at is null
-    and total_pieces > delivered_pieces
-    and customer_id is not null;
+    and total_pieces > delivered_pieces;
 
   if not found then
-    raise exception 'Partial delivery can only be enabled for an active order with a client and remaining quantity.';
+    raise exception 'Partial delivery can only be enabled for an active order with remaining quantity.';
   end if;
 end;
 $$;
@@ -3508,7 +3534,26 @@ begin
          factory_order.model_image_url,
          factory_order.model_image_url_2,
          factory_order.status,
-         coalesce(balance_data.delivery_balances, '[]'::jsonb),
+         coalesce(
+           balance_data.delivery_balances,
+           case
+             when factory_order.total_pieces > factory_order.delivered_pieces
+               and not exists (
+                 select 1
+                 from public.factory_order_original_delivery_cells(factory_order.id)
+               )
+               then jsonb_build_array(jsonb_build_object(
+                 'hex', '#000000',
+                 'name', 'الإجمالي',
+                 'sizes', jsonb_build_array(jsonb_build_object(
+                   'size', 'الإجمالي',
+                   'delivered', factory_order.delivered_pieces,
+                   'remaining', factory_order.total_pieces - factory_order.delivered_pieces
+                 ))
+               ))
+             else '[]'::jsonb
+           end
+         ),
          (
            factory_order.status = 'جاهز للتسليم'
            or factory_order.partial_delivery_enabled
@@ -3611,6 +3656,7 @@ declare
   current_order public.orders%rowtype;
   current_worker public.users%rowtype;
   saved_submission_id uuid;
+  updated_delivered_quantity integer;
 begin
   if not public.has_active_factory_role(array['worker', 'cutting', 'sewing'])
      or not exists (
@@ -3641,13 +3687,41 @@ begin
     raise exception 'The delivery quantity, order status, or color/size allocation is no longer valid.';
   end if;
 
+  insert into public.factory_deliveries (
+    order_id, customer_id, quantity, price_per_piece, recipient_name,
+    expected_delivery_date, color_size_data
+  )
+  values (
+    current_order.id, current_order.customer_id, requested_quantity,
+    current_order.price_per_piece,
+    coalesce(nullif(trim(current_worker.name), ''), current_worker.registration_name, 'عامل'),
+    current_order.expected_delivery_date, requested_colors
+  );
+
+  updated_delivered_quantity := current_order.delivered_pieces + requested_quantity;
+  update public.orders
+  set delivered_pieces = updated_delivered_quantity,
+      status = case
+        when updated_delivered_quantity >= current_order.total_pieces then 'تم التسليم'
+        else current_order.status
+      end
+  where id = current_order.id;
+
+  update public.production_stages
+  set target_quantity = greatest(target_quantity, updated_delivered_quantity),
+      completed_quantity = updated_delivered_quantity,
+      status = case when updated_delivered_quantity >= current_order.total_pieces then 'مكتمل' else status end,
+      updated_at = now()
+  where order_id = current_order.id
+    and stage_name = 'delivery';
+
   insert into public.factory_worker_order_deliveries (
     order_id, worker_id, worker_name, quantity, color_size_data, status
   )
   values (
     current_order.id, current_worker.id,
     coalesce(nullif(trim(current_worker.name), ''), current_worker.registration_name, 'عامل'),
-    requested_quantity, requested_colors, 'pending'
+    requested_quantity, requested_colors, 'confirmed'
   )
   returning id into saved_submission_id;
   return saved_submission_id;
@@ -3713,7 +3787,7 @@ begin
 
   update public.production_stages
   set target_quantity = greatest(target_quantity, updated_delivered_quantity),
-      completed_quantity = least(greatest(target_quantity, updated_delivered_quantity), target_quantity),
+      completed_quantity = updated_delivered_quantity,
       status = case when updated_delivered_quantity >= current_order.total_pieces then 'مكتمل' else status end,
       updated_at = now()
   where order_id = current_order.id and stage_name = 'delivery';
@@ -7053,7 +7127,10 @@ begin
       ), '{}'::jsonb),
       model_image_url = coalesce(nullif(trim(requested_model_image_url), ''), model_image_url),
       total_pieces = cut_total,
-      status = 'تم القص'
+      status = case
+        when current_order.work_stages = array['cutting']::text[] then 'جاهز للتسليم'
+        else 'تم القص'
+      end
   where id = requested_order_id;
 
   update public.production_stages
@@ -7073,6 +7150,14 @@ begin
       updated_at = now()
   where order_id = requested_order_id
     and stage_name = 'cutting';
+
+  if current_order.work_stages = array['cutting']::text[] then
+    update public.production_stages
+    set status = 'جاهز للتسليم',
+        updated_at = now()
+    where order_id = requested_order_id
+      and stage_name = 'delivery';
+  end if;
 
   return cut_total;
 end;

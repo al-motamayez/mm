@@ -1135,11 +1135,11 @@ function factoryOrderStatusSequence(order) {
   if (!selectedStages.length) return [...FACTORY_ORDER_STATUSES];
 
   const statuses = [FACTORY_ORDER_STATUSES[0]];
-  if (selectedStages.includes("cutting")) statuses.push(...FACTORY_ORDER_STATUSES.slice(1, 5));
-  if (selectedStages.includes("sewing")) statuses.push(...FACTORY_ORDER_STATUSES.slice(5, 8));
-  selectedStages
-    .filter((stage) => stage !== "cutting" && stage !== "sewing")
-    .forEach((stage) => statuses.push(...workStageStatusLabels(stage)));
+  selectedStages.forEach((stage) => {
+    if (stage === "cutting") statuses.push(...FACTORY_ORDER_STATUSES.slice(1, 5));
+    else if (stage === "sewing") statuses.push(...FACTORY_ORDER_STATUSES.slice(5, 8));
+    else statuses.push(...workStageStatusLabels(stage));
+  });
   statuses.push(...FACTORY_ORDER_STATUSES.slice(18));
   return statuses;
 }
@@ -2260,6 +2260,15 @@ function workStageLabel(stage) {
   return WORK_STAGES.find(([key]) => key === stage)?.[1] || String(stage || "");
 }
 
+function workStageOptionMarkup(stage, label, checked = true, custom = false) {
+  const fixed = ["cutting", "sewing"].includes(stage);
+  return `<div class="work-stage-option"${custom ? ' data-custom-work-stage-option' : ""} data-work-stage-option>
+    <label><input type="checkbox" name="workStage" value="${escapeHtml(stage)}"${checked ? " checked" : ""}><span>${escapeHtml(label)}</span></label>
+    <span class="work-stage-order-controls"><button type="button" data-move-work-stage="up" aria-label="تقديم مرحلة ${escapeHtml(label)}"${fixed ? " disabled" : ""}>↑</button><button type="button" data-move-work-stage="down" aria-label="تأخير مرحلة ${escapeHtml(label)}"${fixed ? " disabled" : ""}>↓</button></span>
+    ${custom ? `<button type="button" class="work-stage-remove" data-remove-work-stage aria-label="حذف مرحلة ${escapeHtml(label)}">×</button>` : ""}
+  </div>`;
+}
+
 function isCustomWorkStage(stage) {
   return !WORK_STAGES.some(([key]) => key === stage);
 }
@@ -2395,13 +2404,13 @@ function orderCards(models, withActions = false) {
     const index = dashboardData.models.findIndex((order) => order.id === item.id);
     const canMakeSewingAvailable = withActions
       && !item.archivedAt
+      && (item.workStages || []).includes("sewing")
       && ["مكتمل", "تم القص"].includes(item.cuttingStageStatus)
       && !["متاح للخياطة", "قيد الخياطة", "مكتمل"].includes(item.sewingStageStatus);
     const canManagePartialDelivery = withActions;
     const canEnablePartialDelivery = canManagePartialDelivery
       && !item.archivedAt
       && !item.workflowArchivedAt
-      && item.customerId
       && item.remainingPieces > 0;
     return `<article class="order-card order-compact-row">
       <header class="production-compact-heading">${modelImageMarkup(item.modelImageUrls || item.modelImageUrl)}<h3>${escapeHtml(item.name || "موديل بدون اسم")}</h3></header>
@@ -2409,7 +2418,7 @@ function orderCards(models, withActions = false) {
       <div class="production-compact-facts"><div><span>الألوان</span>${colorSummaryMarkup(item.colors, item.colorNames, item.colorPlyData)}</div><div><span>المقاسات</span>${sizeBadgesMarkup(item.sizes)}</div></div>
       ${withActions ? `<button class="row-action order-expense-trigger" type="button" data-add-model-expense="${escapeHtml(item.id)}">＋ إضافة مصروف خارجي</button>` : ""}
       <button class="row-action" type="button" data-open-model-id="${escapeHtml(item.id)}">التفاصيل</button>
-      ${withActions ? `<div class="order-card-actions">${canMakeSewingAvailable ? `<button class="button button-secondary" type="button" data-make-sewing-available="${escapeHtml(item.id)}">إدخال للخياطة</button>` : ""}${canManagePartialDelivery ? item.partialDeliveryEnabled ? '<span class="partial-delivery-enabled" role="status">التسليم الجزئي متاح</span>' : canEnablePartialDelivery ? `<button class="row-action partial-delivery-action" type="button" data-enable-partial-delivery="${escapeHtml(item.id)}">إتاحة للتسليم الجزئي</button>` : `<button class="row-action partial-delivery-action" type="button" disabled title="${item.archivedAt || item.workflowArchivedAt ? "لا يمكن إتاحة التسليم الجزئي لموديل مؤرشف" : item.customerId ? "لا توجد كمية متبقية للتسليم الجزئي" : "عيّن العميل أولاً لإتاحة التسليم الجزئي"}">إتاحة للتسليم الجزئي</button>` : ""}${item.archivedAt || item.workflowArchivedAt ? "" : `<button class="row-action" type="button" data-edit-kind="models" data-index="${index}">تعديل</button>`}${item.customerId ? `${item.archivedAt || item.workflowArchivedAt || LOCKED_FACTORY_ORDER_STATUSES.includes(item.status) ? "" : `<button class="row-action" type="button" data-action="record-delivery" data-index="${index}"${item.remainingPieces > 0 ? "" : " disabled"}>تسجيل تسليم</button><button class="row-action order-close-action" type="button" data-action="complete-handover" data-index="${index}"${item.quantity ? "" : " disabled"}>تسوية التسليم وإغلاق الطلب</button>`}` : '<span class="order-delete-protected">عيّن العميل قبل تسجيل أي تسليم</span>'}${item.workflowArchivedAt ? '<span class="status">مؤرشف تشغيلياً</span>' : ""}${item.archivedAt || LOCKED_FACTORY_ORDER_STATUSES.includes(item.status) ? '<span class="status">مغلق / تم التسليم</span>' : ""}${orderCanBeDeleted(item) ? `<button class="row-action order-delete-action" type="button" data-action="delete-order" data-order-id="${escapeHtml(item.id)}">حذف الموديل</button>` : !item.archivedAt && !item.workflowArchivedAt ? `<button class="row-action" type="button" data-archive-factory-order="${escapeHtml(item.id)}">إيقاف / أرشفة</button>` : ""}</div>` : ""}
+      ${withActions ? `<div class="order-card-actions">${canMakeSewingAvailable ? `<button class="button button-secondary" type="button" data-make-sewing-available="${escapeHtml(item.id)}">إدخال للخياطة</button>` : ""}${canManagePartialDelivery ? item.partialDeliveryEnabled ? '<span class="partial-delivery-enabled" role="status">التسليم الجزئي متاح</span>' : canEnablePartialDelivery ? `<button class="row-action partial-delivery-action" type="button" data-enable-partial-delivery="${escapeHtml(item.id)}">إتاحة للتسليم الجزئي</button>` : `<button class="row-action partial-delivery-action" type="button" disabled title="${item.archivedAt || item.workflowArchivedAt ? "لا يمكن إتاحة التسليم الجزئي لموديل مؤرشف" : "لا توجد كمية متبقية للتسليم الجزئي"}">إتاحة للتسليم الجزئي</button>` : ""}${item.archivedAt || item.workflowArchivedAt ? "" : `<button class="row-action" type="button" data-edit-kind="models" data-index="${index}">تعديل</button>`}${item.customerId ? `${item.archivedAt || item.workflowArchivedAt || LOCKED_FACTORY_ORDER_STATUSES.includes(item.status) ? "" : `<button class="row-action" type="button" data-action="record-delivery" data-index="${index}"${item.remainingPieces > 0 ? "" : " disabled"}>تسجيل تسليم</button><button class="row-action order-close-action" type="button" data-action="complete-handover" data-index="${index}"${item.quantity ? "" : " disabled"}>تسوية التسليم وإغلاق الطلب</button>`}` : '<span class="order-delete-protected">عيّن العميل قبل تسجيل أي تسليم</span>'}${item.workflowArchivedAt ? '<span class="status">مؤرشف تشغيلياً</span>' : ""}${item.archivedAt || LOCKED_FACTORY_ORDER_STATUSES.includes(item.status) ? '<span class="status">مغلق / تم التسليم</span>' : ""}${orderCanBeDeleted(item) ? `<button class="row-action order-delete-action" type="button" data-action="delete-order" data-order-id="${escapeHtml(item.id)}">حذف الموديل</button>` : !item.archivedAt && !item.workflowArchivedAt ? `<button class="row-action" type="button" data-archive-factory-order="${escapeHtml(item.id)}">إيقاف / أرشفة</button>` : ""}</div>` : ""}
     </article>`;
   }).join("")}</div>`;
 }
@@ -3600,7 +3609,8 @@ function printClientAccount(client, data) {
 
 function fabricSelectOptions(fabrics, selectedId = "", clients = [], allowExternal = false) {
   const selectableFabrics = allowExternal
-    ? fabrics.filter((fabric) => fabric.stock_scope === "incoming")
+    ? fabrics.filter((fabric) => fabric.stock_scope === "incoming"
+      && (Number(fabric.quantity_available) > 0 || fabric.id === selectedId))
     : fabrics;
   return `<option value="">اختر خامة من المخزون</option>${allowExternal ? `<option value="external" ${selectedId === "external" ? "selected" : ""}>خامة أخرى / خارجية غير مسجلة بالمخزن</option>` : ""}${selectableFabrics.map((fabric) =>
     `<option value="${escapeHtml(fabric.id)}" data-name="${escapeHtml(fabric.name)}" data-unit="${escapeHtml(fabric.unit)}" data-customer="${escapeHtml(fabric.customer_id || "")}" data-color="${escapeHtml(fabric.color_name || "")}" data-available="${escapeHtml(fabric.quantity_available)}" ${fabric.stock_scope === "incoming" && !fabric.customer_id ? "disabled" : ""} ${fabric.id === selectedId ? "selected" : ""}>${escapeHtml(fabric.name)}${fabric.customer_id ? ` · ${escapeHtml(clients.find((client) => client.id === fabric.customer_id)?.name || "عميل مرتبط")}` : fabric.stock_scope === "incoming" ? " · بانتظار تعيين العميل" : ""} · ${escapeHtml(fabric.color_name || "لون غير مسمى")} · متاح ${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(fabric.quantity_available)} ${escapeHtml(fabric.unit)}</option>`
@@ -3615,6 +3625,7 @@ function cuttingFabricTypeOptions(fabrics, customerId) {
   const types = [...new Map(fabrics
     .filter((fabric) => fabric.stock_scope === "incoming"
       && fabric.customer_id
+      && Number(fabric.quantity_available) > 0
       && (!customerId || fabric.customer_id === customerId))
     .map((fabric) => [cuttingFabricTypeKey(fabric), fabric]))
     .values()];
@@ -3628,6 +3639,7 @@ function cuttingFabricLineMarkup(fabrics, typeKey, customerId) {
   const matchingFabrics = fabrics.filter((fabric) =>
     fabric.stock_scope === "incoming"
     && fabric.customer_id === customerId
+    && Number(fabric.quantity_available) > 0
     && cuttingFabricTypeKey(fabric) === typeKey
   );
   const colorChoices = matchingFabrics.map((fabric) =>
@@ -3687,6 +3699,8 @@ function ownerFabricReceiptLineMarkup(fabrics) {
 function fabricStockView(data, isAdmin) {
   const ownerFabrics = data.fabrics.filter((fabric) => fabric.stock_scope === "owner");
   const incomingFabrics = data.fabrics.filter((fabric) => fabric.stock_scope === "incoming");
+  const availableOwnerFabrics = ownerFabrics.filter((fabric) => Number(fabric.quantity_available) > 0);
+  const availableIncomingFabrics = incomingFabrics.filter((fabric) => Number(fabric.quantity_available) > 0);
   const totalTransactions = data.fabricTransactions.length;
   const customerName = (customerId) => data.clients.find((client) => client.id === customerId)?.name || "";
   const quantityForUnit = (fabric, unit) => fabric.unit === unit
@@ -3695,10 +3709,10 @@ function fabricStockView(data, isAdmin) {
   const totalForUnit = (fabrics, unit) => new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 })
     .format(fabrics.filter((fabric) => fabric.unit === unit)
       .reduce((sum, fabric) => sum + Number(fabric.quantity_available), 0));
-  const incomingRows = incomingFabrics.map((fabric) => {
+  const incomingRows = availableIncomingFabrics.map((fabric) => {
     const color = `<span class="fabric-color"><i style="--fabric-color:${escapeHtml(fabric.color_hex)}"></i>${escapeHtml(fabric.color_name || "لون غير مسمى")}</span>`;
     const assignment = isAdmin
-      ? `<div class="incoming-assignment"><select aria-label="تعيين العميل للقماش" data-incoming-customer="${escapeHtml(fabric.id)}"><option value="">عميل غير معروف / غير محدد حالياً</option>${data.clients.map((client) => `<option value="${escapeHtml(client.id)}" ${client.id === fabric.customer_id ? "selected" : ""}>${escapeHtml(client.name)}</option>`).join("")}</select><button class="row-action" type="button" data-assign-incoming-fabric="${escapeHtml(fabric.id)}">حفظ العميل</button><button class="row-action" type="button" data-edit-fabric="${escapeHtml(fabric.id)}">تعديل</button><button class="row-action order-delete-action" type="button" data-delete-fabric="${escapeHtml(fabric.id)}">حذف</button></div>`
+      ? `<div class="incoming-assignment"><select aria-label="تعيين العميل للقماش" data-incoming-customer="${escapeHtml(fabric.id)}"><option value="">عميل غير معروف / غير محدد حالياً</option>${data.clients.map((client) => `<option value="${escapeHtml(client.id)}" ${client.id === fabric.customer_id ? "selected" : ""}>${escapeHtml(client.name)}</option>`).join("")}</select><button class="row-action" type="button" data-edit-fabric="${escapeHtml(fabric.id)}">تعديل</button><button class="row-action order-delete-action" type="button" data-delete-fabric="${escapeHtml(fabric.id)}">حذف</button></div>`
       : "";
     return `<tr><td>${escapeHtml(fabric.name)}</td><td>${escapeHtml(fabric.fabric_type || fabric.name)}</td><td>${color}</td><td>${escapeHtml(customerName(fabric.customer_id) || "عميل غير معروف / غير محدد حالياً")}</td><td>${quantityForUnit(fabric, "توب")}</td><td>${quantityForUnit(fabric, "متر")}</td><td>${formatDateTime(fabric.received_at || fabric.created_at)}</td><td>${assignment || "متاح للقص"}</td></tr>`;
   });
@@ -3731,7 +3745,7 @@ function fabricStockView(data, isAdmin) {
     .filter((fabric) => fabric.unit === unit)
     .reduce((sum, fabric) => sum + Number(fabric.quantity_available || 0), 0));
   const clientStockGroups = new Map();
-  incomingFabrics.forEach((fabric) => {
+  availableIncomingFabrics.forEach((fabric) => {
     const key = fabric.customer_id || "unassigned";
     const group = clientStockGroups.get(key) || { name: customerName(fabric.customer_id) || "عميل غير محدد", fabrics: [] };
     group.fabrics.push(fabric);
@@ -3746,7 +3760,7 @@ function fabricStockView(data, isAdmin) {
     const quantity = `${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(fabric.quantity_available || 0)} ${escapeHtml(fabric.unit || "")}`;
     const type = fabric.fabric_type || fabric.name || "غير محدد";
     const actions = category === "incoming"
-      ? `<div class="fabric-stock-card-actions"><select aria-label="تعيين العميل للقماش" data-incoming-customer="${escapeHtml(fabric.id)}"><option value="">عميل غير معروف / غير محدد حالياً</option>${data.clients.map((client) => `<option value="${escapeHtml(client.id)}" ${client.id === fabric.customer_id ? "selected" : ""}>${escapeHtml(client.name)}</option>`).join("")}</select><button class="row-action" type="button" data-assign-incoming-fabric="${escapeHtml(fabric.id)}">حفظ العميل</button><button class="row-action" type="button" data-edit-fabric="${escapeHtml(fabric.id)}">تعديل</button><button class="row-action order-delete-action" type="button" data-delete-fabric="${escapeHtml(fabric.id)}">حذف</button></div>`
+      ? `<div class="fabric-stock-card-actions"><select aria-label="تعيين العميل للقماش" data-incoming-customer="${escapeHtml(fabric.id)}"><option value="">عميل غير معروف / غير محدد حالياً</option>${data.clients.map((client) => `<option value="${escapeHtml(client.id)}" ${client.id === fabric.customer_id ? "selected" : ""}>${escapeHtml(client.name)}</option>`).join("")}</select><button class="row-action" type="button" data-edit-fabric="${escapeHtml(fabric.id)}">تعديل</button><button class="row-action order-delete-action" type="button" data-delete-fabric="${escapeHtml(fabric.id)}">حذف</button></div>`
       : `<div class="fabric-stock-card-actions"><button class="row-action" type="button" data-edit-fabric="${escapeHtml(fabric.id)}">تعديل</button><button class="row-action order-delete-action" type="button" data-delete-fabric="${escapeHtml(fabric.id)}">حذف</button></div>`;
     return `<article class="fabric-stock-card"><div class="fabric-stock-card-main"><small>${escapeHtml(category === "incoming" ? "قماش العميل" : "مخزون الإدارة")}</small><strong>${escapeHtml(fabric.name)}</strong></div><div class="fabric-stock-card-kind"><small>النوع</small><span>${escapeHtml(type)}</span></div><div class="fabric-stock-card-color"><small>اللون</small>${color}</div><div class="fabric-stock-card-quantity"><small>المتاح</small><strong>${quantity}</strong></div><div class="fabric-stock-card-owner"><small>العميل / المالك</small><span>${escapeHtml(customerName(fabric.customer_id) || (category === "owner" ? "مخزون الإدارة" : "غير محدد"))}</span></div>${actions}</article>`;
   };
@@ -3767,10 +3781,10 @@ function fabricStockView(data, isAdmin) {
       <button id="fabric-tab-add" type="button" role="tab" aria-controls="fabric-panel-add" aria-selected="false" class="client-management-tab" data-fabric-inventory-tab="add">إضافة قماش جديد</button>
     </div>
     <div id="fabric-panel-stock" role="tabpanel" aria-labelledby="fabric-tab-stock" data-fabric-inventory-panel="stock">
-      <div class="stats-grid">${stat("أصناف قماش الإدارة", ownerFabrics.length, "مخزون المصنع")}${stat("أثواب الإدارة", totalForUnit(ownerFabrics, "توب"))}${stat("أمتار الإدارة", totalForUnit(ownerFabrics, "متر"))}${stat("سجلات قماش العملاء", incomingFabrics.length, "المتاح فعلياً لكل عميل")}</div>
+      <div class="stats-grid">${stat("أصناف قماش الإدارة", availableOwnerFabrics.length, "مخزون المصنع")}${stat("أثواب الإدارة", totalForUnit(availableOwnerFabrics, "توب"))}${stat("أمتار الإدارة", totalForUnit(availableOwnerFabrics, "متر"))}${stat("سجلات قماش العملاء", availableIncomingFabrics.length, "المتاح فعلياً لكل عميل")}</div>
       ${panel("إجمالي المتاح حسب العميل", clientStockSummary ? `<div class="fabric-client-stock-summary-list">${clientStockSummary}</div>` : '<div class="empty-state">لا توجد أرصدة قماش مسجلة للعملاء.</div>')}
-      ${panel("قماش العملاء المتاح حالياً", incomingFabrics.length ? `<div class="fabric-stock-card-list">${incomingFabrics.map((fabric) => fabricCard(fabric, "incoming")).join("")}</div>` : '<div class="empty-state">لا يوجد قماش عملاء متاح حالياً.</div>')}
-      ${panel("مخزون المصنع المتاح حالياً", ownerFabrics.length ? `<div class="fabric-stock-card-list">${ownerFabrics.map((fabric) => fabricCard(fabric, "owner")).join("")}</div>` : '<div class="empty-state">لا يوجد قماش مسجل في مخزون الإدارة.</div>')}
+      ${panel("قماش العملاء المتاح حالياً", availableIncomingFabrics.length ? `<div class="fabric-stock-card-list">${availableIncomingFabrics.map((fabric) => fabricCard(fabric, "incoming")).join("")}</div>` : '<div class="empty-state">لا يوجد قماش عملاء متاح حالياً.</div>')}
+      ${panel("مخزون المصنع المتاح حالياً", availableOwnerFabrics.length ? `<div class="fabric-stock-card-list">${availableOwnerFabrics.map((fabric) => fabricCard(fabric, "owner")).join("")}</div>` : '<div class="empty-state">لا يوجد قماش مسجل في مخزون الإدارة.</div>')}
     </div>
     <div id="fabric-panel-history" role="tabpanel" aria-labelledby="fabric-tab-history" data-fabric-inventory-panel="history" hidden>
       <div class="stats-grid">${stat("إجمالي حركات القماش", totalTransactions, "دخول وسحب وتسوية")}</div>
@@ -4178,8 +4192,8 @@ function adminView(data, accounts) {
           <div class="field" data-original-quantity-field hidden><label for="model-original-quantity">العدد المطلوب الأصلي</label><input id="model-original-quantity" name="originalQuantity" type="number" min="0" step="1"></div>
         </div></section>
         <section class="form-section"><h3>التفاصيل التشغيلية <span>اختياري</span></h3><div class="form-section-grid">
-          <div class="field wide"><label for="model-production-type">مسار التشغيل</label><select id="model-production-type" name="productionType"><option value="full_cutting">قص وفرش داخل المصنع</option><option value="ready_sewing">موديل جاهز ومقصوص مسبقاً</option></select><small>الموديل الجاهز يتجاوز القص، ويبدأ من الحالة والمرحلة التي تحددها أدناه.</small></div>
-          <fieldset class="field work-stage-picker"><legend>مراحل الموديل المطلوبة</legend><div class="work-stage-options" data-work-stage-options>${WORK_STAGES.map(([key, label]) => `<label><input type="checkbox" name="workStage" value="${key}" ${["cutting", "sewing", "finishing"].includes(key) ? "checked" : ""}><span>${label}</span></label>`).join("")}</div><div class="work-stage-custom-entry"><input type="text" data-custom-work-stage maxlength="50" aria-label="اسم مرحلة مخصصة" placeholder="مرحلة إضافية مثل تركيب حبل"><button class="row-action" type="button" data-add-work-stage>＋ إضافة مرحلة</button></div><small>تُضاف المرحلة لهذا الموديل فقط، وتُدار حالتها من شاشة إدارة حالات الموديلات.</small></fieldset>
+          <div class="field wide"><label for="model-production-type">مسار التشغيل</label><select id="model-production-type" name="productionType"><option value="full_cutting">قص وفرش داخل المصنع</option><option value="cutting_only">قص بس (بدون خياطة داخلية)</option><option value="ready_sewing">موديل جاهز ومقصوص مسبقاً</option></select><small>اختر «قص بس» لتسليم الموديل بعد اكتمال القص دون إدخاله للخياطة؛ أو رتّب المراحل المطلوبة أدناه.</small></div>
+          <fieldset class="field work-stage-picker"><legend>مراحل الموديل المطلوبة</legend><div class="work-stage-options" data-work-stage-options>${WORK_STAGES.map(([key, label]) => workStageOptionMarkup(key, label, ["cutting", "sewing", "finishing"].includes(key))).join("")}</div><div class="work-stage-custom-entry"><input type="text" data-custom-work-stage maxlength="50" aria-label="اسم مرحلة مخصصة" placeholder="مرحلة إضافية مثل تركيب حبل"><button class="row-action" type="button" data-add-work-stage>＋ إضافة مرحلة</button></div><small>رتّب المراحل بأسهم التقديم والتأخير؛ ينفذ النظام المراحل الإضافية بالترتيب المختار.</small></fieldset>
           ${colorPickerMarkup("", "model-colors")}
           ${sizePickerMarkup("", "model-sizes", true, true)}
           <div class="model-allocation field"><label>توزيع العدد على الألوان والمقاسات</label><div data-model-allocation-grid><p class="muted">أدخل العدد الكلي واختر الألوان والمقاسات لعرض التوزيع.</p></div><input type="hidden" name="colorSizeDistribution" value='{"colors":[]}'></div>
@@ -4856,7 +4870,7 @@ function adminCuttingTransferView(data) {
     <header class="production-compact-heading">${modelImageMarkup(order.modelImageUrls || order.modelImageUrl)}<h3>${escapeHtml(order.name || "موديل بدون اسم")}</h3>${statusTag(order.displayStatus || order.status)}</header>
     <strong class="production-compact-total">${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity || 0)} قطعة</strong>
     <div class="production-compact-facts"><div><span>الألوان</span>${colorSummaryMarkup(order.colors, order.colorNames, order.colorPlyData)}</div><div><span>المقاسات</span>${sizeBadgesMarkup(order.sizes)}</div></div>
-    <div class="form-actions">${productionDetailsButton("cutting", order)}${!order.archivedAt ? `<button class="button button-secondary" type="button" data-edit-kind="models" data-index="${dashboardData.models.findIndex((entry) => entry.id === order.id)}">تعديل</button>` : ""}${!transferred && ["مكتمل", "تم القص"].includes(order.cuttingStageStatus) && !["متاح للخياطة", "قيد الخياطة", "مكتمل"].includes(order.sewingStageStatus) ? `<button class="button button-primary" type="button" data-make-sewing-available="${escapeHtml(order.id)}">إدخال للخياطة</button>` : ""}</div>
+    <div class="form-actions">${productionDetailsButton("cutting", order)}${!order.archivedAt ? `<button class="button button-secondary" type="button" data-edit-kind="models" data-index="${dashboardData.models.findIndex((entry) => entry.id === order.id)}">تعديل</button>` : ""}${!transferred && (order.workStages || []).includes("sewing") && ["مكتمل", "تم القص"].includes(order.cuttingStageStatus) && !["متاح للخياطة", "قيد الخياطة", "مكتمل"].includes(order.sewingStageStatus) ? `<button class="button button-primary" type="button" data-make-sewing-available="${escapeHtml(order.id)}">إدخال للخياطة</button>` : ""}</div>
   </article>`;
   const activeOrderCards = activeOrders.length
     ? `<div class="cutting-admin-order-grid">${activeOrders.map((order) => orderCard(order)).join("")}</div>`
@@ -4921,10 +4935,18 @@ function workerProductionColorMarkup(colors) {
 }
 
 function workerOrderDeliveryRowsMarkup(balances, includeInputs = false) {
+  const aggregateOnly = balances.length === 1
+    && balances[0].hex === "#000000"
+    && balances[0].name === "الإجمالي"
+    && balances[0].sizes?.length === 1
+    && balances[0].sizes[0].size === "الإجمالي";
   const rows = (Array.isArray(balances) ? balances : []).flatMap((color) =>
     (Array.isArray(color.sizes) ? color.sizes : []).map((size) => {
       const remaining = Number(size.remaining || 0);
-      return `<tr><td><span class="model-color-chip"><span class="color-breakdown-swatch" style="--swatch-color:${escapeHtml(color.hex)}"></span><strong>${escapeHtml(color.name || color.hex)}</strong></span></td><td>${escapeHtml(size.size)}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(Number(size.delivered || 0))}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(remaining)}</td>${includeInputs ? `<td><input type="number" min="0" max="${remaining}" step="1" value="0" data-order-delivery-count data-color="${escapeHtml(color.hex)}" data-color-name="${escapeHtml(color.name || "")}" data-size="${escapeHtml(size.size)}" aria-label="تسليم ${escapeHtml(color.name || color.hex)} مقاس ${escapeHtml(size.size)}" ${remaining ? "" : "disabled"}></td>` : ""}</tr>`;
+      const description = aggregateOnly
+        ? "الإجمالي"
+        : `<span class="model-color-chip"><span class="color-breakdown-swatch" style="--swatch-color:${escapeHtml(color.hex)}"></span><strong>${escapeHtml(color.name || color.hex)}</strong></span>`;
+      return `<tr><td>${description}</td><td>${aggregateOnly ? "—" : escapeHtml(size.size)}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(Number(size.delivered || 0))}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(remaining)}</td>${includeInputs ? `<td><input type="number" min="0" max="${remaining}" step="1" value="0" data-order-delivery-count data-color="${escapeHtml(color.hex)}" data-color-name="${escapeHtml(color.name || "")}" data-size="${escapeHtml(size.size)}" aria-label="تسليم ${escapeHtml(color.name || color.hex)} مقاس ${escapeHtml(size.size)}" ${remaining ? "" : "disabled"}></td>` : ""}</tr>`;
     })
   );
   const headers = ["اللون","المقاس","المسلّم سابقاً","المتبقي", ...(includeInputs ? ["تسليم الآن"] : [])];
@@ -4973,7 +4995,7 @@ function workerOrderDeliveryForm(order) {
       : workerOrderDeliveryRowsMarkup(balances, !locked)}
     ${locked
       ? `<p class="worker-delivery-locked-note">${escapeHtml(lockMessage)}</p>`
-      : `<form class="worker-order-delivery-form" data-worker-order-delivery="${escapeHtml(order.order_id)}"><label class="field"><span>إجمالي التسليم لهذه الدفعة</span><output data-order-delivery-total>0</output></label><div class="form-actions"><button class="button button-primary" type="submit">إرسال للإدارة للتأكيد</button></div></form>`}
+      : `<form class="worker-order-delivery-form" data-worker-order-delivery="${escapeHtml(order.order_id)}"><label class="field"><span>إجمالي التسليم لهذه الدفعة · المتاح ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(availableCount)} قطعة</span><output data-order-delivery-total>0</output></label><div class="form-actions"><button class="button button-primary" type="submit">تسجيل التسليم مباشرة</button></div></form>`}
     </article>
   </section>
   </div>`;
@@ -4999,7 +5021,7 @@ function workerOrderDeliveryPortalView(data) {
     ${panel("تسليم الطلبيات الجاهزة والتسليم الجزئي", modelCards.length
       ? `<div class="worker-order-delivery-list">${modelCards.join("")}</div>`
       : '<div class="empty-state">لا توجد طلبيات جاهزة أو متاحة للتسليم الجزئي مرتبطة بحسابك حالياً.</div>',
-    "تظهر هنا مباشرةً كل الموديلات الجاهزة للتسليم والموديلات التي أتاحتها الإدارة للتسليم الجزئي. أدخل أعداد هذه الدفعة الفعلية ثم أرسلها للإدارة؛ لا تُضاف إلى سجل العميل إلا بعد اعتمادها.")}
+    "تظهر هنا مباشرةً كل الموديلات الجاهزة للتسليم والموديلات التي أتاحتها الإدارة للتسليم الجزئي. أدخل أعداد هذه الدفعة الفعلية؛ تُسجل فوراً في الطلب وحساب العميل دون انتظار اعتماد إداري.")}
     ${panel("سجل تسليماتي", submissionRows.length
       ? `<div class="worker-order-delivery-history-list">${submissionRows.join("")}</div>`
       : '<div class="empty-state">لا توجد دفعات تسليم مرسلة بعد.</div>')}
@@ -9709,14 +9731,10 @@ function bindIncomingFabricActions(session) {
   });
 
   if (session.role !== "admin") return;
-  document.querySelectorAll("[data-assign-incoming-fabric]").forEach((button) => button.addEventListener("click", async () => {
-    const fabricId = button.dataset.assignIncomingFabric;
-    const select = button.closest("tr")?.querySelector("[data-incoming-customer]");
-    if (!select) {
-      window.factoryUI.toast("تعذر العثور على اختيار العميل لهذا القماش.", "error");
-      return;
-    }
-    button.disabled = true;
+  document.querySelectorAll("[data-incoming-customer]").forEach((select) => select.addEventListener("change", async () => {
+    const fabricId = select.dataset.incomingCustomer;
+    const previousCustomerId = dashboardData.fabrics.find((fabric) => fabric.id === fabricId)?.customer_id || "";
+    select.disabled = true;
     try {
       const { error } = await supabaseClient.rpc("assign_factory_incoming_fabric", {
         requested_fabric_id: fabricId,
@@ -9727,8 +9745,10 @@ function bindIncomingFabricActions(session) {
       await refreshDashboard(session);
       window.factoryUI.toast(select.value ? "تم ربط القماش بالعميل." : "تم وضع القماش ضمن الوارد غير المحدد.");
     } catch (error) {
-      button.disabled = false;
+      if (select.isConnected) select.value = previousCustomerId;
       reportDashboardFailure(session, "تعذر تعيين العميل للقماش", error);
+    } finally {
+      if (select.isConnected) select.disabled = false;
     }
   }));
 }
@@ -10207,11 +10227,6 @@ function bindWorkerOrderDeliveryActions(session) {
         entry.sizes[input.dataset.size] = (entry.sizes[input.dataset.size] || 0) + quantity;
         colorsByHex.set(hex, entry);
       });
-      if (!await window.factoryUI.confirmAction({
-        title: "إرسال دفعة التسليم",
-        message: `سيتم إرسال ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(total)} قطعة إلى الإدارة للمراجعة. لن تُضاف إلى كشف العميل قبل الاعتماد.`,
-        confirmLabel: "إرسال للمراجعة"
-      })) return;
       const button = form.querySelector('[type="submit"]');
       button.disabled = true;
       try {
@@ -10223,7 +10238,7 @@ function bindWorkerOrderDeliveryActions(session) {
         if (error?.code === "PGRST202") throw new Error("دالة إرسال تسليم العامل غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
         if (error) throw error;
         await refreshDashboard(session);
-        window.factoryUI.toast("تم إرسال دفعة التسليم إلى الإدارة للتأكيد.");
+        window.factoryUI.toast("تم تسجيل دفعة التسليم مباشرة وتحديث الطلب وحساب العميل.");
       } catch (error) {
         reportDashboardFailure(session, "تعذر إرسال دفعة التسليم", error);
       } finally {
@@ -11176,14 +11191,33 @@ function bindActions(session) {
   }));
   const orderForm = document.querySelector("#model-form");
   const customWorkStageOptions = orderForm.querySelector("[data-work-stage-options]");
+  const updateWorkStageOrderControls = () => {
+    [...customWorkStageOptions.children].forEach((option, index, options) => {
+      const fixed = ["cutting", "sewing"].includes(option.querySelector('[name="workStage"]').value);
+      option.querySelector('[data-move-work-stage="up"]').disabled = fixed || index === 0
+        || options[index - 1].querySelector('[name="workStage"]').value === "sewing";
+      option.querySelector('[data-move-work-stage="down"]').disabled = fixed || index === options.length - 1
+        || option.nextElementSibling?.querySelector('[name="workStage"]').value === "cutting";
+    });
+  };
+  const orderWorkStageOptions = (stages) => {
+    const optionsByStage = new Map([...customWorkStageOptions.children]
+      .map((option) => [option.querySelector('[name="workStage"]').value, option]));
+    const pinnedStages = ["cutting", "sewing"].filter((stage) => stages.includes(stage));
+    const selectedStages = [...pinnedStages, ...stages.filter((stage) => !["cutting", "sewing"].includes(stage))];
+    [...selectedStages].reverse().forEach((stage) => {
+      const option = optionsByStage.get(stage);
+      if (option) customWorkStageOptions.insertBefore(option, customWorkStageOptions.firstChild);
+    });
+    updateWorkStageOrderControls();
+  };
   const removeCustomWorkStageOptions = () => {
     customWorkStageOptions.querySelectorAll("[data-custom-work-stage-option]").forEach((option) => option.remove());
+    updateWorkStageOrderControls();
   };
   const addCustomWorkStageOption = (stage, checked = true) => {
-    const option = document.createElement("div");
-    option.dataset.customWorkStageOption = "";
-    option.innerHTML = `<label><input type="checkbox" name="workStage" value="${escapeHtml(stage)}"${checked ? " checked" : ""}><span>${escapeHtml(stage)}</span></label><button type="button" class="work-stage-remove" data-remove-work-stage aria-label="حذف مرحلة ${escapeHtml(stage)}">×</button>`;
-    customWorkStageOptions.append(option);
+    customWorkStageOptions.insertAdjacentHTML("beforeend", workStageOptionMarkup(stage, stage, checked, true));
+    updateWorkStageOrderControls();
   };
   const syncCustomStageStatusOptions = () => {
     orderForm.elements.status.querySelectorAll("[data-custom-work-stage-status]").forEach((option) => option.remove());
@@ -11234,13 +11268,25 @@ function bindActions(session) {
   };
   const updateProductionPathFields = () => {
     const readySewing = orderForm.elements.productionType.value === "ready_sewing";
+    const cuttingOnly = orderForm.elements.productionType.value === "cutting_only";
     const cuttingStage = orderForm.querySelector('[name="workStage"][value="cutting"]');
     const sewingStage = orderForm.querySelector('[name="workStage"][value="sewing"]');
     const editIndex = orderForm.elements.editIndex.value;
     const existingOrder = editIndex ? dashboardData.models[Number(editIndex)] : null;
     const sewingAlreadyStarted = ["قيد الخياطة", "قيد التنفيذ", "مكتمل"].includes(existingOrder?.sewingStageStatus || "");
+    orderForm.querySelectorAll('[name="workStage"]').forEach((input) => {
+      input.disabled = cuttingOnly && input !== cuttingStage;
+      if (cuttingOnly && input !== cuttingStage) input.checked = false;
+    });
+    orderForm.querySelector("[data-custom-work-stage]")?.toggleAttribute("disabled", cuttingOnly);
+    orderForm.querySelector("[data-add-work-stage]")?.toggleAttribute("disabled", cuttingOnly);
+    orderForm.querySelectorAll("[data-remove-work-stage]").forEach((button) => { button.disabled = cuttingOnly; });
     cuttingStage.disabled = readySewing;
-    if (readySewing) {
+    if (cuttingOnly) {
+      cuttingStage.checked = true;
+      orderForm.elements.status.disabled = Boolean(existingOrder
+        && (LOCKED_FACTORY_ORDER_STATUSES.includes(existingOrder.status) || isFactoryOrderWorkflowManaged(existingOrder)));
+    } else if (readySewing) {
       cuttingStage.checked = false;
       sewingStage.checked = true;
       if (!LOCKED_FACTORY_ORDER_STATUSES.includes(existingOrder?.status || "")
@@ -11250,6 +11296,7 @@ function bindActions(session) {
       orderForm.elements.status.disabled = Boolean(existingOrder
         && (LOCKED_FACTORY_ORDER_STATUSES.includes(existingOrder.status) || sewingAlreadyStarted));
     } else {
+      orderForm.querySelectorAll('[name="workStage"]').forEach((input) => { input.disabled = false; });
       if (!cuttingStage.checked && !orderForm.elements.editIndex.value) cuttingStage.checked = true;
       if (WORKFLOW_MANAGED_FACTORY_ORDER_STATUSES.includes(orderForm.elements.status.value)
           && orderForm.elements.status.value !== "تم التسليم") {
@@ -11287,6 +11334,20 @@ function bindActions(session) {
     }
   });
   orderForm.addEventListener("click", (event) => {
+    const moveButton = event.target.closest("[data-move-work-stage]");
+    if (moveButton) {
+      const option = moveButton.closest("[data-work-stage-option]");
+      if (["cutting", "sewing"].includes(option.querySelector('[name="workStage"]').value)) return;
+      const neighbor = moveButton.dataset.moveWorkStage === "up"
+        ? option.previousElementSibling
+        : option.nextElementSibling;
+      if (neighbor) {
+        if (moveButton.dataset.moveWorkStage === "up") customWorkStageOptions.insertBefore(option, neighbor);
+        else customWorkStageOptions.insertBefore(neighbor, option);
+        updateWorkStageOrderControls();
+      }
+      return;
+    }
     const addButton = event.target.closest("[data-add-work-stage]");
     if (addButton) {
       const input = orderForm.querySelector("[data-custom-work-stage]");
@@ -11313,6 +11374,7 @@ function bindActions(session) {
     }
     if (event.target.closest("[data-remove-work-stage]")) {
       event.target.closest("[data-custom-work-stage-option]")?.remove();
+      updateWorkStageOrderControls();
       syncCustomStageStatusOptions();
       updateStagePricing(orderForm);
       updateOrderTotals();
@@ -11434,6 +11496,11 @@ function bindActions(session) {
     for (const field of ["customerId", "name", "clientModelCode", "pricePerPiece", "paidAmount", "operationalExpenses", "status", "priority", "productionType", "pricingMode", "expectedDeliveryDate"]) {
       orderForm.elements[field].value = currentOrder[field] ?? "";
     }
+    if (currentOrder.productionType === "full_cutting"
+        && currentOrder.workStages.length === 1
+        && currentOrder.workStages[0] === "cutting") {
+      orderForm.elements.productionType.value = "cutting_only";
+    }
     orderForm.elements.factoryModelCode.value = currentOrder.factoryModelCode || "";
     syncOrderCustomerSelection(orderForm, currentOrder.customerId);
     orderForm.elements.stagePrices.value = JSON.stringify(currentOrder.stagePrices || {});
@@ -11442,6 +11509,7 @@ function bindActions(session) {
     });
     (currentOrder.workStages || []).filter(isCustomWorkStage)
       .forEach((stage) => addCustomWorkStageOption(stage));
+    orderWorkStageOptions(currentOrder.workStages || []);
     syncCustomStageStatusOptions();
     updateProductionPathFields();
     updateStagePricing(orderForm);
@@ -12150,8 +12218,12 @@ function bindActions(session) {
     const isWorkflowManagedOrder = existingOrder && isFactoryOrderWorkflowManaged(existingOrder);
     const requestedStatus = String(formData.get("status") || currentStoredStatus);
     const statusCanBeChanged = !form.elements.status.disabled;
-    const productionType = String(formData.get("productionType") || existingOrder?.productionType || "full_cutting");
-    const workStages = [...form.querySelectorAll('[name="workStage"]:checked')].map((input) => input.value);
+    const selectedProductionType = String(formData.get("productionType") || existingOrder?.productionType || "full_cutting");
+    const cuttingOnly = selectedProductionType === "cutting_only";
+    const productionType = cuttingOnly ? "full_cutting" : selectedProductionType;
+    const workStages = cuttingOnly
+      ? ["cutting"]
+      : [...form.querySelectorAll('[name="workStage"]:checked')].map((input) => input.value);
     const directSewingEntry = Boolean(existingOrder
       && requestedStatus === "في انتظار الخياطة"
       && productionType === "ready_sewing"
