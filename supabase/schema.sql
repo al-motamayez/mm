@@ -3656,7 +3656,6 @@ declare
   current_order public.orders%rowtype;
   current_worker public.users%rowtype;
   saved_submission_id uuid;
-  updated_delivered_quantity integer;
 begin
   if not public.has_active_factory_role(array['worker', 'cutting', 'sewing'])
      or not exists (
@@ -3687,41 +3686,13 @@ begin
     raise exception 'The delivery quantity, order status, or color/size allocation is no longer valid.';
   end if;
 
-  insert into public.factory_deliveries (
-    order_id, customer_id, quantity, price_per_piece, recipient_name,
-    expected_delivery_date, color_size_data
-  )
-  values (
-    current_order.id, current_order.customer_id, requested_quantity,
-    current_order.price_per_piece,
-    coalesce(nullif(trim(current_worker.name), ''), current_worker.registration_name, 'عامل'),
-    current_order.expected_delivery_date, requested_colors
-  );
-
-  updated_delivered_quantity := current_order.delivered_pieces + requested_quantity;
-  update public.orders
-  set delivered_pieces = updated_delivered_quantity,
-      status = case
-        when updated_delivered_quantity >= current_order.total_pieces then 'تم التسليم'
-        else current_order.status
-      end
-  where id = current_order.id;
-
-  update public.production_stages
-  set target_quantity = greatest(target_quantity, updated_delivered_quantity),
-      completed_quantity = updated_delivered_quantity,
-      status = case when updated_delivered_quantity >= current_order.total_pieces then 'مكتمل' else status end,
-      updated_at = now()
-  where order_id = current_order.id
-    and stage_name = 'delivery';
-
   insert into public.factory_worker_order_deliveries (
     order_id, worker_id, worker_name, quantity, color_size_data, status
   )
   values (
     current_order.id, current_worker.id,
     coalesce(nullif(trim(current_worker.name), ''), current_worker.registration_name, 'عامل'),
-    requested_quantity, requested_colors, 'confirmed'
+    requested_quantity, requested_colors, 'pending'
   )
   returning id into saved_submission_id;
   return saved_submission_id;

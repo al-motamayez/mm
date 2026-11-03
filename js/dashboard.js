@@ -5021,7 +5021,7 @@ function workerOrderDeliveryPortalView(data) {
     ${panel("تسليم الطلبيات الجاهزة والتسليم الجزئي", modelCards.length
       ? `<div class="worker-order-delivery-list">${modelCards.join("")}</div>`
       : '<div class="empty-state">لا توجد طلبيات جاهزة أو متاحة للتسليم الجزئي مرتبطة بحسابك حالياً.</div>',
-    "تظهر هنا مباشرةً كل الموديلات الجاهزة للتسليم والموديلات التي أتاحتها الإدارة للتسليم الجزئي. أدخل أعداد هذه الدفعة الفعلية؛ تُسجل فوراً في الطلب وحساب العميل دون انتظار اعتماد إداري.")}
+    "تظهر هنا مباشرةً كل الموديلات الجاهزة للتسليم والموديلات التي أتاحتها الإدارة للتسليم الجزئي. أرسل أعداد هذه الدفعة الفعلية لمراجعة الإدارة واعتمادها بالطريقة المعتادة.")}
     ${panel("سجل تسليماتي", submissionRows.length
       ? `<div class="worker-order-delivery-history-list">${submissionRows.join("")}</div>`
       : '<div class="empty-state">لا توجد دفعات تسليم مرسلة بعد.</div>')}
@@ -10238,7 +10238,7 @@ function bindWorkerOrderDeliveryActions(session) {
         if (error?.code === "PGRST202") throw new Error("دالة إرسال تسليم العامل غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
         if (error) throw error;
         await refreshDashboard(session);
-        window.factoryUI.toast("تم تسجيل دفعة التسليم مباشرة وتحديث الطلب وحساب العميل.");
+        window.factoryUI.toast("تم إرسال دفعة التسليم للإدارة للمراجعة والاعتماد.");
       } catch (error) {
         reportDashboardFailure(session, "تعذر إرسال دفعة التسليم", error);
       } finally {
