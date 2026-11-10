@@ -624,6 +624,23 @@ body[data-dashboard-role="admin"] .modal-card {
   padding: 28px;
 }
 
+body[data-dashboard-role="admin"] #client-account-modal {
+  z-index: 1300;
+}
+
+body[data-dashboard-role="admin"] #model-details-modal {
+  z-index: 1310;
+}
+
+body[data-dashboard-role="admin"] .modal-card > .modal-close {
+  position: sticky;
+  z-index: 5;
+  top: 8px;
+  float: left;
+  margin: -10px -10px -34px 0;
+  box-shadow: 0 3px 12px #0005;
+}
+
 body[data-dashboard-role="admin"] .modal-card h2,
 body[data-dashboard-role="admin"] .confirm-title {
   color: #edf4f8;
@@ -881,6 +898,218 @@ body[data-dashboard-role="admin"] .developer-contact,
 body[data-dashboard-role="admin"] .developer-name,
 body[data-dashboard-role="admin"] .developer-contact-copy {
   color: #8193a1;
+}
+
+body[data-dashboard-role="admin"] .client-profile-compact,
+body[data-dashboard-role="admin"] .model-preview-list,
+body[data-dashboard-role="admin"] .client-waiting-model,
+body[data-dashboard-role="admin"] .client-waiting-model-card,
+body[data-dashboard-role="admin"] .compact-model-item,
+body[data-dashboard-role="admin"] .model-preview-item,
+body[data-dashboard-role="admin"] .model-size-card,
+body[data-dashboard-role="admin"] .client-account-details-compact > div,
+body[data-dashboard-role="admin"] .compact-detail-grid > div,
+body[data-dashboard-role="admin"] .client-activity-grid > div,
+body[data-dashboard-role="admin"] .client-account-link-controls,
+body[data-dashboard-role="admin"] .client-model-fabric-type,
+body[data-dashboard-role="admin"] .client-balance-grid > div,
+body[data-dashboard-role="admin"] .client-waiting-model-card .model-image-trigger,
+body[data-dashboard-role="admin"] .order-card-summary > div,
+body[data-dashboard-role="admin"] .order-delivery-comparison-summary > div,
+body[data-dashboard-role="admin"] .delivery-comparison-summary > div,
+body[data-dashboard-role="admin"] .client-financial-summary > div,
+body[data-dashboard-role="admin"] .client-account-ledger-summary > div,
+body[data-dashboard-role="admin"] .settlement-card,
+body[data-dashboard-role="admin"] .production-compact-card,
+body[data-dashboard-role="admin"] .worker-submission-card,
+body[data-dashboard-role="admin"] .worker-order-delivery-card,
+body[data-dashboard-role="admin"] .worker-order-delivery-history,
+body[data-dashboard-role="admin"] .worker-delivery-model-card,
+body[data-dashboard-role="admin"] .fabric-client-stock-summary,
+body[data-dashboard-role="admin"] .fabric-stock-color-row,
+body[data-dashboard-role="admin"] .work-stage-options label,
+body[data-dashboard-role="admin"] .work-stage-options [data-work-stage-option],
+body[data-dashboard-role="admin"] .stage-price-row {
+  border-color: var(--admin-line);
+  color: #d3dee6;
+  background-color: #17222d;
+}
+
+body[data-dashboard-role="admin"] .model-preview-item strong,
+body[data-dashboard-role="admin"] .client-waiting-model strong,
+body[data-dashboard-role="admin"] .compact-model-item strong,
+body[data-dashboard-role="admin"] .model-size-card > header,
+body[data-dashboard-role="admin"] .model-size-color-item strong,
+body[data-dashboard-role="admin"] .compact-detail-grid strong,
+body[data-dashboard-role="admin"] .client-model-fabric-type strong,
+body[data-dashboard-role="admin"] .client-profile-compact strong {
+  color: #e4edf3;
+}
+
+body[data-dashboard-role="admin"] .model-preview-item > span:not(.status),
+body[data-dashboard-role="admin"] .model-size-card > header small,
+body[data-dashboard-role="admin"] .model-size-color-name,
+body[data-dashboard-role="admin"] .client-account-details-compact span,
+body[data-dashboard-role="admin"] .compact-detail-grid span,
+body[data-dashboard-role="admin"] .client-waiting-model > div span,
+body[data-dashboard-role="admin"] .compact-model-item > span:nth-child(2),
+body[data-dashboard-role="admin"] .client-profile-compact span,
+body[data-dashboard-role="admin"] .client-model-fabric-type span,
+body[data-dashboard-role="admin"] .fabric-stock-card-main small,
+body[data-dashboard-role="admin"] .fabric-stock-card-date small,
+body[data-dashboard-role="admin"] .fabric-stock-card-kind small,
+body[data-dashboard-role="admin"] .fabric-stock-card-color small,
+body[data-dashboard-role="admin"] .fabric-stock-card-quantity small,
+body[data-dashboard-role="admin"] .fabric-stock-card-owner small,
+body[data-dashboard-role="admin"] .fabric-stock-card-date time,
+body[data-dashboard-role="admin"] .fabric-history-datetime,
+body[data-dashboard-role="admin"] .digital-date-time {
+  color: #aab9c5;
+}
+
+body[data-dashboard-role="admin"] .client-account-details-compact strong,
+body[data-dashboard-role="admin"] .client-financial-summary strong,
+body[data-dashboard-role="admin"] .settlement-card strong,
+body[data-dashboard-role="admin"] .production-compact-total,
+body[data-dashboard-role="admin"] .production-compact-heading h3,
+body[data-dashboard-role="admin"] .worker-delivery-model-info strong,
+body[data-dashboard-role="admin"] .worker-model-identifiers strong {
+  color: #e4edf3;
+}
+
+body[data-dashboard-role="admin"] .client-financial-summary span,
+body[data-dashboard-role="admin"] .settlement-card span,
+body[data-dashboard-role="admin"] .settlement-card small,
+body[data-dashboard-role="admin"] .production-compact-facts > div > span:first-child,
+body[data-dashboard-role="admin"] .worker-delivery-model-info small,
+body[data-dashboard-role="admin"] .worker-model-identifiers small,
+body[data-dashboard-role="admin"] .production-record-date {
+  color: #aab9c5;
+}
+
+body[data-dashboard-role="admin"] .model-preview-list {
+  border-color: var(--admin-line-strong);
+  background: #111a23;
+  box-shadow: 0 16px 40px #0009;
+}
+
+body[data-dashboard-role="admin"] .model-preview-link:hover,
+body[data-dashboard-role="admin"] .model-preview-link:focus-visible,
+body[data-dashboard-role="admin"] .compact-model-item:hover {
+  border-color: #3a695c;
+  color: #e8f7f1;
+  background: #1b302d;
+}
+
+body[data-dashboard-role="admin"] .client-quick-tabs,
+body[data-dashboard-role="admin"] .client-model-tabs {
+  border-color: var(--admin-line);
+}
+
+body[data-dashboard-role="admin"] .client-quick-tabs button,
+body[data-dashboard-role="admin"] .client-model-tabs [role="tab"] {
+  color: #a5b4bf;
+}
+
+body[data-dashboard-role="admin"] .client-quick-tabs button[aria-selected="true"],
+body[data-dashboard-role="admin"] .client-model-tabs [role="tab"][aria-selected="true"] {
+  border-bottom-color: var(--admin-green);
+  color: #c5f8e4;
+}
+
+body[data-dashboard-role="admin"] .client-balance-primary {
+  border: 1px solid #335c4c;
+  color: #d8f6e8;
+  background: linear-gradient(135deg, #193b30, #172c2a);
+}
+
+body[data-dashboard-role="admin"] .client-balance-spotlight.is-debit {
+  border-color: #a45155;
+  color: #ffe2e2;
+  background: linear-gradient(135deg, #3a2027, #2b1c23);
+  box-shadow: inset 0 0 18px #aa42421c;
+}
+
+body[data-dashboard-role="admin"] .client-balance-spotlight.is-credit {
+  border-color: #40876b;
+  color: #dcffeb;
+  background: linear-gradient(135deg, #19392d, #172d28);
+  box-shadow: inset 0 0 18px #38a7751c;
+}
+
+body[data-dashboard-role="admin"] .client-balance-spotlight.is-settled {
+  border-color: var(--admin-line-strong);
+  color: #d3dee6;
+  background: linear-gradient(135deg, #202b34, #17212a);
+  box-shadow: none;
+}
+
+body[data-dashboard-role="admin"] .fabric-stock-card,
+body[data-dashboard-role="admin"] .fabric-stock-type-card,
+body[data-dashboard-role="admin"] .fabric-stock-type-entry,
+body[data-dashboard-role="admin"] .initial-delivery-field {
+  border-color: var(--admin-line);
+  color: #d3dee6;
+  background: #17222d;
+}
+
+body[data-dashboard-role="admin"] .fabric-stock-card-main strong,
+body[data-dashboard-role="admin"] .fabric-stock-card-kind span,
+body[data-dashboard-role="admin"] .fabric-stock-card-owner span,
+body[data-dashboard-role="admin"] .fabric-stock-card-color .fabric-color,
+body[data-dashboard-role="admin"] .fabric-client-stock-summary strong,
+body[data-dashboard-role="admin"] .fabric-stock-card-quantity strong {
+  color: #d7eee4;
+}
+
+body[data-dashboard-role="admin"] .fabric-customer-filter {
+  color: #cbd7df;
+}
+
+body[data-dashboard-role="admin"] .work-stage-options [data-work-stage-option].is-selected {
+  border-color: #438d78;
+  color: #d7fff0;
+  background: #1b4037;
+}
+
+body[data-dashboard-role="admin"] .work-stage-options [data-work-stage-option].is-selected label {
+  color: #d7fff0;
+}
+
+body[data-dashboard-role="admin"] .financial-debit {
+  color: #ff9a91;
+}
+
+body[data-dashboard-role="admin"] .financial-credit {
+  color: #70ddb0;
+}
+
+body[data-dashboard-role="admin"] .color-breakdown-swatch,
+body[data-dashboard-role="admin"] .color-choice-swatch {
+  border-color: #7d8f9b;
+}
+
+body[data-dashboard-role="admin"] .order-progress-step {
+  color: #9eafbc;
+}
+
+body[data-dashboard-role="admin"] .order-progress-step.complete {
+  color: #a9ebcb;
+}
+
+body[data-dashboard-role="admin"] .order-delete-protected,
+body[data-dashboard-role="admin"] .muted {
+  color: #a8b7c2;
+}
+
+body[data-dashboard-role="admin"] .client-detail-section > .panel,
+body[data-dashboard-role="admin"] .client-detail-section {
+  color: var(--admin-text);
+}
+
+body[data-dashboard-role="admin"] .client-detail-section p,
+body[data-dashboard-role="admin"] .client-statement-filters > span {
+  color: #aab9c5;
 }
 
 @keyframes admin-section-in {

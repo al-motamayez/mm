@@ -11419,6 +11419,7 @@ function bindActions(session) {
   const orderModal = document.querySelector("#order-modal");
   const modelDetailsModal = document.querySelector("#model-details-modal");
   const clientAccountModal = document.querySelector("#client-account-modal");
+  let clientModelReturnTrigger = null;
   document.body.append(orderModal);
   const editConfigs = {
     models: { form: "model-form", collection: "models", fields: ["customerId", "name", "clientModelCode", "colors", "sizes", "quantity", "productionType", "pricingMode", "expectedDeliveryDate", "pricePerPiece", "paidAmount", "operationalExpenses", "status", "priority"] },
@@ -11798,6 +11799,8 @@ function bindActions(session) {
   document.querySelector("#app").addEventListener("click", async (event) => {
     if (event.target.closest("[data-close-model-view]") || event.target === modelDetailsModal) {
       modelDetailsModal.hidden = true;
+      clientModelReturnTrigger?.focus();
+      clientModelReturnTrigger = null;
       return;
     }
     if (event.target.closest("[data-close-client-view]") || event.target === clientAccountModal) {
@@ -11870,7 +11873,7 @@ function bindActions(session) {
       const deleteButton = modelDetailsModal.querySelector("[data-action='delete-order']");
       deleteButton.dataset.orderId = order.id;
       deleteButton.hidden = session.role !== "admin" || !orderCanBeDeleted(order);
-      if (previewButton.closest("#client-account-modal")) clientAccountModal.hidden = true;
+      clientModelReturnTrigger = previewButton.closest("#client-account-modal") ? previewButton : null;
       modelDetailsModal.hidden = false;
       return;
     }
