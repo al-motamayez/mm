@@ -4401,8 +4401,8 @@ function adminView(data, accounts) {
         ${panel("إعادة ضبط النظام", `<div class="panel-body"><p>مسح جميع بيانات المصنع وحسابات المستخدمين الأخرى نهائياً، مع الإبقاء على حساب الأدمن الحالي فقط.</p><button class="button button-danger" type="button" data-reset-factory>مسح البيانات وإعادة النظام للبداية</button></div>`)}
       </div>
     </section>
-    <div class="modal-backdrop" id="client-account-modal" hidden><section class="modal-card compact-view-modal" role="dialog" aria-modal="true" aria-labelledby="client-account-modal-title"><button class="modal-close" type="button" data-close-client-view aria-label="إغلاق">×</button><div id="client-account-modal-content"></div></section></div>
-    <div class="modal-backdrop" id="model-details-modal" hidden><section class="modal-card compact-view-modal" role="dialog" aria-modal="true" aria-labelledby="model-details-title"><button class="modal-close" type="button" data-close-model-view aria-label="إغلاق">×</button><div id="model-details-modal-content"></div><div class="form-actions"><button class="button button-secondary" type="button" data-print-model-details>طباعة الموديل</button><button class="button button-secondary" type="button" data-edit-model-from-details>تعديل الطلبية</button><button class="row-action order-delete-action" type="button" data-action="delete-order">حذف الطلبية</button><button class="row-action" type="button" data-close-model-view>إغلاق</button></div></section></div>
+    <div class="modal-backdrop" id="client-account-modal" hidden><section class="modal-card compact-view-modal" role="dialog" aria-modal="true" aria-labelledby="client-account-modal-title"><div class="modal-control-bar"><div class="modal-control-group"><button class="modal-control-button modal-control-back" type="button" data-back-client-view aria-label="رجوع إلى الشاشة السابقة" title="رجوع"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/><path d="M9 12h11"/></svg></button></div><button class="modal-control-button modal-control-close" type="button" data-close-client-view aria-label="إغلاق ملف العميل" title="إغلاق"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18"/><path d="M6 6l12 12"/></svg></button></div><div id="client-account-modal-content"></div></section></div>
+    <div class="modal-backdrop" id="model-details-modal" hidden><section class="modal-card compact-view-modal" role="dialog" aria-modal="true" aria-labelledby="model-details-title"><div class="modal-control-bar"><div class="modal-control-group"><button class="modal-control-button modal-control-back" type="button" data-back-model-view aria-label="رجوع إلى الشاشة السابقة" title="رجوع"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/><path d="M9 12h11"/></svg></button></div><button class="modal-control-button modal-control-close" type="button" data-close-model-view aria-label="إغلاق تفاصيل الموديل" title="إغلاق"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18"/><path d="M6 6l12 12"/></svg></button></div><div id="model-details-modal-content"></div><div class="form-actions"><button class="button button-secondary" type="button" data-print-model-details>طباعة الموديل</button><button class="button button-secondary" type="button" data-edit-model-from-details>تعديل الطلبية</button><button class="row-action order-delete-action" type="button" data-action="delete-order">حذف الطلبية</button><button class="row-action" type="button" data-close-model-view>إغلاق</button></div></section></div>
     `;
 }
 
@@ -8067,7 +8067,7 @@ function render(session, data, accounts) {
     </div>
     <div class="modal-backdrop production-details-modal" id="production-details-modal" hidden>
       <section class="modal-card production-details-modal-card" role="dialog" aria-modal="true" aria-label="تفاصيل الإنتاج">
-        <button class="modal-close" type="button" data-close-production-details aria-label="إغلاق التفاصيل">×</button>
+        <div class="modal-control-bar"><div class="modal-control-group"><button class="modal-control-button modal-control-back" type="button" data-back-production-details aria-label="رجوع إلى الشاشة السابقة" title="رجوع"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/><path d="M9 12h11"/></svg></button></div><button class="modal-control-button modal-control-close" type="button" data-close-production-details aria-label="إغلاق التفاصيل" title="إغلاق"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18"/><path d="M6 6l12 12"/></svg></button></div>
         <div data-production-details-content></div>
       </section>
     </div>`;
@@ -11032,6 +11032,10 @@ function bindProductionDetailsModal(session) {
       return;
     }
     const modal = document.querySelector("#production-details-modal");
+    if (event.target.closest("[data-back-production-details]")) {
+      close();
+      return;
+    }
     if (event.target.closest("[data-close-production-details]") || event.target === modal) close();
   });
   document.addEventListener("keydown", (event) => {
@@ -11419,7 +11423,27 @@ function bindActions(session) {
   const orderModal = document.querySelector("#order-modal");
   const modelDetailsModal = document.querySelector("#model-details-modal");
   const clientAccountModal = document.querySelector("#client-account-modal");
+  let clientAccountReturnTrigger = null;
   let clientModelReturnTrigger = null;
+  let clientModelHasParentModal = false;
+  const hideClientAccountModal = (restoreFocus = true) => {
+    clientAccountModal.hidden = true;
+    if (restoreFocus) clientAccountReturnTrigger?.focus();
+    clientAccountReturnTrigger = null;
+  };
+  const closeModelDetailsModal = (returnToParent) => {
+    modelDetailsModal.hidden = true;
+    if (returnToParent && clientModelHasParentModal) {
+      clientAccountModal.hidden = false;
+      clientModelReturnTrigger?.focus();
+    } else if (!clientModelHasParentModal) {
+      clientModelReturnTrigger?.focus();
+    } else {
+      hideClientAccountModal();
+    }
+    clientModelReturnTrigger = null;
+    clientModelHasParentModal = false;
+  };
   document.body.append(orderModal);
   const editConfigs = {
     models: { form: "model-form", collection: "models", fields: ["customerId", "name", "clientModelCode", "colors", "sizes", "quantity", "productionType", "pricingMode", "expectedDeliveryDate", "pricePerPiece", "paidAmount", "operationalExpenses", "status", "priority"] },
@@ -11797,14 +11821,20 @@ function bindActions(session) {
     orderForm.elements.pricePerPiece.focus();
   };
   document.querySelector("#app").addEventListener("click", async (event) => {
+    if (event.target.closest("[data-back-model-view]")) {
+      closeModelDetailsModal(true);
+      return;
+    }
     if (event.target.closest("[data-close-model-view]") || event.target === modelDetailsModal) {
-      modelDetailsModal.hidden = true;
-      clientModelReturnTrigger?.focus();
-      clientModelReturnTrigger = null;
+      closeModelDetailsModal(false);
+      return;
+    }
+    if (event.target.closest("[data-back-client-view]")) {
+      hideClientAccountModal();
       return;
     }
     if (event.target.closest("[data-close-client-view]") || event.target === clientAccountModal) {
-      clientAccountModal.hidden = true;
+      hideClientAccountModal();
       return;
     }
     if (event.target.closest("[data-print-model-details]")) {
@@ -11873,7 +11903,8 @@ function bindActions(session) {
       const deleteButton = modelDetailsModal.querySelector("[data-action='delete-order']");
       deleteButton.dataset.orderId = order.id;
       deleteButton.hidden = session.role !== "admin" || !orderCanBeDeleted(order);
-      clientModelReturnTrigger = previewButton.closest("#client-account-modal") ? previewButton : null;
+      clientModelReturnTrigger = previewButton;
+      clientModelHasParentModal = Boolean(previewButton.closest("#client-account-modal"));
       modelDetailsModal.hidden = false;
       return;
     }
@@ -11892,6 +11923,7 @@ function bindActions(session) {
         activateDashboardView("clients");
         return;
       }
+      clientAccountReturnTrigger = clientDetailsButton;
       clientAccountModal.querySelector("#client-account-modal-content").innerHTML = clientQuickDetailsModalView(client, dashboardData);
       const quickTabs = clientAccountModal.querySelectorAll("[data-client-quick-tab]");
       const quickPanels = clientAccountModal.querySelectorAll("[data-client-quick-panel]");
@@ -11905,12 +11937,12 @@ function bindActions(session) {
       });
       const quickPayment = clientAccountModal.querySelector("[data-quick-client-payment]");
       quickPayment.addEventListener("click", () => {
-        clientAccountModal.hidden = true;
+        hideClientAccountModal(false);
         document.querySelector(`#clients [data-quick-client-payment="${CSS.escape(client.id)}"]`)?.click();
       });
       const editButton = clientAccountModal.querySelector("[data-edit-customer]");
       editButton.addEventListener("click", () => {
-        clientAccountModal.hidden = true;
+        hideClientAccountModal(false);
         document.querySelector(`#clients [data-edit-customer="${CSS.escape(client.id)}"]`)?.click();
       });
       clientAccountModal.hidden = false;
@@ -11921,7 +11953,7 @@ function bindActions(session) {
       selectedClientId = openClientProfileButton.dataset.openClientProfile;
       activeClientProfileTab = "overview";
       clientManagementTab = "profiles";
-      clientAccountModal.hidden = true;
+      hideClientAccountModal(false);
       render(session, dashboardData, dashboardData.pendingAccounts || []);
       activateDashboardView("client-details");
       return;
@@ -11929,7 +11961,12 @@ function bindActions(session) {
   });
   for (const modal of [modelDetailsModal, clientAccountModal]) {
     modal.addEventListener("click", (event) => {
-      if (event.target === modal) modal.hidden = true;
+      if (event.target !== modal) return;
+      if (modal === modelDetailsModal) {
+        closeModelDetailsModal(false);
+      } else {
+        hideClientAccountModal();
+      }
     });
   }
   document.querySelector("[data-open-order-modal]").addEventListener("click", () => {

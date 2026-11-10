@@ -1,0 +1,1215 @@
+body[data-dashboard-role] {
+  --app-bg: #0b1117;
+  --app-surface: #111a23;
+  --app-surface-raised: #17222d;
+  --app-surface-hover: #1c2a35;
+  --app-line: #283743;
+  --app-line-strong: #3a4b58;
+  --app-text: #e8eef3;
+  --app-text-strong: #f5f8fa;
+  --app-muted: #a4b2bd;
+  --app-green: #4bc49a;
+  --app-green-soft: #1a3b33;
+  --app-blue: #83b3ff;
+  --app-orange: #f2b66e;
+  --app-red: #ed9292;
+  color-scheme: dark;
+  color: var(--app-text);
+  background: var(--app-bg);
+}
+
+body[data-dashboard-role],
+body[data-dashboard-role] #app,
+body[data-dashboard-role] .app-shell {
+  min-height: 100vh;
+  color: var(--app-text);
+  background: var(--app-bg);
+}
+
+body[data-dashboard-role] .sidebar {
+  border-color: var(--app-line);
+  background: linear-gradient(180deg, #121b25, #0f171f);
+  box-shadow: -12px 0 42px #00000018;
+}
+
+body[data-dashboard-role] .sidebar .brand-logo,
+body[data-dashboard-role] .header-logo {
+  filter: brightness(0) invert(1);
+}
+
+body[data-dashboard-role] .side-label,
+body[data-dashboard-role] .profile-details span,
+body[data-dashboard-role] .profile-details small,
+body[data-dashboard-role] .date-label {
+  color: #8fa0ad;
+}
+
+body[data-dashboard-role] .nav-link {
+  min-height: 42px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  color: #adbbc5;
+  transition: color .18s ease, background .18s ease, border-color .18s ease;
+}
+
+body[data-dashboard-role] .nav-link .nav-icon {
+  min-height: 25px;
+  border-radius: 7px;
+  color: #a5b6c1;
+  background: #1b2935;
+}
+
+body[data-dashboard-role] .nav-link:hover {
+  border-color: #2e404c;
+  color: var(--app-text-strong);
+  background: #18232d;
+}
+
+body[data-dashboard-role] .nav-link.active {
+  border-color: #28564d;
+  color: #e5fff5;
+  background: linear-gradient(100deg, #163d36, #17312f);
+  box-shadow: inset -3px 0 var(--app-green);
+}
+
+body[data-dashboard-role] .nav-link.active .nav-icon {
+  color: #081c15;
+  background: var(--app-green);
+}
+
+body[data-dashboard-role] .profile-chip {
+  border-color: var(--app-line);
+}
+
+body[data-dashboard-role] .profile-details strong {
+  color: var(--app-text-strong);
+}
+
+body[data-dashboard-role] .avatar {
+  color: #dcfff2;
+  background: #205643;
+}
+
+body[data-dashboard-role] .logout-button {
+  min-height: 38px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  color: #afbdc7;
+}
+
+body[data-dashboard-role] .logout-button:hover {
+  border-color: #553b40;
+  color: #ffc0c0;
+  background: #2b1f24;
+}
+
+body[data-dashboard-role] .main-content {
+  min-height: 100vh;
+  background:
+    radial-gradient(ellipse at 8% 0, #1632442e 0, transparent 34rem),
+    var(--app-bg);
+}
+
+body[data-dashboard-role] .topbar {
+  min-height: 72px;
+  gap: 14px;
+  margin-bottom: 20px;
+  padding: 13px 16px;
+  border: 1px solid var(--app-line);
+  border-radius: 14px;
+  background: #111a23ed;
+  box-shadow: 0 8px 26px #00000016;
+}
+
+body[data-dashboard-role] .topbar-leading,
+body[data-dashboard-role] .header-brand {
+  min-width: 0;
+}
+
+body[data-dashboard-role] .topbar-leading {
+  flex-wrap: wrap;
+}
+
+body[data-dashboard-role] .header-brand {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+body[data-dashboard-role] .topbar-title h1,
+body[data-dashboard-role] .topbar h1 {
+  color: var(--app-text-strong);
+}
+
+body[data-dashboard-role] .topbar-title p,
+body[data-dashboard-role] .topbar p {
+  color: var(--app-muted);
+}
+
+body[data-dashboard-role] .sidebar-toggle,
+body[data-dashboard-role] .live-notification-button,
+body[data-dashboard-role] .online-indicator {
+  border-color: var(--app-line-strong);
+  color: #d3dee6;
+  background: #192630;
+}
+
+body[data-dashboard-role] .sidebar-toggle:hover,
+body[data-dashboard-role] .live-notification-button:hover,
+body[data-dashboard-role] .online-indicator:hover {
+  border-color: #47796a;
+  color: #edfff7;
+  background: #1b3731;
+}
+
+body[data-dashboard-role] .header-brand > .brand-copy strong {
+  color: #e2ebf0;
+}
+
+body[data-dashboard-role] .stats-grid {
+  gap: 12px;
+}
+
+body[data-dashboard-role] .stat-card {
+  position: relative;
+  min-width: 0;
+  overflow: visible;
+  border-color: var(--app-line);
+  border-radius: 12px;
+  color: var(--app-text);
+  background: linear-gradient(145deg, #17232e, #111a23 78%);
+  box-shadow: 0 7px 20px #00000014;
+}
+
+body[data-dashboard-role] .stat-card > span,
+body[data-dashboard-role] .stat-card-summary > span {
+  color: #b8c5ce;
+}
+
+body[data-dashboard-role] .stat-card > strong,
+body[data-dashboard-role] .stat-card-summary > strong {
+  color: var(--app-text-strong);
+}
+
+body[data-dashboard-role] .stat-card > small,
+body[data-dashboard-role] .stat-card-summary > small {
+  color: #9cabb6;
+}
+
+body[data-dashboard-role] .stat-popover {
+  border-color: var(--app-line-strong);
+  border-radius: 10px;
+  color: var(--app-text);
+  background: #1a2631;
+  box-shadow: 0 16px 40px #0009;
+}
+
+body[data-dashboard-role] .stat-popover,
+body[data-dashboard-role] .stat-popover * {
+  color: #e0e8ed !important;
+}
+
+body[data-dashboard-role] .stat-detail-list li {
+  border-color: #34434e;
+}
+
+body[data-dashboard-role] .stat-detail-list b {
+  color: #9de7c8 !important;
+}
+
+body[data-dashboard-role] .panel {
+  border-color: var(--app-line);
+  border-radius: 12px;
+  color: var(--app-text);
+  background: var(--app-surface);
+  box-shadow: 0 7px 22px #00000012;
+}
+
+body[data-dashboard-role] .panel-heading {
+  border-color: var(--app-line);
+  background: #141e28;
+}
+
+body[data-dashboard-role] .panel-heading h2 {
+  color: #e4ecf1;
+}
+
+body[data-dashboard-role] .panel-heading p,
+body[data-dashboard-role] .panel-body > p,
+body[data-dashboard-role] .field-hint {
+  color: var(--app-muted);
+}
+
+body[data-dashboard-role] .table-wrap {
+  border-color: var(--app-line);
+  border-radius: 9px;
+  scrollbar-color: #405260 #121b24;
+  scrollbar-width: thin;
+}
+
+body[data-dashboard-role] table {
+  color: var(--app-text);
+}
+
+body[data-dashboard-role] th {
+  border-color: var(--app-line-strong);
+  color: #c8d4dc;
+  background: #1a2631;
+}
+
+body[data-dashboard-role] td {
+  border-color: #293843;
+  color: #d1dbe2;
+}
+
+body[data-dashboard-role] tbody tr {
+  background: #111a23;
+}
+
+body[data-dashboard-role] tbody tr:nth-child(even) {
+  background: #141e28;
+}
+
+body[data-dashboard-role] tbody tr:hover {
+  background: #1b2a35;
+}
+
+body[data-dashboard-role] .button,
+body[data-dashboard-role] .row-action,
+body[data-dashboard-role] .client-management-tab,
+body[data-dashboard-role] .client-quick-tabs button,
+body[data-dashboard-role] .client-model-tabs [role="tab"] {
+  min-height: 38px;
+  border-radius: 8px;
+  font-weight: 600;
+  transition: color .16s ease, background .16s ease, border-color .16s ease, box-shadow .16s ease, transform .16s ease;
+}
+
+body[data-dashboard-role] .button {
+  min-height: 42px;
+  padding: 8px 15px;
+}
+
+body[data-dashboard-role] .button-primary {
+  border: 1px solid #47bb90;
+  color: #071d14;
+  background: linear-gradient(135deg, #59d3a7, #40b88c);
+  box-shadow: 0 4px 12px #35b68a1f;
+}
+
+body[data-dashboard-role] .button-primary:hover {
+  border-color: #7ce5bf;
+  color: #03150f;
+  background: #70dfb7;
+  box-shadow: 0 6px 16px #35b68a32;
+  transform: translateY(-1px);
+}
+
+body[data-dashboard-role] .button-secondary {
+  border: 1px solid #3b4d59;
+  color: #d1dce3;
+  background: #202d38;
+}
+
+body[data-dashboard-role] .button-secondary:hover {
+  border-color: #526977;
+  color: #f0f5f8;
+  background: #2a3a46;
+}
+
+body[data-dashboard-role] .button-danger {
+  border: 1px solid #76484d;
+  color: #ffeaea;
+  background: #60363a;
+}
+
+body[data-dashboard-role] .button-danger:hover {
+  border-color: #a95b61;
+  color: #fff;
+  background: #7a4147;
+}
+
+body[data-dashboard-role] .row-action {
+  min-height: 34px;
+  margin: 2px;
+  padding: 6px 10px;
+  border: 1px solid #3a4b57;
+  color: #cbd7df;
+  background: #1a2731;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+body[data-dashboard-role] .row-action:hover {
+  border-color: #4c8973;
+  color: #d7fff0;
+  background: #1b3c33;
+  transform: translateY(-1px);
+}
+
+body[data-dashboard-role] [data-edit-kind],
+body[data-dashboard-role] [data-edit-client-order],
+body[data-dashboard-role] [data-edit-customer],
+body[data-dashboard-role] [data-edit-cash-transaction],
+body[data-dashboard-role] [data-edit-workforce],
+body[data-dashboard-role] [data-edit-fabric],
+body[data-dashboard-role] [data-edit-client-payment],
+body[data-dashboard-role] [data-edit-order],
+body[data-dashboard-role] [data-action="edit"] {
+  border-color: #3c5a77;
+  color: #c5dcff;
+  background: #1b2e41;
+}
+
+body[data-dashboard-role] [data-edit-kind]:hover,
+body[data-dashboard-role] [data-edit-client-order]:hover,
+body[data-dashboard-role] [data-edit-customer]:hover,
+body[data-dashboard-role] [data-edit-cash-transaction]:hover,
+body[data-dashboard-role] [data-edit-workforce]:hover,
+body[data-dashboard-role] [data-edit-fabric]:hover,
+body[data-dashboard-role] [data-edit-client-payment]:hover,
+body[data-dashboard-role] [data-edit-order]:hover,
+body[data-dashboard-role] [data-action="edit"]:hover {
+  border-color: #658bb5;
+  color: #e5f0ff;
+  background: #263d55;
+}
+
+body[data-dashboard-role] .order-delete-action,
+body[data-dashboard-role] [data-action="delete"],
+body[data-dashboard-role] [data-delete-order],
+body[data-dashboard-role] [data-delete-customer],
+body[data-dashboard-role] [data-delete-payment],
+body[data-dashboard-role] [data-delete-cash-transaction] {
+  border-color: #65464a;
+  color: #f4caca;
+  background: #34252a;
+}
+
+body[data-dashboard-role] .order-delete-action:hover,
+body[data-dashboard-role] [data-action="delete"]:hover,
+body[data-dashboard-role] [data-delete-order]:hover,
+body[data-dashboard-role] [data-delete-customer]:hover,
+body[data-dashboard-role] [data-delete-payment]:hover,
+body[data-dashboard-role] [data-delete-cash-transaction]:hover {
+  border-color: #a1595f;
+  color: #fff0f0;
+  background: #593238;
+}
+
+body[data-dashboard-role] .button:focus-visible,
+body[data-dashboard-role] .row-action:focus-visible,
+body[data-dashboard-role] .nav-link:focus-visible,
+body[data-dashboard-role] .sidebar-toggle:focus-visible,
+body[data-dashboard-role] .live-notification-button:focus-visible,
+body[data-dashboard-role] .modal-control-button:focus-visible {
+  outline: 2px solid #76ddb8;
+  outline-offset: 2px;
+}
+
+body[data-dashboard-role] .order-card,
+body[data-dashboard-role] .client-account-card,
+body[data-dashboard-role] .client-waiting-model-card,
+body[data-dashboard-role] .client-waiting-model,
+body[data-dashboard-role] .cutting-admin-order-card,
+body[data-dashboard-role] .cutting-story-card,
+body[data-dashboard-role] .sewing-order-card,
+body[data-dashboard-role] .sewing-model-monitor-card,
+body[data-dashboard-role] .worker-submission-card,
+body[data-dashboard-role] .worker-submission-review,
+body[data-dashboard-role] .pending-approval-card,
+body[data-dashboard-role] .production-compact-card,
+body[data-dashboard-role] .worker-delivery-model-card,
+body[data-dashboard-role] .worker-order-delivery-card,
+body[data-dashboard-role] .worker-order-delivery-history,
+body[data-dashboard-role] .fabric-stock-card,
+body[data-dashboard-role] .fabric-stock-type-card,
+body[data-dashboard-role] .fabric-stock-color-row,
+body[data-dashboard-role] .model-size-card,
+body[data-dashboard-role] .compact-model-item,
+body[data-dashboard-role] .client-profile-compact,
+body[data-dashboard-role] .client-account-details-compact > div,
+body[data-dashboard-role] .compact-detail-grid > div,
+body[data-dashboard-role] .client-activity-grid > div,
+body[data-dashboard-role] .client-order-card-summary > div,
+body[data-dashboard-role] .delivery-comparison-summary > div,
+body[data-dashboard-role] .cutting-story-facts > div,
+body[data-dashboard-role] .cutting-admin-order-facts > div,
+body[data-dashboard-role] .sewing-order-facts > div,
+body[data-dashboard-role] .model-size-card,
+body[data-dashboard-role] .workforce-rollover-modal,
+body[data-dashboard-role] .model-preview-list {
+  border-color: var(--app-line);
+  border-radius: 10px;
+  color: var(--app-text);
+  background-color: #17222d;
+  box-shadow: 0 5px 16px #00000012;
+}
+
+body[data-dashboard-role] .order-card-heading,
+body[data-dashboard-role] .order-card-actions,
+body[data-dashboard-role] .cutting-story-heading,
+body[data-dashboard-role] .cutting-admin-order-heading,
+body[data-dashboard-role] .pending-approval-heading,
+body[data-dashboard-role] .sewing-order-heading {
+  border-color: var(--app-line);
+}
+
+body[data-dashboard-role] .order-card-heading h3,
+body[data-dashboard-role] .order-compact-name strong,
+body[data-dashboard-role] .order-card-details dd,
+body[data-dashboard-role] .client-account-card h3,
+body[data-dashboard-role] .client-waiting-model-card h3,
+body[data-dashboard-role] .client-waiting-model strong,
+body[data-dashboard-role] .cutting-admin-order-heading h3,
+body[data-dashboard-role] .cutting-story-heading h3,
+body[data-dashboard-role] .sewing-order-heading h3,
+body[data-dashboard-role] .sewing-model-monitor-info h3,
+body[data-dashboard-role] .pending-approval-heading h3,
+body[data-dashboard-role] .worker-delivery-model-info strong,
+body[data-dashboard-role] .worker-model-identifiers strong,
+body[data-dashboard-role] .model-preview-item strong,
+body[data-dashboard-role] .compact-model-item strong,
+body[data-dashboard-role] .model-size-card > header,
+body[data-dashboard-role] .model-size-color-item strong {
+  color: #e5edf2;
+}
+
+body[data-dashboard-role] .order-card-label,
+body[data-dashboard-role] .order-card-client,
+body[data-dashboard-role] .order-card-details dt,
+body[data-dashboard-role] .client-account-card header p,
+body[data-dashboard-role] .client-waiting-model-card p,
+body[data-dashboard-role] .cutting-admin-order-heading p,
+body[data-dashboard-role] .cutting-admin-order-facts span,
+body[data-dashboard-role] .cutting-story-heading p,
+body[data-dashboard-role] .cutting-story-heading small,
+body[data-dashboard-role] .cutting-story-facts span,
+body[data-dashboard-role] .sewing-order-heading p,
+body[data-dashboard-role] .sewing-order-heading span,
+body[data-dashboard-role] .sewing-order-facts dt,
+body[data-dashboard-role] .sewing-model-monitor-info p,
+body[data-dashboard-role] .pending-approval-heading p,
+body[data-dashboard-role] .worker-delivery-model-info small,
+body[data-dashboard-role] .worker-model-identifiers small,
+body[data-dashboard-role] .model-preview-item > span:not(.status),
+body[data-dashboard-role] .model-size-card > header small,
+body[data-dashboard-role] .model-size-color-name,
+body[data-dashboard-role] .compact-detail-grid span,
+body[data-dashboard-role] .client-profile-compact span,
+body[data-dashboard-role] .client-account-details-compact span,
+body[data-dashboard-role] .client-activity-grid > div > span,
+body[data-dashboard-role] .client-order-card-summary span {
+  color: var(--app-muted);
+}
+
+body[data-dashboard-role] .cutting-admin-order-facts > div,
+body[data-dashboard-role] .cutting-story-facts > div,
+body[data-dashboard-role] .client-order-card-summary > div,
+body[data-dashboard-role] .client-activity-grid > div,
+body[data-dashboard-role] .compact-detail-grid > div,
+body[data-dashboard-role] .sewing-order-facts > div,
+body[data-dashboard-role] .client-account-details-compact > div,
+body[data-dashboard-role] .model-size-card {
+  border-color: var(--app-line);
+  background: #1a2631;
+}
+
+body[data-dashboard-role] .cutting-admin-order-facts strong,
+body[data-dashboard-role] .cutting-story-facts strong,
+body[data-dashboard-role] .client-order-card-summary strong,
+body[data-dashboard-role] .client-activity-grid > div > strong,
+body[data-dashboard-role] .compact-detail-grid strong,
+body[data-dashboard-role] .sewing-order-facts dd,
+body[data-dashboard-role] .client-account-details-compact strong {
+  color: #e1edf3;
+}
+
+body[data-dashboard-role] .production-compact-total,
+body[data-dashboard-role] .production-compact-facts > div > span:first-child,
+body[data-dashboard-role] .client-profile-compact,
+body[data-dashboard-role] .model-preview-list > span,
+body[data-dashboard-role] .client-waiting-model > div span {
+  color: #c5d1da;
+}
+
+body[data-dashboard-role] .client-balance-primary {
+  border: 1px solid #365f50;
+  border-radius: 9px;
+  color: #def8eb;
+  background: linear-gradient(135deg, #193b30, #172c2a);
+}
+
+body[data-dashboard-role] .client-balance-spotlight.is-debit {
+  border-color: #a45155;
+  color: #ffe4e4;
+  background: linear-gradient(135deg, #3a2027, #2b1c23);
+  box-shadow: inset 0 0 18px #aa42421c;
+}
+
+body[data-dashboard-role] .client-balance-spotlight.is-credit {
+  border-color: #40876b;
+  color: #dcffeb;
+  background: linear-gradient(135deg, #19392d, #172d28);
+  box-shadow: inset 0 0 18px #38a7751c;
+}
+
+body[data-dashboard-role] .client-balance-spotlight.is-settled {
+  border-color: var(--app-line-strong);
+  color: #d5e0e6;
+  background: linear-gradient(135deg, #202b34, #17212a);
+  box-shadow: none;
+}
+
+body[data-dashboard-role] .financial-debit {
+  color: #ff9a91;
+}
+
+body[data-dashboard-role] .financial-credit {
+  color: #70ddb0;
+}
+
+body[data-dashboard-role] .fabric-stock-card-main strong,
+body[data-dashboard-role] .fabric-stock-card-kind span,
+body[data-dashboard-role] .fabric-stock-card-owner span,
+body[data-dashboard-role] .fabric-stock-card-color .fabric-color,
+body[data-dashboard-role] .fabric-stock-card-quantity strong,
+body[data-dashboard-role] .fabric-client-stock-summary strong {
+  color: #d8eee4;
+}
+
+body[data-dashboard-role] .fabric-stock-card-main small,
+body[data-dashboard-role] .fabric-stock-card-date small,
+body[data-dashboard-role] .fabric-stock-card-kind small,
+body[data-dashboard-role] .fabric-stock-card-color small,
+body[data-dashboard-role] .fabric-stock-card-quantity small,
+body[data-dashboard-role] .fabric-stock-card-owner small,
+body[data-dashboard-role] .fabric-stock-card-date time,
+body[data-dashboard-role] .fabric-history-datetime,
+body[data-dashboard-role] .digital-date-time,
+body[data-dashboard-role] .production-record-date {
+  color: #b0bec8;
+}
+
+body[data-dashboard-role] .work-stage-options label,
+body[data-dashboard-role] .work-stage-options [data-work-stage-option],
+body[data-dashboard-role] .stage-price-row,
+body[data-dashboard-role] .fabric-client-stock-summary,
+body[data-dashboard-role] .client-model-fabric-type,
+body[data-dashboard-role] .initial-delivery-field {
+  border-color: var(--app-line);
+  border-radius: 8px;
+  color: #d9e3e9;
+  background: #192630;
+}
+
+body[data-dashboard-role] .work-stage-options [data-work-stage-option].is-selected {
+  border-color: #4b967b;
+  color: #ddfff1;
+  background: #1d4439;
+}
+
+body[data-dashboard-role] .work-stage-options [data-work-stage-option].is-selected label {
+  color: #ddfff1;
+}
+
+body[data-dashboard-role] .client-management-tabs {
+  border-color: var(--app-line);
+}
+
+body[data-dashboard-role] .client-management-tab {
+  border-color: var(--app-line);
+  color: #bdc9d1;
+  background: #17222d;
+}
+
+body[data-dashboard-role] .client-management-tab:hover {
+  border-color: var(--app-line-strong);
+  color: #f0f5f8;
+  background: #202e39;
+}
+
+body[data-dashboard-role] .client-management-tab.active,
+body[data-dashboard-role] .client-management-tab[aria-selected="true"] {
+  border-color: #388267;
+  color: #effff7;
+  background: #20523f;
+}
+
+body[data-dashboard-role] .client-quick-tabs,
+body[data-dashboard-role] .client-model-tabs {
+  border-color: var(--app-line);
+}
+
+body[data-dashboard-role] .client-quick-tabs button,
+body[data-dashboard-role] .client-model-tabs [role="tab"] {
+  color: #b7c5ce;
+}
+
+body[data-dashboard-role] .client-quick-tabs button[aria-selected="true"],
+body[data-dashboard-role] .client-model-tabs [role="tab"][aria-selected="true"] {
+  border-bottom-color: var(--app-green);
+  color: #d8ffed;
+}
+
+body[data-dashboard-role] .model-preview-list {
+  border-color: var(--app-line-strong);
+  color: var(--app-text);
+  background: #111a23;
+  box-shadow: 0 16px 40px #0009;
+}
+
+body[data-dashboard-role] .model-preview-link:hover,
+body[data-dashboard-role] .model-preview-link:focus-visible,
+body[data-dashboard-role] .compact-model-item:hover {
+  border-color: #3d705f;
+  color: #edfff7;
+  background: #1c332e;
+}
+
+body[data-dashboard-role] .order-progress-step {
+  color: #aab9c5;
+}
+
+body[data-dashboard-role] .order-progress-step.complete {
+  color: #a9ebcb;
+}
+
+body[data-dashboard-role] .order-delete-protected,
+body[data-dashboard-role] .muted,
+body[data-dashboard-role] .empty-state {
+  color: #b0bec8;
+}
+
+body[data-dashboard-role] .empty-state {
+  border-color: #3a4b57;
+  border-radius: 9px;
+  background: #141e28;
+}
+
+body[data-dashboard-role] .notice {
+  border-color: #735a36;
+  border-radius: 9px;
+  color: #f4d99e;
+  background: #302719;
+}
+
+body[data-dashboard-role] .status {
+  border: 1px solid #35634f;
+  color: #c3f5da;
+  background: #1b3d31;
+}
+
+body[data-dashboard-role] .status.warning {
+  border-color: #765d37;
+  color: #f4d79a;
+  background: #382e20;
+}
+
+body[data-dashboard-role] .status.info {
+  border-color: #405f80;
+  color: #c8e0ff;
+  background: #203348;
+}
+
+body[data-dashboard-role] .status.muted {
+  border-color: #3c4a55;
+  color: #c2cdd5;
+  background: #26313a;
+}
+
+body[data-dashboard-role] .form-section,
+body[data-dashboard-role] .pending-approval-options,
+body[data-dashboard-role] .workforce-attendance-controls {
+  border-color: var(--app-line);
+  border-radius: 10px;
+  color: var(--app-text);
+  background-color: #141e28;
+}
+
+body[data-dashboard-role] .form-grid label,
+body[data-dashboard-role] .form-stack label,
+body[data-dashboard-role] .modal-form label,
+body[data-dashboard-role] .field > label,
+body[data-dashboard-role] .field > span,
+body[data-dashboard-role] .form-section h3,
+body[data-dashboard-role] .form-section-grid .field > span,
+body[data-dashboard-role] .work-stage-picker legend,
+body[data-dashboard-role] .pending-approval-options h4 {
+  color: #d4dfe6;
+}
+
+body[data-dashboard-role] input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+body[data-dashboard-role] select,
+body[data-dashboard-role] textarea {
+  border-color: #3a4b57;
+  border-radius: 8px;
+  color: #edf3f6;
+  background: #0e171f;
+  accent-color: var(--app-green);
+}
+
+body[data-dashboard-role] input::placeholder,
+body[data-dashboard-role] textarea::placeholder {
+  color: #8e9eaa;
+}
+
+body[data-dashboard-role] input:focus,
+body[data-dashboard-role] select:focus,
+body[data-dashboard-role] textarea:focus {
+  border-color: #55c99e;
+  box-shadow: 0 0 0 3px #4bc49a24;
+}
+
+body[data-dashboard-role] select option {
+  color: #e6eef2;
+  background: #111a23;
+}
+
+body[data-dashboard-role] .field small,
+body[data-dashboard-role] .form-section-grid .field small,
+body[data-dashboard-role] .order-modal-card .form-section-grid .field small,
+body[data-dashboard-role] .modal-form small,
+body[data-dashboard-role] .modal-card > p,
+body[data-dashboard-role] .clients-toolbar p,
+body[data-dashboard-role] .section-heading p {
+  color: #aab8c2;
+}
+
+body[data-dashboard-role] .form-section h3 span {
+  color: #b4d2c4;
+  background: #20382f;
+}
+
+body[data-dashboard-role] .modal-backdrop,
+body[data-dashboard-role] .confirm-backdrop {
+  padding: clamp(12px, 3vw, 28px);
+  background: #03070cc7;
+  backdrop-filter: blur(7px);
+  -webkit-backdrop-filter: blur(7px);
+}
+
+body[data-dashboard-role] .modal-card,
+body[data-dashboard-role] .confirm-dialog {
+  border-color: #3a4b57;
+  border-radius: 14px;
+  color: var(--app-text);
+  background: linear-gradient(155deg, #19242e, #111a23 65%);
+  box-shadow: 0 28px 90px #000b, 0 0 0 1px #ffffff08;
+}
+
+body[data-dashboard-role] .modal-card {
+  padding: 0 24px 24px;
+}
+
+body[data-dashboard-role] #client-account-modal {
+  z-index: 1300;
+}
+
+body[data-dashboard-role] #model-details-modal {
+  z-index: 1310;
+}
+
+body[data-dashboard-role] .modal-card h2,
+body[data-dashboard-role] .confirm-title {
+  color: #f0f5f8;
+}
+
+body[data-dashboard-role] .modal-card > p,
+body[data-dashboard-role] .confirm-message,
+body[data-dashboard-role] .modal-subheading {
+  color: var(--app-muted);
+}
+
+body[data-dashboard-role] .modal-control-bar {
+  position: sticky;
+  z-index: 20;
+  top: 0;
+  display: flex;
+  min-height: 54px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 -24px 10px;
+  padding: 9px 24px;
+  border-bottom: 1px solid var(--app-line);
+  background: linear-gradient(180deg, #19242e 75%, #19242eee);
+  box-shadow: 0 8px 15px #00000012;
+}
+
+body[data-dashboard-role] .modal-control-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+body[data-dashboard-role] .modal-control-button {
+  display: inline-grid;
+  width: 38px;
+  min-width: 38px;
+  min-height: 38px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid #3c4f5c;
+  border-radius: 9px;
+  color: #d4e0e7;
+  background: #202d38;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  transition: color .16s ease, background .16s ease, border-color .16s ease, transform .16s ease;
+}
+
+body[data-dashboard-role] .modal-control-button:hover {
+  border-color: #5b7c8a;
+  color: #fff;
+  background: #2a3c48;
+}
+
+body[data-dashboard-role] .modal-control-back {
+  color: #d8f6e8;
+  background: #1a3a31;
+}
+
+body[data-dashboard-role] .modal-control-back:hover {
+  border-color: #52a685;
+  color: #fff;
+  background: #215441;
+}
+
+body[data-dashboard-role] .modal-control-close:hover {
+  border-color: #a05c62;
+  color: #fff0f0;
+  background: #593238;
+}
+
+body[data-dashboard-role] .modal-control-button svg {
+  width: 19px;
+  height: 19px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+body[data-dashboard-role] .modal-card > .modal-view-heading,
+body[data-dashboard-role] .modal-card > #model-details-modal-content > .modal-view-heading,
+body[data-dashboard-role] .modal-card [data-production-details-content] > .client-model-details > .production-details-heading,
+body[data-dashboard-role] .modal-card [data-production-details-content] > .production-details-heading {
+  position: sticky;
+  z-index: 10;
+  top: 54px;
+  margin: 0 -24px 10px;
+  padding: 9px 24px 11px;
+  border-bottom: 1px solid var(--app-line);
+  background: #17222df7;
+  box-shadow: 0 8px 16px #00000012;
+  backdrop-filter: blur(12px);
+}
+
+body[data-dashboard-role] .modal-card [data-production-details-content] > .client-model-details > .production-details-heading,
+body[data-dashboard-role] .modal-card [data-production-details-content] > .production-details-heading {
+  top: 54px;
+}
+
+body[data-dashboard-role] .modal-card > .modal-view-heading h2,
+body[data-dashboard-role] .modal-card #model-details-modal-content > .modal-view-heading h2,
+body[data-dashboard-role] .production-details-heading h2 {
+  color: #f0f5f8;
+}
+
+body[data-dashboard-role] .modal-card .modal-view-heading small,
+body[data-dashboard-role] .modal-card .modal-view-heading p,
+body[data-dashboard-role] .production-details-heading small,
+body[data-dashboard-role] .production-details-heading p {
+  color: #bdcad3;
+}
+
+body[data-dashboard-role] .modal-close {
+  border-color: #3d4e5a;
+  border-radius: 9px;
+  color: #d5e0e6;
+  background: #202d38;
+}
+
+body[data-dashboard-role] .modal-close:hover {
+  border-color: #a05c62;
+  color: #fff0f0;
+  background: #593238;
+}
+
+body[data-dashboard-role] .notification-dropdown {
+  border-color: var(--app-line-strong);
+  color: var(--app-text);
+  background: #141e28;
+  box-shadow: 0 18px 50px #0009;
+}
+
+body[data-dashboard-role] .notification-dropdown > header {
+  border-color: var(--app-line);
+  color: #e9f0f4;
+  background: #192530;
+}
+
+body[data-dashboard-role] .notification-entry {
+  border-color: var(--app-line);
+  color: #d6e0e6;
+  background: #141e28;
+}
+
+body[data-dashboard-role] .notification-entry:hover,
+body[data-dashboard-role] .notification-entry.unread {
+  background: #1d2c37;
+}
+
+body[data-dashboard-role] .notification-entry time,
+body[data-dashboard-role] .notification-entry > small,
+body[data-dashboard-role] .notification-empty {
+  color: var(--app-muted);
+}
+
+body[data-dashboard-role] .notification-mark-read {
+  color: #c7f1df;
+  background: #1b3b32;
+}
+
+body[data-dashboard-role] .workforce-date-toolbar,
+body[data-dashboard-role] .workforce-attendance-controls {
+  border-color: var(--app-line);
+  border-radius: 9px;
+  background: #141e28;
+}
+
+body[data-dashboard-role] .workforce-date-display strong {
+  color: #dfeaf0;
+}
+
+body[data-dashboard-role] .workforce-date-display small,
+body[data-dashboard-role] .workforce-attendance-controls > p {
+  color: var(--app-muted);
+}
+
+body[data-dashboard-role] .workforce-date-arrow,
+body[data-dashboard-role] .workforce-entry-mode {
+  border-color: var(--app-line-strong);
+  color: #c9d5dd;
+  background: #1c2a35;
+}
+
+body[data-dashboard-role] .workforce-entry-mode.active {
+  border-color: #438d70;
+  color: #e0fff0;
+  background: #1d513d;
+  box-shadow: 0 0 0 2px #4bc49a20;
+}
+
+body[data-dashboard-role] .workforce-matrix-scroll {
+  border-color: var(--app-line);
+  border-radius: 9px;
+  background: #111a23;
+}
+
+body[data-dashboard-role] .workforce-matrix th,
+body[data-dashboard-role] .workforce-matrix td {
+  border-color: #2b3a45;
+  color: #ced9e0;
+  background: #141e28;
+}
+
+body[data-dashboard-role] .workforce-matrix thead th,
+body[data-dashboard-role] .workforce-matrix thead .workforce-worker-name {
+  color: #e0eaf0;
+  background: #1d2b36;
+}
+
+body[data-dashboard-role] .workforce-worker-name {
+  background: #17232d;
+}
+
+body[data-dashboard-role] .workforce-day-slot {
+  border-color: #394b57;
+  border-radius: 6px;
+  background: #101922;
+}
+
+body[data-dashboard-role] .workforce-day-action {
+  color: #c4d2db;
+}
+
+body[data-dashboard-role] .workforce-day-action:not(:disabled):hover,
+body[data-dashboard-role] .workforce-day-tools button:not(:disabled):hover {
+  color: #e5fff5;
+  background: #1b5747;
+}
+
+body[data-dashboard-role] .workforce-day-tools button {
+  border-radius: 5px;
+  color: #cad6dd;
+  background: #253540;
+}
+
+body[data-dashboard-role] .toast {
+  border-color: #39614d;
+  border-right-color: var(--app-green);
+  border-radius: 10px;
+  color: #e1f9eb;
+  background: #16271f;
+  box-shadow: 0 16px 40px #0008;
+}
+
+body[data-dashboard-role] .toast-error {
+  border-color: #75484d;
+  border-right-color: var(--app-red);
+  color: #ffe5e5;
+  background: #2c1c21;
+}
+
+body[data-dashboard-role] .confirm-cancel {
+  border-color: var(--app-line-strong);
+  color: #d0dbe2;
+  background: #202d38;
+}
+
+body[data-dashboard-role] .confirm-danger {
+  color: #fff;
+  background: #7a4147;
+}
+
+body[data-dashboard-role] .developer-contact,
+body[data-dashboard-role] .developer-name,
+body[data-dashboard-role] .developer-contact-copy {
+  color: #91a1ac;
+}
+
+body[data-dashboard-role] .construction-banner {
+  border-color: #695333;
+  color: #f3d9a1;
+  background: #282219;
+}
+
+body[data-dashboard-role] .color-choice,
+body[data-dashboard-role] .color-ply-row,
+body[data-dashboard-role] .incoming-fabric-color-row,
+body[data-dashboard-role] .fabric-entry-row,
+body[data-dashboard-role] .model-status-row,
+body[data-dashboard-role] .client-waiting-model-card,
+body[data-dashboard-role] .online-user-entry,
+body[data-dashboard-role] .notification-detail-list > div,
+body[data-dashboard-role] .cutting-details-section,
+body[data-dashboard-role] .cutting-details-grid > div,
+body[data-dashboard-role] .cutting-fabric-group,
+body[data-dashboard-role] .cutting-details-notes,
+body[data-dashboard-role] .admin-cutting-edit[open] > form {
+  border-color: var(--app-line);
+  color: var(--app-text);
+  background-color: #17222d;
+}
+
+body[data-dashboard-role] .color-choice-value,
+body[data-dashboard-role] .color-choice-name,
+body[data-dashboard-role] .model-status-row,
+body[data-dashboard-role] .cutting-details-grid dd,
+body[data-dashboard-role] .cutting-fabric-group h4 {
+  color: #dce6ec;
+}
+
+body[data-dashboard-role] .color-choice-name > span,
+body[data-dashboard-role] .cutting-details-grid dt {
+  color: var(--app-muted);
+}
+
+body[data-dashboard-role] .color-choice button {
+  min-width: 30px;
+  min-height: 30px;
+  border: 1px solid #65464a;
+  border-radius: 7px;
+  color: #f4caca;
+  background: #34252a;
+}
+
+body[data-dashboard-role] .color-choice button:hover {
+  border-color: #a1595f;
+  color: #fff0f0;
+  background: #593238;
+}
+
+body[data-dashboard-role] .model-status-info strong {
+  color: #e5edf2;
+}
+
+body[data-dashboard-role] .model-status-info span,
+body[data-dashboard-role] .model-status-control {
+  color: var(--app-muted);
+}
+
+body[data-dashboard-role] .model-preview-link:hover,
+body[data-dashboard-role] .model-preview-link:focus-visible {
+  background: #1c332e;
+}
+
+@media (max-width: 700px) {
+  body[data-dashboard-role] .topbar {
+    align-items: flex-start;
+  }
+
+  body[data-dashboard-role] .header-brand {
+    flex: 0 1 auto;
+  }
+
+  body[data-dashboard-role] .header-brand > .brand-copy,
+  body[data-dashboard-role] .header-logo {
+    display: none;
+  }
+
+  body[data-dashboard-role] .notification-control {
+    position: relative;
+    flex: 0 0 auto;
+  }
+
+  body[data-dashboard-role] .online-indicator {
+    min-height: 36px;
+    padding: 6px 8px;
+    font-size: 11px;
+  }
+
+  body[data-dashboard-role] .modal-card {
+    max-height: calc(100dvh - 24px);
+    padding-right: 16px;
+    padding-left: 16px;
+    border-radius: 12px;
+  }
+
+  body[data-dashboard-role] .modal-control-bar {
+    margin-right: -16px;
+    margin-left: -16px;
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  body[data-dashboard-role] .modal-card > .modal-view-heading,
+  body[data-dashboard-role] .modal-card > #model-details-modal-content > .modal-view-heading,
+  body[data-dashboard-role] .modal-card [data-production-details-content] > .client-model-details > .production-details-heading,
+  body[data-dashboard-role] .modal-card [data-production-details-content] > .production-details-heading {
+    margin-right: -16px;
+    margin-left: -16px;
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  body[data-dashboard-role] .stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body[data-dashboard-role] *,
+  body[data-dashboard-role] *::before,
+  body[data-dashboard-role] *::after {
+    scroll-behavior: auto !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}
