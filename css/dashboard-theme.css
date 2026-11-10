@@ -1,4 +1,16 @@
 body[data-dashboard-role] {
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --radius-control: 10px;
+  --radius-card: 12px;
+  --control-height: 40px;
+  --font-body: 14px;
+  --font-label: 13px;
+  --font-small: 12px;
+  --font-heading: 18px;
+  --font-metric: 24px;
   --app-bg: #0b1117;
   --app-surface: #111a23;
   --app-surface-raised: #17222d;
@@ -1211,5 +1223,445 @@ body[data-dashboard-role] .model-preview-link:focus-visible {
     animation-duration: .01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: .01ms !important;
+  }
+}
+
+body[data-dashboard-role] {
+  font-size: var(--font-body);
+  line-height: 1.55;
+}
+
+body[data-dashboard-role] button:not([role="tab"]):not(.notification-entry) {
+  box-sizing: border-box;
+  min-height: var(--control-height);
+  max-width: 100%;
+  padding: 8px 12px;
+  border-radius: var(--radius-control);
+  font-family: inherit;
+  font-size: var(--font-label);
+  font-weight: 600;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  transition: color .16s ease, background .16s ease, border-color .16s ease, box-shadow .16s ease, transform .16s ease;
+}
+
+body[data-dashboard-role] .button,
+body[data-dashboard-role] .row-action,
+body[data-dashboard-role] .client-management-tab,
+body[data-dashboard-role] .client-quick-tabs button,
+body[data-dashboard-role] .client-model-tabs [role="tab"] {
+  min-height: var(--control-height);
+  border-radius: var(--radius-control);
+  font-size: var(--font-label);
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+body[data-dashboard-role] .button {
+  padding: 8px 14px;
+}
+
+body[data-dashboard-role] .row-action {
+  margin: 2px;
+  padding: 8px 10px;
+  white-space: normal;
+}
+
+body[data-dashboard-role] button.row-action:not([role="tab"]) {
+  padding: 8px 10px;
+  white-space: normal;
+}
+
+body[data-dashboard-role] .button-primary,
+body[data-dashboard-role] .button-primary:hover {
+  border: 1px solid #47bb90;
+  color: #071d14;
+  background: linear-gradient(135deg, #59d3a7, #40b88c);
+}
+
+body[data-dashboard-role] .button-primary:hover {
+  border-color: #7ce5bf;
+  background: #70dfb7;
+  box-shadow: 0 5px 14px #35b68a32;
+  transform: translateY(-1px);
+}
+
+body[data-dashboard-role] .button-secondary,
+body[data-dashboard-role] .confirm-cancel,
+body[data-dashboard-role] .notification-mark-read {
+  border: 1px solid var(--app-line-strong);
+  color: #d1dce3;
+  background: #202d38;
+}
+
+body[data-dashboard-role] .button-secondary:hover,
+body[data-dashboard-role] .confirm-cancel:hover,
+body[data-dashboard-role] .notification-mark-read:hover {
+  border-color: #526977;
+  color: #f0f5f8;
+  background: #2a3a46;
+}
+
+body[data-dashboard-role] .button-danger,
+body[data-dashboard-role] .confirm-danger,
+body[data-dashboard-role] .order-delete-action,
+body[data-dashboard-role] [data-action="delete"],
+body[data-dashboard-role] [data-delete-order],
+body[data-dashboard-role] [data-delete-customer],
+body[data-dashboard-role] [data-delete-payment],
+body[data-dashboard-role] [data-delete-cash-transaction] {
+  border: 1px solid #76484d;
+  color: #ffeaea;
+  background: #60363a;
+}
+
+body[data-dashboard-role] .button-danger:hover,
+body[data-dashboard-role] .confirm-danger:hover,
+body[data-dashboard-role] .order-delete-action:hover,
+body[data-dashboard-role] [data-action="delete"]:hover,
+body[data-dashboard-role] [data-delete-order]:hover,
+body[data-dashboard-role] [data-delete-customer]:hover,
+body[data-dashboard-role] [data-delete-payment]:hover,
+body[data-dashboard-role] [data-delete-cash-transaction]:hover {
+  border-color: #a95b61;
+  color: #fff;
+  background: #7a4147;
+}
+
+body[data-dashboard-role] [data-edit-kind],
+body[data-dashboard-role] [data-edit-client-order],
+body[data-dashboard-role] [data-edit-customer],
+body[data-dashboard-role] [data-edit-cash-transaction],
+body[data-dashboard-role] [data-edit-workforce],
+body[data-dashboard-role] [data-edit-fabric],
+body[data-dashboard-role] [data-edit-client-payment],
+body[data-dashboard-role] [data-edit-order],
+body[data-dashboard-role] [data-action="edit"] {
+  border: 1px solid #3c5a77;
+  color: #c5dcff;
+  background: #1b2e41;
+}
+
+body[data-dashboard-role] [data-edit-kind]:hover,
+body[data-dashboard-role] [data-edit-client-order]:hover,
+body[data-dashboard-role] [data-edit-customer]:hover,
+body[data-dashboard-role] [data-edit-cash-transaction]:hover,
+body[data-dashboard-role] [data-edit-workforce]:hover,
+body[data-dashboard-role] [data-edit-fabric]:hover,
+body[data-dashboard-role] [data-edit-client-payment]:hover,
+body[data-dashboard-role] [data-edit-order]:hover,
+body[data-dashboard-role] [data-action="edit"]:hover {
+  border-color: #658bb5;
+  color: #e5f0ff;
+  background: #263d55;
+}
+
+body[data-dashboard-role] .sidebar-toggle,
+body[data-dashboard-role] .live-notification-button,
+body[data-dashboard-role] .modal-control-button,
+body[data-dashboard-role] .modal-close {
+  display: inline-grid;
+  width: var(--control-height);
+  min-width: var(--control-height);
+  height: var(--control-height);
+  min-height: var(--control-height);
+  flex: 0 0 var(--control-height);
+  place-items: center;
+  padding: 0;
+  border-radius: var(--radius-control);
+}
+
+body[data-dashboard-role] .client-management-tab,
+body[data-dashboard-role] .client-quick-tabs button,
+body[data-dashboard-role] .client-model-tabs [role="tab"] {
+  padding: 8px 12px;
+}
+
+body[data-dashboard-role] .notification-entry {
+  padding: 12px 15px;
+  text-align: right;
+}
+
+body[data-dashboard-role] .online-indicator {
+  min-height: var(--control-height);
+  padding: 8px 12px;
+  border-radius: var(--radius-control);
+  font-size: var(--font-small);
+  font-weight: 600;
+}
+
+body[data-dashboard-role] .form-actions,
+body[data-dashboard-role] .order-card-actions,
+body[data-dashboard-role] .client-detail-actions,
+body[data-dashboard-role] .client-card-actions,
+body[data-dashboard-role] .clients-toolbar,
+body[data-dashboard-role] .section-heading {
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+body[data-dashboard-role] .main-content,
+body[data-dashboard-role] .dashboard-section,
+body[data-dashboard-role] .panel,
+body[data-dashboard-role] .panel-heading,
+body[data-dashboard-role] .panel-body,
+body[data-dashboard-role] .order-card,
+body[data-dashboard-role] .client-account-card,
+body[data-dashboard-role] .client-waiting-model-card,
+body[data-dashboard-role] .client-fabric-stock-card,
+body[data-dashboard-role] .client-history-card,
+body[data-dashboard-role] .client-order-card,
+body[data-dashboard-role] .cutting-admin-order-card,
+body[data-dashboard-role] .cutting-order-card,
+body[data-dashboard-role] .cutting-story-card,
+body[data-dashboard-role] .sewing-order-card,
+body[data-dashboard-role] .sewing-model-monitor-card,
+body[data-dashboard-role] .worker-submission-card,
+body[data-dashboard-role] .worker-submission-review,
+body[data-dashboard-role] .pending-approval-card,
+body[data-dashboard-role] .production-compact-card,
+body[data-dashboard-role] .worker-delivery-model-card,
+body[data-dashboard-role] .worker-order-delivery-card,
+body[data-dashboard-role] .workforce-finance-card,
+body[data-dashboard-role] .settlement-card,
+body[data-dashboard-role] .fabric-stock-card,
+body[data-dashboard-role] .fabric-stock-type-card,
+body[data-dashboard-role] .fabric-stock-color-row,
+body[data-dashboard-role] .model-size-card,
+body[data-dashboard-role] .compact-model-item,
+body[data-dashboard-role] .client-profile-compact,
+body[data-dashboard-role] .compact-detail-grid > div,
+body[data-dashboard-role] .client-activity-grid > div,
+body[data-dashboard-role] .client-order-card-summary > div,
+body[data-dashboard-role] .workforce-finance-card-grid > div,
+body[data-dashboard-role] .cutting-story-facts > div,
+body[data-dashboard-role] .cutting-admin-order-facts > div,
+body[data-dashboard-role] .sewing-order-facts > div,
+body[data-dashboard-role] .table-wrap {
+  min-width: 0;
+  max-width: 100%;
+  border-radius: var(--radius-card);
+}
+
+body[data-dashboard-role] .topbar {
+  position: sticky;
+  z-index: 100;
+  top: env(safe-area-inset-top, 0px);
+  border-radius: var(--radius-card);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+body[data-dashboard-role] .panel,
+body[data-dashboard-role] .order-card,
+body[data-dashboard-role] .client-account-card,
+body[data-dashboard-role] .client-fabric-stock-card,
+body[data-dashboard-role] .client-history-card,
+body[data-dashboard-role] .client-order-card,
+body[data-dashboard-role] .cutting-order-card,
+body[data-dashboard-role] .workforce-finance-card,
+body[data-dashboard-role] .settlement-card,
+body[data-dashboard-role] .cutting-admin-order-card,
+body[data-dashboard-role] .cutting-story-card,
+body[data-dashboard-role] .sewing-order-card,
+body[data-dashboard-role] .worker-submission-review,
+body[data-dashboard-role] .pending-approval-card,
+body[data-dashboard-role] .model-size-card,
+body[data-dashboard-role] .client-profile-compact,
+body[data-dashboard-role] .client-account-details-compact > div,
+body[data-dashboard-role] .compact-detail-grid > div,
+body[data-dashboard-role] .client-activity-grid > div,
+body[data-dashboard-role] .client-order-card-summary > div,
+body[data-dashboard-role] .workforce-finance-card-grid > div,
+body[data-dashboard-role] .cutting-story-facts > div,
+body[data-dashboard-role] .cutting-admin-order-facts > div,
+body[data-dashboard-role] .sewing-order-facts > div,
+body[data-dashboard-role] .workforce-rollover-modal {
+  border-radius: var(--radius-card);
+}
+
+body[data-dashboard-role] input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+body[data-dashboard-role] select,
+body[data-dashboard-role] textarea,
+body[data-dashboard-role] .form-section,
+body[data-dashboard-role] .form-grid,
+body[data-dashboard-role] .form-stack {
+  min-width: 0;
+  max-width: 100%;
+  border-radius: var(--radius-control);
+}
+
+body[data-dashboard-role] .modal-backdrop,
+body[data-dashboard-role] .confirm-backdrop {
+  position: fixed;
+  z-index: 1300;
+}
+
+body[data-dashboard-role] .modal-card,
+body[data-dashboard-role] .confirm-dialog {
+  min-width: 0;
+  max-width: 100%;
+  border-radius: var(--radius-card);
+}
+
+body[data-dashboard-role] .modal-card {
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+body[data-dashboard-role] .modal-control-bar {
+  top: 0;
+  min-height: 56px;
+  border-radius: 0;
+}
+
+body[data-dashboard-role] .modal-card > .modal-view-heading,
+body[data-dashboard-role] .modal-card > #model-details-modal-content > .modal-view-heading,
+body[data-dashboard-role] .modal-card > #client-account-modal-content > .modal-view-heading,
+body[data-dashboard-role] .modal-card [data-production-details-content] > .client-model-details > .production-details-heading,
+body[data-dashboard-role] .modal-card [data-production-details-content] > .production-details-heading {
+  position: sticky;
+  z-index: 10;
+  top: 56px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+body[data-dashboard-role] .stat-card,
+body[data-dashboard-role] .stat-card-summary {
+  min-width: 0;
+  border-radius: var(--radius-card);
+}
+
+body[data-dashboard-role] .client-fabric-stock-card,
+body[data-dashboard-role] .client-history-card,
+body[data-dashboard-role] .client-order-card,
+body[data-dashboard-role] .cutting-order-card,
+body[data-dashboard-role] .workforce-finance-card,
+body[data-dashboard-role] .settlement-card {
+  border-color: var(--app-line);
+  color: var(--app-text);
+  background: #17222d;
+  box-shadow: 0 5px 16px #00000012;
+}
+
+body[data-dashboard-role] .workforce-finance-card-grid > div {
+  border-color: var(--app-line);
+  background: #1a2631;
+}
+
+body[data-dashboard-role] .settlement-card strong,
+body[data-dashboard-role] .workforce-finance-card-grid strong,
+body[data-dashboard-role] .client-order-card-summary strong {
+  color: #e1edf3;
+  font-size: 16px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+body[data-dashboard-role] .settlement-card small,
+body[data-dashboard-role] .settlement-card span,
+body[data-dashboard-role] .workforce-finance-card-grid small,
+body[data-dashboard-role] .workforce-finance-card-grid span {
+  color: var(--app-muted);
+  font-size: var(--font-small);
+}
+
+body[data-dashboard-role] .stat-card > strong,
+body[data-dashboard-role] .stat-card-summary > strong {
+  font-size: var(--font-metric);
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+body[data-dashboard-role] .section-heading h2,
+body[data-dashboard-role] .clients-toolbar h2,
+body[data-dashboard-role] .panel-heading h2,
+body[data-dashboard-role] .modal-view-heading h2,
+body[data-dashboard-role] .production-details-heading h2 {
+  font-size: var(--font-heading);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+body[data-dashboard-role] .order-card-heading h3,
+body[data-dashboard-role] .client-account-card h3,
+body[data-dashboard-role] .cutting-story-heading h3,
+body[data-dashboard-role] .cutting-admin-order-heading h3,
+body[data-dashboard-role] .sewing-order-heading h3,
+body[data-dashboard-role] .pending-approval-heading h3 {
+  font-size: 16px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+body[data-dashboard-role] .modal-control-bar,
+body[data-dashboard-role] .modal-card > .modal-view-heading,
+body[data-dashboard-role] .modal-card > #model-details-modal-content > .modal-view-heading,
+body[data-dashboard-role] .modal-card > #client-account-modal-content > .modal-view-heading,
+body[data-dashboard-role] .modal-card [data-production-details-content] > .client-model-details > .production-details-heading,
+body[data-dashboard-role] .modal-card [data-production-details-content] > .production-details-heading {
+  border-radius: 0;
+  scroll-margin-top: 56px;
+}
+
+body[data-dashboard-role] .table-wrap {
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+
+body[data-dashboard-role] th,
+body[data-dashboard-role] td,
+body[data-dashboard-role] .order-card,
+body[data-dashboard-role] .client-account-card,
+body[data-dashboard-role] .client-fabric-stock-card,
+body[data-dashboard-role] .client-history-card,
+body[data-dashboard-role] .client-order-card,
+body[data-dashboard-role] .cutting-order-card,
+body[data-dashboard-role] .workforce-finance-card,
+body[data-dashboard-role] .settlement-card,
+body[data-dashboard-role] .cutting-admin-order-card,
+body[data-dashboard-role] .cutting-story-card,
+body[data-dashboard-role] .sewing-order-card,
+body[data-dashboard-role] .worker-submission-review,
+body[data-dashboard-role] .pending-approval-card,
+body[data-dashboard-role] .model-size-card,
+body[data-dashboard-role] .workforce-finance-card-grid > div,
+body[data-dashboard-role] .settlement-card,
+body[data-dashboard-role] .compact-detail-grid > div,
+body[data-dashboard-role] .client-account-details-compact > div {
+  overflow-wrap: anywhere;
+}
+
+body[data-dashboard-role] .button:focus-visible,
+body[data-dashboard-role] .row-action:focus-visible,
+body[data-dashboard-role] .client-management-tab:focus-visible,
+body[data-dashboard-role] .client-quick-tabs button:focus-visible,
+body[data-dashboard-role] .client-model-tabs [role="tab"]:focus-visible,
+body[data-dashboard-role] .sidebar-toggle:focus-visible,
+body[data-dashboard-role] .live-notification-button:focus-visible,
+body[data-dashboard-role] .modal-control-button:focus-visible {
+  outline: 2px solid #76ddb8;
+  outline-offset: 2px;
+}
+
+@media (max-width: 700px) {
+  body[data-dashboard-role] .stat-card > strong,
+  body[data-dashboard-role] .stat-card-summary > strong {
+    font-size: 22px;
+  }
+
+  body[data-dashboard-role] .modal-control-bar {
+    min-height: 52px;
+  }
+
+  body[data-dashboard-role] .modal-card > .modal-view-heading,
+  body[data-dashboard-role] .modal-card > #model-details-modal-content > .modal-view-heading,
+  body[data-dashboard-role] .modal-card > #client-account-modal-content > .modal-view-heading,
+  body[data-dashboard-role] .modal-card [data-production-details-content] > .client-model-details > .production-details-heading,
+  body[data-dashboard-role] .modal-card [data-production-details-content] > .production-details-heading {
+    top: 52px;
+    scroll-margin-top: 52px;
   }
 }
