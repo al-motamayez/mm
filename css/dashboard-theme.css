@@ -1847,3 +1847,210 @@ body[data-dashboard-role] .modal-control-button:focus-visible {
     scroll-margin-top: 52px;
   }
 }
+
+body[data-dashboard-role] .model-image-trigger {
+  box-sizing: border-box;
+  width: 68px;
+  height: 68px;
+  flex: 0 0 68px;
+  padding: 0;
+  border: 1px solid var(--app-line-strong);
+  border-radius: var(--radius-control);
+  background: #101820;
+}
+
+body[data-dashboard-role] .order-card-heading .model-image-trigger,
+body[data-dashboard-role] .client-order-card .model-image-trigger,
+body[data-dashboard-role] .client-waiting-model-card .model-image-trigger {
+  width: clamp(88px, 10vw, 112px);
+  height: clamp(88px, 10vw, 112px);
+  flex-basis: clamp(88px, 10vw, 112px);
+}
+
+body[data-dashboard-role] .model-image-trigger .model-thumbnail,
+body[data-dashboard-role] .model-image-gallery .model-thumbnail,
+body[data-dashboard-role] .register-model-cell .model-thumbnail {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  object-fit: contain;
+  object-position: center;
+}
+
+body[data-dashboard-role] .model-image-trigger:hover {
+  border-color: #5b9c82;
+}
+
+body[data-dashboard-role] #cash-transaction-form,
+body[data-dashboard-role] #payment-form,
+body[data-dashboard-role] .payment-form,
+body[data-dashboard-role] [data-client-expense-form],
+body[data-dashboard-role] [data-client-payment-edit-form] {
+  grid-template-columns: minmax(0, 1fr);
+  max-width: 820px;
+  gap: 14px;
+}
+
+body[data-dashboard-role] #cash-transaction-form > .field,
+body[data-dashboard-role] #cash-transaction-form > .form-actions,
+body[data-dashboard-role] #payment-form > .field,
+body[data-dashboard-role] #payment-form > .form-actions,
+body[data-dashboard-role] .payment-form > .field,
+body[data-dashboard-role] .payment-form > .form-actions,
+body[data-dashboard-role] [data-client-expense-form] > .field,
+body[data-dashboard-role] [data-client-expense-form] > .form-actions,
+body[data-dashboard-role] [data-client-payment-edit-form] > .field,
+body[data-dashboard-role] [data-client-payment-edit-form] > .form-actions {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+body[data-dashboard-role] #cash-transaction-form > .field,
+body[data-dashboard-role] #payment-form > .field,
+body[data-dashboard-role] .payment-form > .field {
+  align-content: start;
+  gap: 7px;
+}
+
+body[data-dashboard-role] .fixed-expense-direction {
+  display: flex;
+  min-height: var(--control-height);
+  align-items: center;
+  padding: 8px 12px;
+  border: 1px solid var(--app-line-strong);
+  border-radius: var(--radius-control);
+  color: #e7f2ed;
+  background: #1a2a31;
+  font-weight: 600;
+}
+
+body[data-dashboard-role] .form-dialog-fields input:not([type="file"]),
+body[data-dashboard-role] .form-dialog-fields select,
+body[data-dashboard-role] .form-dialog-fields textarea,
+body[data-dashboard-role] .fabric-customer-filter select {
+  border-color: var(--app-line-strong);
+  color: var(--app-text);
+  background: #101922;
+}
+
+body[data-dashboard-role] .cutting-fabric-group,
+body[data-dashboard-role] .cutting-details-grid > div,
+body[data-dashboard-role] .cutting-details-notes,
+body[data-dashboard-role] .admin-cutting-edit[open] > form,
+body[data-dashboard-role] .fabric-entry-row,
+body[data-dashboard-role] .size-occurrence-remove,
+body[data-dashboard-role] .color-choice,
+body[data-dashboard-role] .custom-color-trigger,
+body[data-dashboard-role] .submission-comparison,
+body[data-dashboard-role] .submission-comparison-totals > div,
+body[data-dashboard-role] .worker-allocation-scroll,
+body[data-dashboard-role] .worker-allocation-table tfoot,
+body[data-dashboard-role] .model-color-chip,
+body[data-dashboard-role] .workforce-date-toolbar,
+body[data-dashboard-role] .workforce-profile-tab.active,
+body[data-dashboard-role] .workforce-finance-card,
+body[data-dashboard-role] .settlement-card,
+body[data-dashboard-role] .fabric-stock-color-row {
+  border-color: var(--app-line);
+  color: #d7e1e7;
+  background: #17222d;
+}
+
+body[data-dashboard-role] .cutting-details-grid dt,
+body[data-dashboard-role] .submission-comparison-totals span,
+body[data-dashboard-role] .model-color-chip small {
+  color: var(--app-muted);
+}
+
+body[data-dashboard-role] .cutting-details-grid dd,
+body[data-dashboard-role] .submission-comparison-totals strong,
+body[data-dashboard-role] .model-color-chip,
+body[data-dashboard-role] .workforce-profile-tab.active {
+  color: #e5edf2;
+}
+
+body[data-dashboard-role] .cutting-details-notes,
+body[data-dashboard-role] .submission-comparison,
+body[data-dashboard-role] .submission-comparison-totals > div {
+  border: 1px solid var(--app-line);
+  border-radius: var(--radius-control);
+}
+
+body[data-dashboard-role] .cutting-calculated-total {
+  border: 1px solid #34725a;
+  border-radius: var(--radius-control);
+  color: #dffff2;
+  background: #19392f;
+}
+
+body[data-dashboard-role] .worker-allocation-table th,
+body[data-dashboard-role] .worker-allocation-table td,
+body[data-dashboard-role] .worker-allocation-table tbody tr {
+  border-color: var(--app-line);
+  color: #d7e1e7;
+  background: #141e28;
+}
+
+body[data-dashboard-role] .worker-allocation-table thead th,
+body[data-dashboard-role] .worker-allocation-table tfoot {
+  color: #e5edf2;
+  background: #1a2631;
+}
+
+body[data-dashboard-role] .order-progress-step::before {
+  border-color: #52616c;
+  background: #1a2631;
+}
+
+body[data-dashboard-role] .workforce-absence-choice.active[aria-pressed="true"]::after {
+  border-color: #72d6aa;
+  background: #1b4436;
+}
+
+body[data-dashboard-role] .construction-banner {
+  border-color: #51462a;
+  color: #f0d99b;
+  background: #292416;
+}
+
+body[data-dashboard-role] .worker-finance-stats .stat-card,
+body[data-dashboard-role] .worker-finance-stats .stat-card:first-child,
+body[data-dashboard-role] .worker-finance-stats .stat-card:nth-child(3) {
+  border-color: var(--app-line);
+  color: var(--app-text);
+  background: linear-gradient(145deg, #17232e, #111a23 78%);
+}
+
+body[data-dashboard-role] .button,
+body[data-dashboard-role] .row-action,
+body[data-dashboard-role] .client-management-tab,
+body[data-dashboard-role] .client-quick-tabs button,
+body[data-dashboard-role] .client-model-tabs [role="tab"] {
+  box-sizing: border-box;
+  min-height: var(--control-height);
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: var(--radius-control);
+  font-family: inherit;
+  font-size: var(--font-label);
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+body[data-dashboard-role] .row-action {
+  white-space: normal;
+}
+
+@media (max-width: 700px) {
+  body[data-dashboard-role] .order-card-heading .model-image-trigger,
+  body[data-dashboard-role] .client-order-card .model-image-trigger,
+  body[data-dashboard-role] .client-waiting-model-card .model-image-trigger {
+    width: 76px;
+    height: 76px;
+    flex-basis: 76px;
+  }
+}
