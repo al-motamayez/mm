@@ -58,7 +58,7 @@ const WORKER_JOB_TITLES = ["غير محدد", "مشرف أصل", "مشرف خي�
 const SIZE_OPTIONS = {
   men: ["XS", "S", "M", "L", "XL", "2XL", "3XL", "4XL"],
   women: ["XS", "S", "M", "L", "XL", "2XL", "3XL", "4XL"],
-  children: Array.from({ length: 8 }, (_, index) => String((index + 1) * 2))
+  children: Array.from({ length: 29 }, (_, index) => String(index + 1))
 };
 const SIZE_TYPE_LABELS = { men: "رجالي", women: "حريمي", children: "أطفال" };
 const WORK_STAGES = [

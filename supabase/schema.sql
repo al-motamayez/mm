@@ -6316,7 +6316,7 @@ begin
       raise exception 'Select a supported size category before selecting sizes.';
     end if;
     if (size_type in ('men', 'women') and size_name not in ('XS', 'SX', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL'))
-       or (size_type = 'children' and size_name not in ('2', '4', '6', '8', '10', '12', '14', '16'))
+       or (size_type = 'children' and size_name !~ '^([1-9]|1[0-9]|2[0-9])$')
        then
       raise exception 'The selected size list contains an invalid size.';
     end if;
