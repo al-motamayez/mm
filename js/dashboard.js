@@ -2467,9 +2467,9 @@ function clientOrderSizeColorCardsMarkup(order) {
     counts[size] = Number(counts[size] || 0) + 1;
     return counts;
   }, {});
-  const sizes = [...new Set(sizeOrder.length
+  const sizes = sizeOrder.length
     ? sizeOrder
-    : (order.colorSizeDistribution?.colors || []).flatMap((entry) => Object.keys(entry.sizes || {})))];
+    : [...new Set((order.colorSizeDistribution?.colors || []).flatMap((entry) => Object.keys(entry.sizes || {})))];
   if (!sizes.length) return '<div class="empty-state">لا توجد مقاسات مسجلة لهذا الموديل.</div>';
 
   const distributionColors = Array.isArray(order.colorSizeDistribution?.colors)
@@ -2502,20 +2502,24 @@ function clientOrderSizeColorCardsMarkup(order) {
 
   return `<div class="client-model-size-color">
     <p class="client-model-fabric-type"><span>نوع القماش</span><strong>${escapeHtml(fabricType)}</strong></p>
-    <div class="model-size-color-grid">${sizes.map((size) => {
+    <div class="model-size-color-grid">${sizes.map((size, index) => {
       const occurrenceCount = Math.max(Number(multiplicities[size] || 0), 1);
+      const occurrence = sizeOrder.length
+        ? sizeOrder.slice(0, index + 1).filter((entry) => entry === size).length
+        : index + 1;
       const colorCards = colors.map((entry) => {
         const hexColor = /^#[0-9A-F]{6}$/i.test(entry.color) ? entry.color : "";
         const hasAllocatedCount = Object.hasOwn(entry.sizes, size);
         const allocatedCount = Number(entry.sizes[size]);
         const count = hasAllocatedCount && Number.isFinite(allocatedCount)
-          ? allocatedCount
-          : Number.isFinite(entry.plys) ? entry.plys * occurrenceCount : null;
+          ? Math.floor(allocatedCount / occurrenceCount) + (occurrence <= allocatedCount % occurrenceCount ? 1 : 0)
+          : Number.isFinite(entry.plys) ? entry.plys : null;
         if (count === null) return "";
-        return `<div class="model-size-color-item"><span class="model-size-color-name">${hexColor ? `<i class="color-breakdown-swatch" style="--swatch-color:${hexColor}" aria-hidden="true"></i>` : ""}${escapeHtml(entry.name || "اسم اللون غير مسجل")}</span><strong>${quantityFormat.format(count)} قطعة</strong></div>`;
+        return `<div class="model-size-color-item"><span class="model-size-color-name">${hexColor ? `<i class="color-breakdown-swatch" style="--swatch-color:${hexColor}" aria-hidden="true"></i>` : ""}${escapeHtml(entry.name || "اسم اللون غير مسجل")}</span><span class="model-size-color-total">${occurrenceCount > 1 ? `<small>التكرار ${occurrence} من ${occurrenceCount}</small>` : ""}<strong>${quantityFormat.format(count)} قطعة</strong></span></div>`;
       }).join("");
       const fallbackCount = Number(sizeData.counts[size] || 0);
-      return `<article class="model-size-card"><header><span>${escapeHtml(SIZE_TYPE_LABELS[sizeData.type] || "المقاس")} · ${escapeHtml(size)}</span></header><div class="model-size-color-list">${colorCards || `<div class="model-size-color-item"><span>إجمالي المقاس</span><strong>${quantityFormat.format(fallbackCount)} قطعة</strong></div>`}</div></article>`;
+      const count = Math.floor(fallbackCount / occurrenceCount) + (occurrence <= fallbackCount % occurrenceCount ? 1 : 0);
+      return `<article class="model-size-card"><header><span>${escapeHtml(SIZE_TYPE_LABELS[sizeData.type] || "المقاس")} · ${escapeHtml(size)}</span></header><div class="model-size-color-list">${colorCards || `<div class="model-size-color-item"><span>إجمالي المقاس</span><span class="model-size-color-total">${occurrenceCount > 1 ? `<small>التكرار ${occurrence} من ${occurrenceCount}</small>` : ""}<strong>${quantityFormat.format(count)} قطعة</strong></span></div>`}</div></article>`;
     }).join("")}</div>
   </div>`;
 }
@@ -3001,7 +3005,7 @@ function cashLedgerView(data) {
   const localDateTime = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16);
   const totalIncome = sumMoney([customerIncome, orderPayments, otherIncome]);
   return `<div class="stats-grid">${stat("المقبوضات", money(totalIncome), "دفعات العملاء والمدفوعات المسجلة على الطلبات وإيرادات أخرى")}${stat("المصروفات", money(expenses), "المسجل في سجل النقدية")}${stat("صافي الحركة النقدية", money(subtractMoney(totalIncome, expenses)), "المقبوضات − المصروفات")}</div>
-    ${panel("المصاريف والداخل والخارج", `<form id="cash-transaction-form" class="form-grid payment-form"><input type="hidden" name="transactionId"><div class="field"><label for="cash-direction">نوع الحركة</label><select id="cash-direction" name="direction" required><option value="expense">مصروف / خروج نقدي</option><option value="income">إيراد آخر / دخول نقدي</option></select><small>دفعات العملاء تُسجل من نموذج الدفعات وتظهر تلقائياً ضمن المقبوضات.</small></div><div class="field"><label for="cash-category">البند</label><input id="cash-category" name="category" maxlength="120" placeholder="مثل: أجور، كهرباء، نقل، مبيعات أخرى" required></div><div class="field"><label for="cash-amount">المبلغ</label><input id="cash-amount" name="amount" type="number" min="0.01" step="0.01" required></div><div class="field"><label for="cash-method">طريقة الدفع</label><input id="cash-method" name="method" value="نقدي" maxlength="80"></div><div class="field wide"><label for="cash-description">التفاصيل / المرجع</label><input id="cash-description" name="description" maxlength="500"></div><div class="field"><label for="cash-date">تاريخ ووقت الحركة</label><input id="cash-date" name="occurredAt" type="datetime-local" value="${localDateTime}" required></div><div class="form-actions"><button class="button button-primary" type="submit">حفظ الحركة النقدية</button><button class="row-action" type="button" data-cancel-cash-edit hidden>إلغاء التعديل</button></div></form>`, "دفعات العملاء تُدار من قسم الدفعات؛ لا تُسجل مرة أخرى كإيراد يدوي")}
+    ${panel("المصاريف والداخل والخارج", `<form id="cash-transaction-form" class="form-grid payment-form"><input type="hidden" name="transactionId"><div class="field"><label for="cash-direction">نوع الحركة</label><select id="cash-direction" name="direction" required><option value="expense">مصروف / خروج نقدي</option><option value="income">إيراد آخر / دخول نقدي</option></select><small>دفعات العملاء تُسجل من نموذج الدفعات وتظهر تلقائياً ضمن المقبوضات.</small></div><div class="field"><label for="cash-category">البند</label><input id="cash-category" name="category" maxlength="120" placeholder="مثل: أجور، كهرباء، نقل، مبيعات أخرى" required></div><div class="field"><label for="cash-amount">المبلغ</label><input id="cash-amount" name="amount" type="number" min="0.01" step="0.01" required></div><div class="field"><label for="cash-method">طريقة الدفع</label><select id="cash-method" name="method" required><option value="">اختر طريقة الدفع</option><option value="نقدي">نقدي - كاش</option><option value="تحويل بنكي">تحويل بنكي</option><option value="إنستا باي">إنستا باي</option></select></div><div class="field wide"><label for="cash-description">التفاصيل / المرجع</label><input id="cash-description" name="description" maxlength="500"></div><div class="field"><label for="cash-date">تاريخ ووقت الحركة</label><input id="cash-date" name="occurredAt" type="datetime-local" value="${localDateTime}" required></div><div class="form-actions"><button class="button button-primary" type="submit">حفظ الحركة النقدية</button><button class="row-action" type="button" data-cancel-cash-edit hidden>إلغاء التعديل</button></div></form>`, "دفعات العملاء تُدار من قسم الدفعات؛ لا تُسجل مرة أخرى كإيراد يدوي")}
     ${panel("سجل المقبوضات والمصروفات", entries.length
       ? table(["النوع","البند","التفاصيل","المبلغ","طريقة الدفع","التاريخ والوقت","إجراء"], entries.map((entry) => `<tr><td>${entry.direction === "income" ? "مقبوض" : "مصروف"}</td><td>${escapeHtml(entry.category)}</td><td>${escapeHtml(entry.description || "—")}</td><td class="${entry.direction === "income" ? "financial-credit" : "financial-debit"}">${entry.direction === "income" ? "+" : "−"}${money(entry.amount)}</td><td>${escapeHtml(entry.method)}</td><td>${formatDateTime(entry.date)}</td><td>${entry.id ? entry.orderId ? '<span class="order-delete-protected">مرتبطة بمصاريف موديل</span>' : `<button type="button" class="row-action" data-edit-cash-transaction="${escapeHtml(entry.id)}">تعديل</button> <button type="button" class="row-action order-delete-action" data-delete-cash-transaction="${escapeHtml(entry.id)}">حذف الحركة</button>` : "—"}</td></tr>`))
       : '<div class="empty-state">لا توجد حركات نقدية مسجلة.</div>')}`;
@@ -3308,7 +3312,7 @@ function clientDetailsView(client, data) {
   return `<div class="clients-toolbar client-detail-toolbar"><div><h2>${escapeHtml(client.name)} · تفاصيل الحساب والعمولة</h2><p>كود العميل: ${escapeHtml(client.code_letter || "—")} · ${escapeHtml(client.brand_name || "لا يوجد اسم محل/براند")} · رقم العميل: ${escapeHtml(client.client_number || "—")} · واتساب: ${escapeHtml(client.whatsapp || "—")}</p></div><div class="client-detail-actions"><button class="button button-primary" type="button" data-add-client-expense="${escapeHtml(client.id)}">＋ إضافة مصروف</button><button class="button button-primary" type="button" data-quick-client-payment="${escapeHtml(client.id)}">＋ إضافة دفعة</button><button class="button button-secondary" type="button" data-open-account-adjustment>خصم التسوية / الكسور</button><button class="button button-secondary" type="button" data-print-account>طباعة كشف الحساب</button><button class="button button-secondary" type="button" data-print-selected-models>طباعة الموديلات المحددة</button><button class="row-action" type="button" data-return-clients>العودة للعملاء</button></div></div>
     <div class="modal-backdrop" data-account-adjustment-modal hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="account-adjustment-title"><button class="modal-close" type="button" data-close-account-adjustment aria-label="إغلاق">×</button><h2 id="account-adjustment-title">إضافة خصم / تسوية حساب</h2><p>يُخصم القيد من رصيد العميل فقط، ولا يُسجّل كحركة نقدية بالخزنة.</p><form class="form-grid" data-account-adjustment-form="${escapeHtml(client.id)}"><label class="field"><span>مبلغ الخصم (ج.م)</span><input name="amount" type="number" min="0.01" step="0.01" required></label><label class="field"><span>سبب الخصم / البيان</span><select name="reason" required><option value="">اختر سبب التسوية</option><option>تنزيل كسور/فكة</option><option>خصم خطأ تشغيلي</option><option>إشعار خصم تسوية</option></select></label><label class="field wide"><span>تفاصيل إضافية (اختياري)</span><textarea name="notes" rows="2" maxlength="500"></textarea></label><div class="form-actions wide"><button class="button button-primary" type="submit">حفظ الخصم على الحساب</button><button class="row-action" type="button" data-close-account-adjustment>إلغاء</button></div></form></section></div>
     <div class="client-profile-compact"><span>الهاتف: ${escapeHtml(client.phone || "—")}</span><span>كاش: ${escapeHtml(client.cash_phone || "—")}</span><span>إنستا: ${escapeHtml(client.instagram || "—")}</span><span>تاريخ الملف: ${formatDateTime(client.created_at)}</span></div>
-    <div class="modal-backdrop" data-client-expense-modal hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="client-expense-title"><button class="modal-close" type="button" data-close-client-expense aria-label="إغلاق">×</button><h2 id="client-expense-title">إضافة مصروف للعميل</h2><p>حدد هل يُحمّل المبلغ على حساب العميل، وهل تم سحبه فعلياً من الخزنة.</p><form class="form-grid" data-client-expense-form="${escapeHtml(client.id)}"><label class="field"><span>بند المصروف</span><input name="category" maxlength="120" placeholder="مثل: نقل، خامات، تشغيل" required></label><label class="field"><span>قيمة المصروف (ج.م)</span><input name="amount" type="number" min="0.01" max="999999999999.99" step="0.01" required></label><label class="field wide"><span>الوصف / التفاصيل</span><textarea name="description" rows="3" maxlength="500" required></textarea></label><label class="field"><span>تاريخ المصروف</span><input name="occurredAt" type="datetime-local" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}" required></label><label class="field"><span>طريقة السحب من الخزنة (إن وُجد)</span><input name="paymentMethod" value="نقدي" maxlength="80"></label><label class="field wide checkbox-field"><input type="checkbox" name="chargeToCustomer" checked><span>على العميل — يُضاف إلى رصيده ويظهر في بوابته</span></label><label class="field wide checkbox-field"><input type="checkbox" name="cashWithdrawn"><span>سحب فعلي من الخزنة — يؤثر على النقدية</span></label><div class="form-actions wide"><button class="button button-primary" type="submit">حفظ المصروف وتحديث الحساب</button><button class="row-action" type="button" data-close-client-expense>إلغاء</button></div></form></section></div>
+    <div class="modal-backdrop" data-client-expense-modal hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="client-expense-title"><button class="modal-close" type="button" data-close-client-expense aria-label="إغلاق">×</button><h2 id="client-expense-title">إضافة مصروف للعميل</h2><p>حدد هل يُحمّل المبلغ على حساب العميل، وهل تم سحبه فعلياً من الخزنة.</p><form class="form-grid" data-client-expense-form="${escapeHtml(client.id)}"><label class="field"><span>بند المصروف</span><input name="category" maxlength="120" placeholder="مثل: نقل، خامات، تشغيل" required></label><label class="field"><span>قيمة المصروف (ج.م)</span><input name="amount" type="number" min="0.01" max="999999999999.99" step="0.01" required></label><label class="field wide"><span>الوصف / التفاصيل</span><textarea name="description" rows="3" maxlength="500" required></textarea></label><label class="field"><span>تاريخ المصروف</span><input name="occurredAt" type="datetime-local" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}" required></label><label class="field"><span>طريقة السحب من الخزنة (إن وُجد)</span><select name="paymentMethod" required><option value="">اختر طريقة الدفع</option><option value="نقدي">نقدي - كاش</option><option value="تحويل بنكي">تحويل بنكي</option><option value="إنستا باي">إنستا باي</option></select></label><label class="field wide checkbox-field"><input type="checkbox" name="chargeToCustomer" checked><span>على العميل — يُضاف إلى رصيده ويظهر في بوابته</span></label><label class="field wide checkbox-field"><input type="checkbox" name="cashWithdrawn"><span>سحب فعلي من الخزنة — يؤثر على النقدية</span></label><div class="form-actions wide"><button class="button button-primary" type="submit">حفظ المصروف وتحديث الحساب</button><button class="row-action" type="button" data-close-client-expense>إلغاء</button></div></form></section></div>
     <div class="client-management-tabs" role="tablist" aria-label="تبويبات ملف العميل">
       <button type="button" role="tab" aria-selected="${activeClientProfileTab === "overview"}" class="client-management-tab${activeClientProfileTab === "overview" ? " active" : ""}" data-client-profile-tab="overview">الملف والحساب</button>
       <button type="button" role="tab" aria-selected="${activeClientProfileTab === "waiting"}" class="client-management-tab${activeClientProfileTab === "waiting" ? " active" : ""}" data-client-profile-tab="waiting">الموديلات قيد الانتظار / لم تُقص بعد</button>
@@ -3334,7 +3338,7 @@ function clientDetailsView(client, data) {
     </div>
     <div data-client-profile-panel="statement"${activeClientProfileTab === "statement" ? "" : " hidden"}>
     <section class="client-detail-section">${panel("كشف الحساب والسجل المالي", `<p>يعرض ملخص رصيد كل طلب حسب حالته، ثم التسليمات والدفعات والمصروفات والخصومات والتسويات بترتيب زمني.</p>${orderLedgerSection}${clientFinancialStatementMarkup(financialEntries)}`)}</section>
-    <div class="modal-backdrop" data-client-payment-modal hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="client-payment-edit-title"><button class="modal-close" type="button" data-close-client-payment aria-label="إغلاق">×</button><h2 id="client-payment-edit-title">تعديل دفعة العميل</h2><form class="form-grid" data-client-payment-edit-form><input type="hidden" name="recordId"><label class="field"><span>المبلغ (ج.م)</span><input name="amount" type="number" min="0.01" step="0.01" required></label><label class="field"><span>التاريخ</span><input name="date" type="date" required></label><label class="field"><span>طريقة الدفع</span><select name="method"><option>تحويل بنكي</option><option>نقدي</option><option>محفظة إلكترونية</option></select></label><label class="field"><span>رقم الطلبية / المرجع</span><input name="reference" maxlength="160"></label><label class="field wide"><span>ملاحظات</span><input name="notes" maxlength="500"></label><div class="form-actions wide"><button class="button button-primary" type="submit">حفظ التعديل</button><button class="row-action" type="button" data-close-client-payment>إلغاء</button></div></form></section></div>
+    <div class="modal-backdrop" data-client-payment-modal hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="client-payment-edit-title"><button class="modal-close" type="button" data-close-client-payment aria-label="إغلاق">×</button><h2 id="client-payment-edit-title">تعديل دفعة العميل</h2><form class="form-grid" data-client-payment-edit-form><input type="hidden" name="recordId"><label class="field"><span>المبلغ (ج.م)</span><input name="amount" type="number" min="0.01" step="0.01" required></label><label class="field"><span>التاريخ</span><input name="date" type="date" required></label><label class="field"><span>طريقة الدفع</span><select name="method" required><option value="">اختر طريقة الدفع</option><option value="نقدي">نقدي - كاش</option><option value="تحويل بنكي">تحويل بنكي</option><option value="إنستا باي">إنستا باي</option></select></label><label class="field"><span>رقم الطلبية / المرجع</span><input name="reference" maxlength="160"></label><label class="field wide"><span>ملاحظات</span><input name="notes" maxlength="500"></label><div class="form-actions wide"><button class="button button-primary" type="submit">حفظ التعديل</button><button class="row-action" type="button" data-close-client-payment>إلغاء</button></div></form></section></div>
     </div>
     <div data-client-profile-panel="overview"${activeClientProfileTab === "overview" ? "" : " hidden"}>
     <section class="client-detail-section"><header class="section-heading"><div><h2>الموديلات التي تم تسعيرها</h2><p>يُحتسب المطلوب المالي على الكمية التي تم تسليمها.</p></div><button class="button button-secondary" type="button" data-open-order-for-client="${escapeHtml(client.id)}">＋ إضافة موديل للعميل</button></header>${pricedOrders.length ? `<div class="order-cards">${pricedOrders.map((order) => orderCard(order)).join("")}</div>` : '<div class="empty-state">لا توجد موديلات مسعّرة في الفترة الحالية.</div>'}</section>
@@ -3412,10 +3416,12 @@ function modelSizeColorCardsMarkup(order) {
             + (occurrence <= aggregateCount % Math.max(multiplicities[size] || 1, 1) ? 1 : 0)
           : 0;
       const color = /^#[0-9A-F]{6}$/.test(entry.color) ? entry.color : "";
-      return `<div class="model-size-color-item"><span class="model-size-color-name">${color ? `<i class="color-breakdown-swatch" style="--swatch-color:${color}"></i>` : ""}${escapeHtml(entry.name || "اسم اللون غير مسجل")}</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(count)} قطعة</strong></div>`;
+      return `<div class="model-size-color-item"><span class="model-size-color-name">${color ? `<i class="color-breakdown-swatch" style="--swatch-color:${color}"></i>` : ""}${escapeHtml(entry.name || "اسم اللون غير مسجل")}</span><span class="model-size-color-total">${multiplicities[size] > 1 ? `<small>التكرار ${occurrence} من ${multiplicities[size]}</small>` : ""}<strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(count)} قطعة</strong></span></div>`;
     }).join("");
     const fallbackCount = Number(sizeData.counts[size] || 0);
-    return `<article class="model-size-card"><header><span>${escapeHtml(SIZE_TYPE_LABELS[sizeData.type] || "المقاس")} · ${escapeHtml(size)}</span>${multiplicities[size] > 1 ? `<small>التكرار ${occurrence} من ${multiplicities[size]}</small>` : ""}</header><div class="model-size-color-list">${colorCards || `<div class="model-size-color-item"><span>إجمالي المقاس</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(Math.floor(fallbackCount / Math.max(multiplicities[size] || 1, 1)))} قطعة</strong></div>`}</div></article>`;
+    const occurrenceCount = Math.max(multiplicities[size] || 1, 1);
+    const count = Math.floor(fallbackCount / occurrenceCount) + (occurrence <= fallbackCount % occurrenceCount ? 1 : 0);
+    return `<article class="model-size-card"><header><span>${escapeHtml(SIZE_TYPE_LABELS[sizeData.type] || "المقاس")} · ${escapeHtml(size)}</span></header><div class="model-size-color-list">${colorCards || `<div class="model-size-color-item"><span>إجمالي المقاس</span><span class="model-size-color-total">${occurrenceCount > 1 ? `<small>التكرار ${occurrence} من ${occurrenceCount}</small>` : ""}<strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(count)} قطعة</strong></span></div>`}</div></article>`;
   }).join("")}</div>`;
 }
 
@@ -4347,7 +4353,7 @@ function adminView(data, accounts) {
         <button type="button" role="tab" aria-selected="${activeFinanceTab === "ledger"}" class="client-management-tab${activeFinanceTab === "ledger" ? " active" : ""}" data-finance-tab="ledger">الداخل والخارج</button>
       </div>
       <div data-finance-panel="payments"${activeFinanceTab === "payments" ? "" : " hidden"}>
-        ${panel("تسجيل دفعة مالية", `<div class="panel-body"><form id="payment-form" class="form-grid payment-form"><input type="hidden" name="editIndex" value=""><div class="field"><label for="payment-client">العميل</label><select id="payment-client" name="customerId" required><option value="">اختر العميل</option>${paymentClientOptions}</select></div><div class="field"><label for="payment-amount">المبلغ المدفوع (ج.م)</label><input id="payment-amount" name="amount" type="number" min="0.01" step="0.01" required></div><div class="field"><label for="payment-date">تاريخ الدفعة</label><input id="payment-date" name="date" type="date" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10)}" required></div><div class="field"><label for="payment-method">طريقة الدفع</label><select id="payment-method" name="method"><option>تحويل بنكي</option><option>نقدي</option><option>محفظة إلكترونية</option></select></div><div class="field"><label for="payment-reference">رقم الطلبية / مرجع</label><input id="payment-reference" name="reference" autocomplete="off"><small>تُخصم الدفعة من بضاعة تحت التسليم فقط إذا طابق المرجع كود أو رقم طلب واحد. الدفعات العامة لا تُوزع تلقائياً على الطلبات غير المسلّمة.</small></div><div class="field"><label for="payment-notes">ملاحظات</label><input id="payment-notes" name="notes"></div><div class="form-actions"><button class="button button-primary" type="submit">تسجيل الدفعة</button><button class="row-action" type="button" data-cancel-edit hidden>إلغاء التعديل</button></div></form></div>`, "تُربط الدفعة بملف العميل المحدد، ويحدد المرجع الطلب عند تخصيصها له")}
+        ${panel("تسجيل دفعة مالية", `<div class="panel-body"><form id="payment-form" class="form-grid payment-form"><input type="hidden" name="editIndex" value=""><div class="field"><label for="payment-client">العميل</label><select id="payment-client" name="customerId" required><option value="">اختر العميل</option>${paymentClientOptions}</select></div><div class="field"><label for="payment-amount">المبلغ المدفوع (ج.م)</label><input id="payment-amount" name="amount" type="number" min="0.01" step="0.01" required></div><div class="field"><label for="payment-date">تاريخ الدفعة</label><input id="payment-date" name="date" type="date" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10)}" required></div><div class="field"><label for="payment-method">طريقة الدفع</label><select id="payment-method" name="method" required><option value="">اختر طريقة الدفع</option><option value="نقدي">نقدي - كاش</option><option value="تحويل بنكي">تحويل بنكي</option><option value="إنستا باي">إنستا باي</option></select></div><div class="field"><label for="payment-reference">رقم الطلبية / مرجع</label><input id="payment-reference" name="reference" autocomplete="off"><small>تُخصم الدفعة من بضاعة تحت التسليم فقط إذا طابق المرجع كود أو رقم طلب واحد. الدفعات العامة لا تُوزع تلقائياً على الطلبات غير المسلّمة.</small></div><div class="field"><label for="payment-notes">ملاحظات</label><input id="payment-notes" name="notes"></div><div class="form-actions"><button class="button button-primary" type="submit">تسجيل الدفعة</button><button class="row-action" type="button" data-cancel-edit hidden>إلغاء التعديل</button></div></form></div>`, "تُربط الدفعة بملف العميل المحدد، ويحدد المرجع الطلب عند تخصيصها له")}
         ${panel("سجل الدفعات المالية", `<div class="panel-body"><div class="payment-filter field"><label for="payment-filter-client">تصفية حسب العميل</label><select id="payment-filter-client"><option value="">كل العملاء</option>${paymentFilterOptions}</select></div>${table(["العميل","المبلغ","التاريخ والوقت","طريقة الدفع","رقم الطلبية / المرجع","ملاحظات","إجراء"], paymentRows(data.payments, true, data.clients))}</div>`)}
       </div>
       <div data-finance-panel="ledger"${activeFinanceTab === "ledger" ? "" : " hidden"}>${cashLedgerView(data)}</div>
@@ -4401,7 +4407,7 @@ function adminView(data, accounts) {
         ${panel("إعادة ضبط النظام", `<div class="panel-body"><p>مسح جميع بيانات المصنع وحسابات المستخدمين الأخرى نهائياً، مع الإبقاء على حساب الأدمن الحالي فقط.</p><button class="button button-danger" type="button" data-reset-factory>مسح البيانات وإعادة النظام للبداية</button></div>`)}
       </div>
     </section>
-    <div class="modal-backdrop" id="client-account-modal" hidden><section class="modal-card compact-view-modal" role="dialog" aria-modal="true" aria-labelledby="client-account-modal-title"><div class="modal-control-bar"><div class="modal-control-group"><button class="modal-control-button modal-control-back" type="button" data-back-client-view aria-label="رجوع إلى الشاشة السابقة" title="رجوع"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/><path d="M9 12h11"/></svg></button></div><button class="modal-control-button modal-control-close" type="button" data-close-client-view aria-label="إغلاق ملف العميل" title="إغلاق"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18"/><path d="M6 6l12 12"/></svg></button></div><div id="client-account-modal-content"></div></section></div>
+    <div class="modal-backdrop" id="client-account-modal" hidden><section class="modal-card compact-view-modal" role="dialog" aria-modal="true" aria-labelledby="client-account-modal-title"><div class="modal-control-bar">    <div class="modal-control-group" hidden><button class="modal-control-button modal-control-back" type="button" data-back-client-view aria-label="رجوع إلى الشاشة السابقة" title="رجوع"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/><path d="M9 12h11"/></svg></button></div><button class="modal-control-button modal-control-close" type="button" data-close-client-view aria-label="إغلاق ملف العميل" title="إغلاق"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18"/><path d="M6 6l12 12"/></svg></button></div><div id="client-account-modal-content"></div></section></div>
     <div class="modal-backdrop" id="model-details-modal" hidden><section class="modal-card compact-view-modal" role="dialog" aria-modal="true" aria-labelledby="model-details-title"><div class="modal-control-bar"><div class="modal-control-group"><button class="modal-control-button modal-control-back" type="button" data-back-model-view aria-label="رجوع إلى الشاشة السابقة" title="رجوع"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/><path d="M9 12h11"/></svg></button></div><button class="modal-control-button modal-control-close" type="button" data-close-model-view aria-label="إغلاق تفاصيل الموديل" title="إغلاق"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18"/><path d="M6 6l12 12"/></svg></button></div><div id="model-details-modal-content"></div><div class="form-actions"><button class="button button-secondary" type="button" data-print-model-details>طباعة الموديل</button><button class="button button-secondary" type="button" data-edit-model-from-details>تعديل الطلبية</button><button class="row-action order-delete-action" type="button" data-action="delete-order">حذف الطلبية</button><button class="row-action" type="button" data-close-model-view>إغلاق</button></div></section></div>
     `;
 }
@@ -8067,7 +8073,7 @@ function render(session, data, accounts) {
     </div>
     <div class="modal-backdrop production-details-modal" id="production-details-modal" hidden>
       <section class="modal-card production-details-modal-card" role="dialog" aria-modal="true" aria-label="تفاصيل الإنتاج">
-        <div class="modal-control-bar"><div class="modal-control-group"><button class="modal-control-button modal-control-back" type="button" data-back-production-details aria-label="رجوع إلى الشاشة السابقة" title="رجوع"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/><path d="M9 12h11"/></svg></button></div><button class="modal-control-button modal-control-close" type="button" data-close-production-details aria-label="إغلاق التفاصيل" title="إغلاق"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18"/><path d="M6 6l12 12"/></svg></button></div>
+        <div class="modal-control-bar"><div class="modal-control-group"><button class="modal-control-button modal-control-back" type="button" data-back-production-details hidden aria-label="رجوع إلى الشاشة السابقة" title="رجوع"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/><path d="M9 12h11"/></svg></button></div><button class="modal-control-button modal-control-close" type="button" data-close-production-details aria-label="إغلاق التفاصيل" title="إغلاق"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18"/><path d="M6 6l12 12"/></svg></button></div>
         <div data-production-details-content></div>
       </section>
     </div>`;
@@ -9595,8 +9601,8 @@ function bindClientDetailActions(session) {
       form.elements.recordId.value = payment._recordId;
       form.elements.amount.value = payment.amount;
       form.elements.date.value = String(payment.date || payment._createdAt || payment.created_at || "").slice(0, 10);
-      form.elements.method.value = payment.method || "نقدي";
-      if (![...form.elements.method.options].some((option) => option.value === form.elements.method.value)) {
+      form.elements.method.value = payment.method || "";
+      if (payment.method && ![...form.elements.method.options].some((option) => option.value === form.elements.method.value)) {
         form.elements.method.add(new Option(form.elements.method.value, form.elements.method.value));
       }
       form.elements.reference.value = payment.reference || payment.orderReference || "";
@@ -9622,8 +9628,9 @@ function bindClientDetailActions(session) {
       const values = new FormData(form);
       const amount = Number(values.get("amount"));
       const date = String(values.get("date") || "");
-      if (!Number.isFinite(amount) || amount <= 0 || !date) {
-        window.factoryUI.toast("أدخل مبلغًا موجبًا وتاريخًا صالحًا للدفعة.", "error");
+      const method = String(values.get("method") || "").trim();
+      if (!Number.isFinite(amount) || amount <= 0 || !date || !method) {
+        window.factoryUI.toast("أدخل مبلغًا موجبًا وتاريخًا صالحًا واختر طريقة الدفع.", "error");
         return;
       }
       submit.disabled = true;
@@ -9634,7 +9641,7 @@ function bindClientDetailActions(session) {
           requested_customer_id: selectedClientId,
           requested_amount: amount,
           requested_date: date,
-          requested_method: String(values.get("method") || "غير محدد"),
+          requested_method: method,
           requested_reference: String(values.get("reference") || "").trim(),
           requested_notes: String(values.get("notes") || "").trim()
         });
@@ -9749,8 +9756,9 @@ function bindClientDetailActions(session) {
     const amount = Number(values.get("amount"));
     const category = String(values.get("category") || "").trim();
     const description = String(values.get("description") || "").trim();
-    if (!Number.isFinite(amount) || amount <= 0 || !category || !description || Number.isNaN(occurredAt.getTime())) {
-      window.factoryUI.toast("أدخل بنداً ووصفاً ومبلغاً موجباً وتاريخاً صحيحاً للمصروف.", "error");
+    const paymentMethod = String(values.get("paymentMethod") || "").trim();
+    if (!Number.isFinite(amount) || amount <= 0 || !category || !description || !paymentMethod || Number.isNaN(occurredAt.getTime())) {
+      window.factoryUI.toast("أدخل بنداً ووصفاً ومبلغاً موجباً وتاريخاً صحيحاً واختر طريقة الدفع.", "error");
       return;
     }
     const button = form.querySelector('[type="submit"]');
@@ -9764,7 +9772,7 @@ function bindClientDetailActions(session) {
         requested_amount: amount,
         requested_charge_to_customer: values.has("chargeToCustomer"),
         requested_cash_withdrawn: values.has("cashWithdrawn"),
-        requested_payment_method: String(values.get("paymentMethod") || "نقدي").trim(),
+        requested_payment_method: paymentMethod,
         requested_occurred_at: occurredAt.toISOString()
       });
       if (error?.code === "PGRST202") throw new Error("دالة إضافة مصروف الحساب غير موجودة. شغّل أحدث نسخة من supabase/schema.sql في SQL Editor.");
@@ -10971,6 +10979,7 @@ function bindProductionDetailsModal(session) {
     const modal = document.querySelector("#production-details-modal");
     if (!modal) return;
     modal.hidden = true;
+    modal.querySelector("[data-back-production-details]").hidden = true;
     modal.querySelector("[data-production-details-content]").replaceChildren();
     lastTrigger?.focus();
     lastTrigger = null;
@@ -10986,6 +10995,7 @@ function bindProductionDetailsModal(session) {
       }
       lastTrigger = clientModelToggle;
       modal.querySelector("[data-production-details-content]").innerHTML = clientOrderDetailsMarkup(order);
+      modal.querySelector("[data-back-production-details]").hidden = false;
       modal.hidden = false;
       modal.querySelector("[data-close-production-details]").focus();
       return;
@@ -11027,6 +11037,7 @@ function bindProductionDetailsModal(session) {
       }
       lastTrigger = trigger;
       modal.querySelector("[data-production-details-content]").innerHTML = renderDetails(item);
+      modal.querySelector("[data-back-production-details]").hidden = false;
       modal.hidden = false;
       modal.querySelector("[data-close-production-details]").focus();
       return;
@@ -11236,108 +11247,122 @@ function bindActions(session) {
     });
   }
   const cashTransactionForm = document.querySelector("#cash-transaction-form");
-  const resetCashTransactionForm = () => {
-    cashTransactionForm.reset();
-    cashTransactionForm.elements.transactionId.value = "";
-    cashTransactionForm.elements.method.value = "نقدي";
-    cashTransactionForm.elements.occurredAt.value = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16);
-    cashTransactionForm.querySelector('[type="submit"]').textContent = "حفظ الحركة النقدية";
-    cashTransactionForm.querySelector("[data-cancel-cash-edit]").hidden = true;
-  };
-  cashTransactionForm.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const button = cashTransactionForm.querySelector('[type="submit"]');
-    button.disabled = true;
-    let saved = false;
-    try {
-      const occurredAt = new Date(cashTransactionForm.elements.occurredAt.value);
-      if (Number.isNaN(occurredAt.getTime())) throw new Error("أدخل تاريخ ووقتًا صالحين.");
-      const transactionId = cashTransactionForm.elements.transactionId.value;
-      const args = {
-        requested_direction: cashTransactionForm.elements.direction.value,
-        requested_category: String(cashTransactionForm.elements.category.value).trim(),
-        requested_description: String(cashTransactionForm.elements.description.value).trim(),
-        requested_amount: Number(cashTransactionForm.elements.amount.value),
-        requested_payment_method: String(cashTransactionForm.elements.method.value).trim(),
-        requested_occurred_at: occurredAt.toISOString()
-      };
-      const { error } = transactionId
-        ? await supabaseClient.rpc("update_factory_cash_transaction", {
-          requested_transaction_id: transactionId,
-          ...args
-        })
-        : await supabaseClient.rpc("save_factory_cash_transaction", {
-          ...args,
-          requested_customer_id: null
+  if (cashTransactionForm) {
+    const resetCashTransactionForm = () => {
+      cashTransactionForm.querySelectorAll("[data-legacy-payment-method]").forEach((option) => option.remove());
+      cashTransactionForm.reset();
+      cashTransactionForm.elements.transactionId.value = "";
+      cashTransactionForm.elements.method.value = "";
+      cashTransactionForm.elements.occurredAt.value = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+      cashTransactionForm.querySelector('[type="submit"]').textContent = "حفظ الحركة النقدية";
+      cashTransactionForm.querySelector("[data-cancel-cash-edit]").hidden = true;
+    };
+    cashTransactionForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const button = cashTransactionForm.querySelector('[type="submit"]');
+      button.disabled = true;
+      let saved = false;
+      try {
+        const paymentMethod = String(cashTransactionForm.elements.method.value).trim();
+        if (!paymentMethod) {
+          window.factoryUI.toast("اختر طريقة الدفع قبل حفظ الحركة النقدية.", "error");
+          return;
+        }
+        const occurredAt = new Date(cashTransactionForm.elements.occurredAt.value);
+        if (Number.isNaN(occurredAt.getTime())) throw new Error("أدخل تاريخ ووقتًا صالحين.");
+        const transactionId = cashTransactionForm.elements.transactionId.value;
+        const args = {
+          requested_direction: cashTransactionForm.elements.direction.value,
+          requested_category: String(cashTransactionForm.elements.category.value).trim(),
+          requested_description: String(cashTransactionForm.elements.description.value).trim(),
+          requested_amount: Number(cashTransactionForm.elements.amount.value),
+          requested_payment_method: paymentMethod,
+          requested_occurred_at: occurredAt.toISOString()
+        };
+        const { error } = transactionId
+          ? await supabaseClient.rpc("update_factory_cash_transaction", {
+            requested_transaction_id: transactionId,
+            ...args
+          })
+          : await supabaseClient.rpc("save_factory_cash_transaction", {
+            ...args,
+            requested_customer_id: null
+          });
+        if (error?.code === "PGRST202") throw new Error("دالة سجل النقدية غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+        if (error) throw error;
+        saved = true;
+        resetCashTransactionForm();
+        await refreshDashboard(session);
+        window.factoryUI.toast(transactionId ? "تم تعديل الحركة النقدية وتحديث السجل." : "تم تسجيل الحركة النقدية وتحديث رصيد السجل.");
+      } catch (error) {
+        reportDashboardFailure(session, saved
+          ? "تم تسجيل الحركة، لكن تعذر تحديث الشاشة"
+          : "تعذر تسجيل الحركة النقدية", error);
+      } finally {
+        button.disabled = false;
+      }
+    });
+    cashTransactionForm.querySelector("[data-cancel-cash-edit]").addEventListener("click", resetCashTransactionForm);
+    document.querySelectorAll("[data-edit-cash-transaction]").forEach((button) => button.addEventListener("click", () => {
+      const transaction = dashboardData.cashTransactions.find((entry) => entry.id === button.dataset.editCashTransaction);
+      if (!transaction) {
+        window.factoryUI.toast("تعذر العثور على الحركة النقدية.", "error");
+        return;
+      }
+      if (transaction.order_id) {
+        window.factoryUI.toast("مصاريف التشغيل المرتبطة بالموديل تُعدّل من شاشة تعديل الطلبية.", "error");
+        return;
+      }
+      const occurredAt = new Date(transaction.occurred_at);
+      cashTransactionForm.elements.transactionId.value = transaction.id;
+      cashTransactionForm.elements.direction.value = transaction.direction;
+      cashTransactionForm.elements.category.value = transaction.category;
+      cashTransactionForm.elements.description.value = transaction.description || "";
+      cashTransactionForm.elements.amount.value = transaction.amount;
+      const paymentMethod = transaction.payment_method || "غير محدد";
+      if (![...cashTransactionForm.elements.method.options].some((option) => option.value === paymentMethod)) {
+        const legacyOption = new Option(paymentMethod, paymentMethod);
+        legacyOption.dataset.legacyPaymentMethod = "";
+        cashTransactionForm.elements.method.add(legacyOption);
+      }
+      cashTransactionForm.elements.method.value = paymentMethod;
+      cashTransactionForm.elements.occurredAt.value = new Date(occurredAt.getTime() - occurredAt.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+      cashTransactionForm.querySelector('[type="submit"]').textContent = "حفظ تعديل الحركة";
+      cashTransactionForm.querySelector("[data-cancel-cash-edit]").hidden = false;
+      if (button.closest("#client-details")) {
+        document.querySelector('[data-finance-tab="ledger"]')?.click();
+        activateDashboardView("finance");
+      }
+      cashTransactionForm.scrollIntoView({ behavior: "smooth", block: "center" });
+      cashTransactionForm.elements.category.focus({ preventScroll: true });
+    }));
+    document.querySelectorAll("[data-delete-cash-transaction]").forEach((button) => button.addEventListener("click", async () => {
+      const transaction = dashboardData.cashTransactions.find((entry) => entry.id === button.dataset.deleteCashTransaction);
+      if (!transaction) {
+        window.factoryUI.toast("تعذر العثور على الحركة النقدية.", "error");
+        return;
+      }
+      if (!await window.factoryUI.confirmAction({
+        title: "حذف حركة نقدية",
+        message: `سيتم حذف حركة ${transaction.direction === "income" ? "الإيراد" : "المصروف"} بقيمة ${money(transaction.amount)} نهائياً من السجل.`,
+        confirmLabel: "حذف الحركة",
+        danger: true
+      })) return;
+      button.disabled = true;
+      try {
+        const { error } = await supabaseClient.rpc("delete_factory_cash_transaction", {
+          requested_transaction_id: transaction.id
         });
-      if (error?.code === "PGRST202") throw new Error("دالة سجل النقدية غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
-      if (error) throw error;
-      saved = true;
-      resetCashTransactionForm();
-      await refreshDashboard(session);
-      window.factoryUI.toast(transactionId ? "تم تعديل الحركة النقدية وتحديث السجل." : "تم تسجيل الحركة النقدية وتحديث رصيد السجل.");
-    } catch (error) {
-      reportDashboardFailure(session, saved
-        ? "تم تسجيل الحركة، لكن تعذر تحديث الشاشة"
-        : "تعذر تسجيل الحركة النقدية", error);
-    } finally {
-      button.disabled = false;
-    }
-  });
-  cashTransactionForm.querySelector("[data-cancel-cash-edit]").addEventListener("click", resetCashTransactionForm);
-  document.querySelectorAll("[data-edit-cash-transaction]").forEach((button) => button.addEventListener("click", () => {
-    const transaction = dashboardData.cashTransactions.find((entry) => entry.id === button.dataset.editCashTransaction);
-    if (!transaction) {
-      window.factoryUI.toast("تعذر العثور على الحركة النقدية.", "error");
-      return;
-    }
-    if (transaction.order_id) {
-      window.factoryUI.toast("مصاريف التشغيل المرتبطة بالموديل تُعدّل من شاشة تعديل الطلبية.", "error");
-      return;
-    }
-    const occurredAt = new Date(transaction.occurred_at);
-    cashTransactionForm.elements.transactionId.value = transaction.id;
-    cashTransactionForm.elements.direction.value = transaction.direction;
-    cashTransactionForm.elements.category.value = transaction.category;
-    cashTransactionForm.elements.description.value = transaction.description || "";
-    cashTransactionForm.elements.amount.value = transaction.amount;
-    cashTransactionForm.elements.method.value = transaction.payment_method || "غير محدد";
-    cashTransactionForm.elements.occurredAt.value = new Date(occurredAt.getTime() - occurredAt.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
-    cashTransactionForm.querySelector('[type="submit"]').textContent = "حفظ تعديل الحركة";
-    cashTransactionForm.querySelector("[data-cancel-cash-edit]").hidden = false;
-    if (button.closest("#client-details")) {
-      document.querySelector('[data-finance-tab="ledger"]')?.click();
-      activateDashboardView("finance");
-    }
-    cashTransactionForm.scrollIntoView({ behavior: "smooth", block: "center" });
-    cashTransactionForm.elements.category.focus({ preventScroll: true });
-  }));
-  document.querySelectorAll("[data-delete-cash-transaction]").forEach((button) => button.addEventListener("click", async () => {
-    const transaction = dashboardData.cashTransactions.find((entry) => entry.id === button.dataset.deleteCashTransaction);
-    if (!transaction) {
-      window.factoryUI.toast("تعذر العثور على الحركة النقدية.", "error");
-      return;
-    }
-    if (!await window.factoryUI.confirmAction({
-      title: "حذف حركة نقدية",
-      message: `سيتم حذف حركة ${transaction.direction === "income" ? "الإيراد" : "المصروف"} بقيمة ${money(transaction.amount)} نهائياً من السجل.`,
-      confirmLabel: "حذف الحركة",
-      danger: true
-    })) return;
-    button.disabled = true;
-    try {
-      const { error } = await supabaseClient.rpc("delete_factory_cash_transaction", {
-        requested_transaction_id: transaction.id
-      });
-      if (error?.code === "PGRST202") throw new Error("دالة حذف الحركة النقدية غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
-      if (error) throw error;
-      await refreshDashboard(session);
-      window.factoryUI.toast("تم حذف الحركة النقدية وتحديث سجل الخزينة.");
-    } catch (error) {
-      button.disabled = false;
-      reportDashboardFailure(session, "تعذر حذف الحركة النقدية", error);
-    }
-  }));
+        if (error?.code === "PGRST202") throw new Error("دالة حذف الحركة النقدية غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+        if (error) throw error;
+        await refreshDashboard(session);
+        window.factoryUI.toast("تم حذف الحركة النقدية وتحديث سجل الخزينة.");
+      } catch (error) {
+        button.disabled = false;
+        reportDashboardFailure(session, "تعذر حذف الحركة النقدية", error);
+      }
+    }));
+  }
   document.querySelectorAll("#clients [data-quick-client-payment]").forEach((button) => {
     button.addEventListener("click", () => openClientPayment(button.dataset.quickClientPayment));
   });

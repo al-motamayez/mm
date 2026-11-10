@@ -1215,6 +1215,188 @@ body[data-dashboard-role] .model-preview-link:focus-visible {
   }
 }
 
+body[data-dashboard-role] .model-image-trigger {
+  overflow: hidden;
+  background: #101820;
+}
+
+body[data-dashboard-role] .model-image-trigger .model-thumbnail,
+body[data-dashboard-role] .model-image-gallery .model-thumbnail,
+body[data-dashboard-role] .register-model-cell .model-thumbnail {
+  max-width: 100%;
+  object-fit: contain;
+  object-position: center;
+  border-color: var(--app-line-strong);
+  background: #101820;
+}
+
+body[data-dashboard-role] .order-card .model-image-trigger,
+body[data-dashboard-role] .client-order-card .model-image-trigger,
+body[data-dashboard-role] .client-waiting-model-card .model-image-trigger,
+body[data-dashboard-role] .production-compact-heading .model-image-trigger {
+  aspect-ratio: 1;
+  height: auto;
+}
+
+body[data-dashboard-role] .model-size-card,
+body[data-dashboard-role] .model-size-color-item,
+body[data-dashboard-role] .model-image-slot,
+body[data-dashboard-role] .order-modal-card .form-section,
+body[data-dashboard-role] .order-modal-card .model-allocation,
+body[data-dashboard-role] .client-model-fabric-type,
+body[data-dashboard-role] .model-expense-customer-toggle {
+  border-color: var(--app-line);
+  color: var(--app-text);
+  background: #17222d;
+}
+
+body[data-dashboard-role] .model-size-card {
+  overflow: hidden;
+}
+
+body[data-dashboard-role] .model-size-card > header {
+  color: #e5edf2;
+  background: #1a2631;
+}
+
+body[data-dashboard-role] .model-size-color-item {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--app-line);
+  border-radius: 9px;
+}
+
+body[data-dashboard-role] .model-size-color-name {
+  min-width: 0;
+  color: #c5d1da;
+  overflow-wrap: anywhere;
+}
+
+body[data-dashboard-role] .model-size-color-total {
+  display: inline-flex;
+  min-width: 0;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 5px 9px;
+}
+
+body[data-dashboard-role] .model-size-color-total small {
+  color: var(--app-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+body[data-dashboard-role] .model-size-color-total strong {
+  color: #e5edf2;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+body[data-dashboard-role] .size-picker[data-size-duplicates="true"] .size-choice {
+  border-color: var(--app-line);
+  border-radius: var(--radius-control);
+  background: #17222d;
+}
+
+body[data-dashboard-role] .size-toggle {
+  border-color: var(--app-line-strong);
+  color: #d3dee6;
+  background: #202d38;
+}
+
+body[data-dashboard-role] .size-toggle[aria-pressed="true"] {
+  border-color: #47bb90;
+  color: #071d14;
+  background: #4bc49a;
+}
+
+body[data-dashboard-role] #cash-transaction-form {
+  max-width: 820px;
+  gap: 16px;
+}
+
+body[data-dashboard-role] #cash-transaction-form > .field {
+  align-content: start;
+  gap: 7px;
+  min-width: 0;
+}
+
+body[data-dashboard-role] #cash-transaction-form .field > small {
+  font-size: var(--font-small);
+  line-height: 1.65;
+}
+
+body[data-dashboard-role] #model-expense-modal .modal-card > p {
+  margin: 8px 0 18px;
+  padding: 10px 12px;
+  border: 1px solid var(--app-line);
+  border-radius: var(--radius-control);
+  color: #d1dce3;
+  background: #17222d;
+  overflow-wrap: anywhere;
+}
+
+body[data-dashboard-role] #model-expense-modal .modal-form {
+  gap: 10px;
+}
+
+body[data-dashboard-role] #model-expense-modal .modal-form > label:not(.field) {
+  margin: 2px 0 -5px;
+  color: #d4dfe6;
+  font-size: var(--font-label);
+}
+
+body[data-dashboard-role] .modal-control-bar,
+body[data-dashboard-role] .modal-card > .modal-view-heading,
+body[data-dashboard-role] .modal-card > #model-details-modal-content > .modal-view-heading,
+body[data-dashboard-role] .modal-card > #client-account-modal-content > .modal-view-heading,
+body[data-dashboard-role] .modal-card [data-production-details-content] > .client-model-details > .production-details-heading,
+body[data-dashboard-role] .modal-card [data-production-details-content] > .production-details-heading {
+  background: #17222d;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+body[data-dashboard-role] .modal-control-bar {
+  background: #19242e;
+}
+
+body[data-dashboard-role] .topbar {
+  background: #111a23;
+}
+
+body[data-dashboard-role] .model-image-field [data-model-image-preview] .model-image-trigger,
+body[data-dashboard-role] .model-image-slot [data-model-image-preview] .model-image-trigger {
+  width: min(100%, 280px);
+  height: auto;
+  aspect-ratio: 1;
+}
+
+body[data-dashboard-role] .model-image-slot [data-model-image-preview] .model-thumbnail,
+body[data-dashboard-role] .model-image-field [data-model-image-preview] .model-thumbnail {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+@media (max-width: 700px) {
+  body[data-dashboard-role] .model-size-color-item {
+    align-items: flex-start;
+  }
+
+  body[data-dashboard-role] .model-size-color-total {
+    align-items: flex-end;
+    flex-direction: column;
+    gap: 2px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   body[data-dashboard-role] *,
   body[data-dashboard-role] *::before,
