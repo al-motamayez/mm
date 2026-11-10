@@ -1318,12 +1318,14 @@ function cuttingStoryDetailsMarkup(story) {
   const colors = parseColorPlyData(story.color_ply_data);
   const sizeData = parseSizeData(story.size_data);
   const sizes = orderedSizeEntries(sizeData);
-  const occurrences = new Map();
-  const breakdown = colors.flatMap((color) => sizes.map((size) => {
-    const occurrence = (occurrences.get(size) || 0) + 1;
-    occurrences.set(size, occurrence);
-    return `<tr><td>${escapeHtml(color.name || "اسم اللون غير مسجل")}</td><td>${escapeHtml(size)}${(sizeData.multiplicities[size] || 0) > 1 ? ` · التكرار ${occurrence}` : ""}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(color.plys)}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(color.plys)} قطعة</td></tr>`;
-  }));
+  const breakdown = colors.flatMap((color) => {
+    const occurrences = new Map();
+    return sizes.map((size) => {
+      const occurrence = (occurrences.get(size) || 0) + 1;
+      occurrences.set(size, occurrence);
+      return `<tr><td>${escapeHtml(color.name || "اسم اللون غير مسجل")}</td><td>${escapeHtml(size)}${(sizeData.multiplicities[size] || 0) > 1 ? ` · التكرار ${occurrence}` : ""}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(color.plys)}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(color.plys)} قطعة</td></tr>`;
+    });
+  });
   const fabricLines = Array.isArray(story.fabric_lines) ? story.fabric_lines : [];
   return `<header class="production-details-heading">${modelImageMarkup(story.model_image_url)}<div><small>تفاصيل قصة القص</small><h2>${escapeHtml(story.model_name || story.model_number || "قصة بدون اسم")}</h2><p>كود الموديل بالنظام: ${escapeHtml(story.factory_model_code || "—")} · كود/رقم الموديل للعميل: ${escapeHtml(story.model_number || "—")} · العميل: ${escapeHtml(story.customer_name || "—")}</p></div></header>
     <dl class="sewing-order-facts"><div><dt>إجمالي القطع</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(story.total_pieces)} قطعة</dd></div><div><dt>عدد الرقات</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(story.ply_count || 0)}</dd></div>${fabricLines.length ? "" : `<div><dt>عدد الأتواب</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(story.bolt_count || 0)} توب</dd></div><div><dt>كمية القماش</dt><dd>${new Intl.NumberFormat("ar-EG-u-nu-latn", { maximumFractionDigits: 3 }).format(story.fabric_quantity || 0)} ${escapeHtml(story.fabric_unit || "")}</dd></div><div><dt>القماش</dt><dd>${escapeHtml(story.fabric || "—")}</dd></div>`}<div><dt>المورد / تفاصيل المصدر</dt><dd>${escapeHtml(story.fabric_details || "—")}</dd></div><div><dt>مسؤول القص</dt><dd>${escapeHtml(story.submitted_by_name || "مشرف القص")}</dd></div></dl>
@@ -1600,6 +1602,27 @@ function sizeSummary(value) {
   return countedSizes.length
     ? `${SIZE_TYPE_LABELS[sizeData.type] || ""} ${countedSizes.join(" · ")} · الإجمالي: ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(totalPieces)} قطعة`.trim()
     : sizeData.legacy || "—";
+}
+
+function cuttingStorySizeSummary(value) {
+  const sizeData = parseSizeData(value);
+  const sizes = orderedSizeEntries(sizeData);
+  if (!sizes.length) {
+    const legacyCount = sizeData.legacy.split(/[،,]/).map((size) => size.trim()).filter(Boolean).length;
+    return legacyCount
+      ? `عدد المقاسات: ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(legacyCount)}`
+      : "—";
+  }
+  const totals = sizes.reduce((result, size) => {
+    result[size] = Number(result[size] || 0) + 1;
+    return result;
+  }, {});
+  const repeatedOccurrences = Object.values(totals)
+    .filter((count) => count > 1)
+    .reduce((sum, count) => sum + count, 0);
+  return repeatedOccurrences
+    ? `متكرر ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(repeatedOccurrences)} مرة`
+    : `عدد المقاسات: ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(sizes.length)}`;
 }
 
 function sizeBadgesMarkup(value) {
@@ -4527,9 +4550,27 @@ function modelRegistryEntries(data) {
   });
 }
 
+function isActiveCuttingAssistantOrder(order) {
+  const status = canonicalFactoryOrderStatus(order.cuttingStageStatus || order.status);
+  return !order.archivedAt
+    && !order.workflowArchivedAt
+    && !order.sewingStageStatus
+    && ["قيد الانتظار", "قيد الفرش", "تم الفرش", "جاهز للقص"].includes(status);
+}
+
 function modelRegistryView(data, allowRepeat = false, detailsKind = "cutting", canRequestCut = false) {
-  const entries = modelRegistryEntries(data);
   const sewingView = detailsKind === "sewing";
+  const allEntries = modelRegistryEntries(data);
+  const entries = canRequestCut || sewingView
+    ? allEntries
+    : allEntries.map((entry) => {
+      const orders = entry.orders.filter(isActiveCuttingAssistantOrder);
+      return {
+        ...entry,
+        orders,
+        model: orders.length ? orders[orders.length - 1] : entry.model
+      };
+    }).filter((entry) => entry.orders.length);
   const customerOptions = data.clients.map((client) =>
     `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)}${client.brand_name ? ` · ${escapeHtml(client.brand_name)}` : ""}</option>`
   ).join("");
@@ -4557,9 +4598,12 @@ function modelRegistryView(data, allowRepeat = false, detailsKind = "cutting", c
       <a class="row-action" href="#cutting-history">سجل القصات</a>
     </div>`}
   </article>`).join("");
+  const emptyMessage = canRequestCut || sewingView
+    ? "لا توجد موديلات مسجلة حتى الآن."
+    : "لا توجد قصات غير مكتملة حالياً.";
   return panel("سجل الموديلات", `${registrationForm}${cards
     ? `<div class="cutting-story-list">${cards}</div>`
-    : '<div class="empty-state">لا توجد موديلات مسجلة حتى الآن.</div>'}`);
+    : `<div class="empty-state">${emptyMessage}</div>`}`);
 }
 
 function catalogModelImageControl(model) {
@@ -5026,7 +5070,7 @@ function adminCuttingTransferView(data) {
       const actions = story.status === "pending" && !story.archived_at
         ? `<div class="form-actions"><button class="button button-primary" type="button" data-action="approve-cutting-story-model" data-story-id="${escapeHtml(story.id)}">تأكيد وإضافة للموديلات</button><button class="button button-secondary" type="button" data-action="approve-cutting-story-sewing" data-story-id="${escapeHtml(story.id)}">تأكيد وإرسال للخياطة</button><button class="button button-danger" type="button" data-action="reject-cutting-story" data-story-id="${escapeHtml(story.id)}">رفض القصة</button></div>`
         : story.approved_order_id ? '<a class="row-action" href="#orders">الانتقال إلى الموديلات</a>' : "";
-      return `<article class="cutting-story-card"><header class="cutting-story-heading">${modelImageMarkup(story.model_image_url)}<div><h3>${escapeHtml(story.model_name || story.model_number || "قصة بدون اسم")}</h3><p>كود الموديل بالنظام: ${escapeHtml(story.factory_model_code || "—")} · كود/رقم الموديل للعميل: ${escapeHtml(story.model_number || "—")} · العميل: ${escapeHtml(story.customer_name || "—")}</p><small>المشرف المسؤول: ${escapeHtml(story.submitted_by_name || "مشرف القص")}</small><div class="production-record-date"><span>تاريخ الإرسال:</span><time class="digital-date-time" datetime="${escapeHtml(story.created_at || "")}">${formatDigitalDateTime(story.created_at)}</time></div></div><span>${statusTag(statusLabel)}</span></header><div class="cutting-story-facts"><div><span>إجمالي القطع</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(story.total_pieces)} قطعة</strong></div><div><span>المقاسات</span><strong>${escapeHtml(sizeSummary(story.size_data) || "—")}</strong></div></div><div class="form-actions">${productionDetailsButton("story", story)}${actions}</div></article>`;
+      return `<article class="cutting-story-card"><header class="cutting-story-heading">${modelImageMarkup(story.model_image_url)}<div><h3>${escapeHtml(story.model_name || story.model_number || "قصة بدون اسم")}</h3><p>كود الموديل بالنظام: ${escapeHtml(story.factory_model_code || "—")} · كود/رقم الموديل للعميل: ${escapeHtml(story.model_number || "—")} · العميل: ${escapeHtml(story.customer_name || "—")}</p><small>المشرف المسؤول: ${escapeHtml(story.submitted_by_name || "مشرف القص")}</small><div class="production-record-date"><span>تاريخ الإرسال:</span><time class="digital-date-time" datetime="${escapeHtml(story.created_at || "")}">${formatDigitalDateTime(story.created_at)}</time></div></div><span>${statusTag(statusLabel)}</span></header><div class="cutting-story-facts"><div><span>إجمالي القطع</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(story.total_pieces)} قطعة</strong></div><div><span>المقاسات</span><strong>${escapeHtml(cuttingStorySizeSummary(story.size_data))}</strong></div></div><div class="form-actions">${productionDetailsButton("story", story)}${actions}</div></article>`;
     }).join("")}</div>`
     : '<div class="empty-state">لا توجد قصص في هذا السجل.</div>';
   const activeTab = activeAdminCuttingTab === "active";
