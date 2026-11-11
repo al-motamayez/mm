@@ -9483,6 +9483,663 @@ set name = excluded.name,
     status = excluded.status,
     updated_at = now();
 
+create table if not exists public.factory_notifications (
+  id uuid primary key default gen_random_uuid(),
+  recipient_user_id uuid references auth.users (id) on delete cascade,
+  actor_user_id uuid references auth.users (id) on delete set null,
+  event_type text not null,
+  message text not null,
+  target_hash text not null default '#dashboard',
+  target_order_id uuid references public.orders (id) on delete set null,
+  source_table text not null,
+  source_id text not null,
+  created_at timestamptz not null default now(),
+  read_at timestamptz
+);
+
+create index if not exists factory_notifications_recipient_date_idx
+  on public.factory_notifications (recipient_user_id, created_at desc);
+create index if not exists factory_notifications_date_idx
+  on public.factory_notifications (created_at desc);
+create index if not exists factory_notifications_source_idx
+  on public.factory_notifications (source_table, source_id, event_type);
+
+alter table public.factory_notifications enable row level security;
+revoke all on public.factory_notifications from public, anon, authenticated;
+drop policy if exists "Factory accounts read relevant notifications" on public.factory_notifications;
+create policy "Factory accounts read relevant notifications"
+  on public.factory_notifications for select to authenticated
+  using (
+    public.is_active_factory_admin()
+    or recipient_user_id = auth.uid()
+  );
+drop policy if exists "Factory accounts update relevant notification read state" on public.factory_notifications;
+create policy "Factory accounts update relevant notification read state"
+  on public.factory_notifications for update to authenticated
+  using (
+    public.is_active_factory_admin()
+    or recipient_user_id = auth.uid()
+  )
+  with check (
+    public.is_active_factory_admin()
+    or recipient_user_id = auth.uid()
+  );
+grant select on public.factory_notifications to authenticated;
+grant update (read_at) on public.factory_notifications to authenticated;
+
+create or replace function public.emit_factory_notification()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  row_data jsonb;
+  old_data jsonb;
+  record_payload jsonb;
+  recipient_id uuid;
+  actor_id uuid := auth.uid();
+  order_id_value uuid;
+  customer_id_value uuid;
+  order_name text;
+  order_code text;
+  quantity_value text;
+  message_value text;
+  event_value text;
+  target_value text := '#dashboard';
+begin
+  if actor_id is null then
+    if tg_op = 'DELETE' then
+      return old;
+    end if;
+    return new;
+  end if;
+
+  if tg_op = 'DELETE' then
+    row_data := to_jsonb(old);
+  else
+    row_data := to_jsonb(new);
+  end if;
+  if tg_op = 'UPDATE' then
+    old_data := to_jsonb(old);
+  end if;
+
+  case tg_table_name
+    when 'orders' then
+      order_id_value := nullif(row_data->>'id', '')::uuid;
+      if tg_op = 'DELETE' then
+        recipient_id := nullif(row_data->>'client_id', '')::uuid;
+        if recipient_id is null then
+          select user_id into recipient_id
+          from public.factory_clients
+          where id = nullif(row_data->>'customer_id', '')::uuid;
+        end if;
+        order_name := coalesce(nullif(trim(row_data->>'model_name'), ''), nullif(trim(row_data->>'model_number'), ''), 'موديل بدون اسم');
+        order_code := coalesce(nullif(trim(row_data->>'factory_model_code'), ''), nullif(trim(row_data->>'client_model_code'), ''), 'دون كود');
+        quantity_value := coalesce(nullif(row_data->>'total_pieces', '0'), row_data->>'original_total_pieces', '0');
+        target_value := '#orders';
+        event_value := 'model_deleted';
+        message_value := format('تم حذف الموديل %s - كود %s - العدد %s',
+          order_name, order_code, quantity_value);
+        order_id_value := null;
+      else
+      if tg_op = 'UPDATE'
+        and row_data->>'status' is not distinct from old_data->>'status'
+        and row_data->>'total_pieces' is not distinct from old_data->>'total_pieces'
+        and row_data->>'model_name' is not distinct from old_data->>'model_name'
+        and row_data->>'model_number' is not distinct from old_data->>'model_number'
+        and row_data->>'factory_model_code' is not distinct from old_data->>'factory_model_code'
+        and row_data->>'client_model_code' is not distinct from old_data->>'client_model_code' then
+        return new;
+      end if;
+      select coalesce(factory_order.client_id, customer.user_id),
+             coalesce(nullif(trim(factory_order.model_name), ''), nullif(trim(factory_order.model_number), ''), 'موديل بدون اسم'),
+             coalesce(nullif(trim(factory_order.factory_model_code), ''), nullif(trim(factory_order.client_model_code), ''), 'دون كود'),
+             coalesce(nullif(factory_order.total_pieces, 0), factory_order.original_total_pieces, 0)::text
+        into recipient_id, order_name, order_code, quantity_value
+      from public.orders as factory_order
+      left join public.factory_clients as customer on customer.id = factory_order.customer_id
+      where factory_order.id = order_id_value;
+      target_value := '#orders';
+      if tg_op = 'INSERT' then
+        event_value := 'model_added';
+        message_value := format('تم إضافة موديل %s - كود %s - العدد %s', order_name, order_code, coalesce(quantity_value, '0'));
+      else
+        event_value := 'model_updated';
+        message_value := format('تم تحديث الموديل %s - كود %s - الحالة %s - العدد %s',
+          order_name, order_code, coalesce(nullif(row_data->>'status', ''), 'غير محددة'), coalesce(quantity_value, '0'));
+      end if;
+      end if;
+
+    when 'factory_order_expenses' then
+      order_id_value := nullif(row_data->>'order_id', '')::uuid;
+      select coalesce(factory_order.client_id, customer.user_id),
+             coalesce(nullif(trim(factory_order.model_name), ''), nullif(trim(factory_order.model_number), ''), 'موديل بدون اسم'),
+             coalesce(nullif(trim(factory_order.factory_model_code), ''), nullif(trim(factory_order.client_model_code), ''), 'دون كود')
+        into recipient_id, order_name, order_code
+      from public.orders as factory_order
+      left join public.factory_clients as customer on customer.id = factory_order.customer_id
+      where factory_order.id = order_id_value;
+      target_value := '#orders';
+      event_value := 'model_expense';
+      message_value := format('تم إضافة مصروف للموديل %s - كود %s - السبب: %s - القيمة: %s ج.م',
+        coalesce(order_name, 'موديل'), coalesce(order_code, 'دون كود'),
+        coalesce(nullif(trim(row_data->>'description'), ''), 'مصروف تشغيل'),
+        coalesce(row_data->>'amount', '0'));
+      if row_data->>'expense_type' is distinct from 'customer_cash' then
+        recipient_id := null;
+      end if;
+
+    when 'factory_cash_transactions' then
+      if tg_op <> 'INSERT' or row_data->>'order_expense_id' is not null then
+        return new;
+      end if;
+      if row_data->>'direction' = 'expense'
+        and exists (
+          select 1
+          from public.factory_account_expenses as account_expense
+          where account_expense.customer_id = nullif(row_data->>'customer_id', '')::uuid
+            and account_expense.amount = (row_data->>'amount')::numeric
+            and account_expense.description = row_data->>'description'
+            and account_expense.occurred_at = (row_data->>'occurred_at')::timestamptz
+            and account_expense.charge_to_customer
+            and account_expense.cash_withdrawn
+        ) then
+        return new;
+      end if;
+      customer_id_value := nullif(row_data->>'customer_id', '')::uuid;
+      select user_id into recipient_id
+      from public.factory_clients
+      where id = customer_id_value;
+      order_id_value := nullif(row_data->>'order_id', '')::uuid;
+      target_value := case when order_id_value is null then '#finance' else '#orders' end;
+      if row_data->>'direction' = 'income' then
+        event_value := 'payment_added';
+        message_value := format('تم إضافة دفعة مالية بقيمة %s ج.م%s',
+          coalesce(row_data->>'amount', '0'),
+          case when nullif(trim(row_data->>'description'), '') is null then '' else format(' - %s', trim(row_data->>'description')) end);
+      else
+        event_value := 'cash_expense_added';
+        message_value := format('تم تسجيل مصروف مالي بقيمة %s ج.م - %s',
+          coalesce(row_data->>'amount', '0'), coalesce(nullif(trim(row_data->>'category'), ''), 'مصروف'));
+      end if;
+
+    when 'factory_account_expenses' then
+      if tg_op <> 'INSERT' then
+        return new;
+      end if;
+      customer_id_value := nullif(row_data->>'customer_id', '')::uuid;
+      select user_id into recipient_id
+      from public.factory_clients
+      where id = customer_id_value;
+      target_value := '#finance';
+      event_value := 'account_expense_added';
+      message_value := format('تم إضافة مصروف على الحساب بقيمة %s ج.م - %s: %s',
+        coalesce(row_data->>'amount', '0'),
+        coalesce(nullif(trim(row_data->>'category'), ''), 'مصروف'),
+        coalesce(nullif(trim(row_data->>'description'), ''), 'دون تفاصيل'));
+      if coalesce((row_data->>'charge_to_customer')::boolean, false) is false then
+        recipient_id := null;
+      end if;
+
+    when 'factory_deliveries' then
+      if tg_op <> 'INSERT' then
+        return new;
+      end if;
+      order_id_value := nullif(row_data->>'order_id', '')::uuid;
+      customer_id_value := nullif(row_data->>'customer_id', '')::uuid;
+      select coalesce(factory_order.client_id, customer.user_id),
+             coalesce(nullif(trim(factory_order.model_name), ''), nullif(trim(factory_order.model_number), ''), 'موديل بدون اسم'),
+             coalesce(nullif(trim(factory_order.factory_model_code), ''), nullif(trim(factory_order.client_model_code), ''), 'دون كود')
+        into recipient_id, order_name, order_code
+      from public.orders as factory_order
+      left join public.factory_clients as customer on customer.id = coalesce(factory_order.customer_id, customer_id_value)
+      where factory_order.id = order_id_value;
+      target_value := '#orders';
+      event_value := 'delivery_added';
+      message_value := format('تم تسجيل تسليم %s قطعة للموديل %s - كود %s',
+        coalesce(row_data->>'quantity', '0'), coalesce(order_name, 'موديل'), coalesce(order_code, 'دون كود'));
+
+    when 'production_stages' then
+      order_id_value := nullif(row_data->>'order_id', '')::uuid;
+      if tg_op = 'UPDATE'
+        and row_data->>'status' is not distinct from old_data->>'status'
+        and row_data->>'completed_quantity' is not distinct from old_data->>'completed_quantity' then
+        return new;
+      end if;
+      select coalesce(factory_order.client_id, customer.user_id),
+             coalesce(nullif(trim(factory_order.model_name), ''), nullif(trim(factory_order.model_number), ''), 'موديل بدون اسم'),
+             coalesce(nullif(trim(factory_order.factory_model_code), ''), nullif(trim(factory_order.client_model_code), ''), 'دون كود')
+        into recipient_id, order_name, order_code
+      from public.orders as factory_order
+      left join public.factory_clients as customer on customer.id = factory_order.customer_id
+      where factory_order.id = order_id_value;
+      target_value := '#orders';
+      event_value := 'production_updated';
+      message_value := format('تحديث مرحلة %s للموديل %s - كود %s: %s قطعة مكتملة، الحالة %s',
+        coalesce(nullif(trim(row_data->>'stage_name'), ''), 'الإنتاج'),
+        coalesce(order_name, 'موديل'), coalesce(order_code, 'دون كود'),
+        coalesce(row_data->>'completed_quantity', '0'),
+        coalesce(nullif(trim(row_data->>'status'), ''), 'قيد التنفيذ'));
+      if nullif(row_data->>'worker_id', '') is not null
+        and nullif(row_data->>'worker_id', '')::uuid is distinct from recipient_id then
+        insert into public.factory_notifications (
+          recipient_user_id, actor_user_id, event_type, message, target_hash,
+          source_table, source_id
+        )
+        values (
+          nullif(row_data->>'worker_id', '')::uuid, actor_id, 'assigned_work_updated',
+          left(message_value, 1000), '#personal-account', tg_table_name,
+          coalesce(row_data->>'id', '')
+        );
+      end if;
+
+    when 'factory_records' then
+      if tg_op = 'UPDATE' and row_data->'payload' is not distinct from old_data->'payload' then
+        return new;
+      end if;
+      record_payload := coalesce(row_data->'payload', '{}'::jsonb);
+      recipient_id := nullif(row_data->>'owner_id', '')::uuid;
+      case row_data->>'collection'
+        when 'payments' then
+          event_value := case
+            when tg_op = 'DELETE' then 'payment_deleted'
+            when tg_op = 'UPDATE' then 'payment_updated'
+            else 'payment_added'
+          end;
+          target_value := '#finance';
+          if coalesce(record_payload->>'accountVoided', 'false') = 'true' then
+            message_value := format('تم استبعاد دفعة مالية بقيمة %s ج.م من حساب العميل',
+              coalesce(record_payload->>'amount', record_payload->>'value', '0'));
+          else
+            message_value := format('%s دفعة مالية بقيمة %s ج.م%s',
+              case tg_op when 'DELETE' then 'تم حذف' when 'UPDATE' then 'تم تعديل' else 'تم إضافة' end,
+              coalesce(record_payload->>'amount', record_payload->>'value', '0'),
+              case when nullif(trim(coalesce(record_payload->>'reference', record_payload->>'notes', '')), '') is null
+                then '' else format(' - %s', trim(coalesce(record_payload->>'reference', record_payload->>'notes'))) end);
+          end if;
+        when 'settlements' then
+          event_value := 'account_settlement';
+          target_value := '#finance';
+          message_value := format('تم تسجيل تصفية حساب بقيمة %s ج.م',
+            coalesce(record_payload->>'balance', record_payload->>'amount', '0'));
+        when 'account_adjustments' then
+          event_value := 'account_adjustment';
+          target_value := '#finance';
+          message_value := format('تم تسجيل تسوية على الحساب بقيمة %s ج.م - %s',
+            coalesce(record_payload->>'amount', '0'),
+            coalesce(nullif(trim(record_payload->>'reason'), ''), 'تسوية حساب'));
+        when 'tasks' then
+          event_value := 'work_task';
+          target_value := '#dashboard';
+          message_value := format('تم تحديث مهمة عمل: %s',
+            coalesce(nullif(trim(record_payload->>'task'), ''), nullif(trim(record_payload->>'title'), ''), 'مهمة جديدة'));
+        when 'advances' then
+          event_value := 'workforce_advance';
+          target_value := '#personal-account';
+          message_value := format('تم تسجيل سلفة بقيمة %s ج.م', coalesce(record_payload->>'amount', '0'));
+        when 'payroll' then
+          event_value := 'workforce_payroll';
+          target_value := '#personal-account';
+          message_value := format('تم تسجيل دفعة أجر بقيمة %s ج.م', coalesce(record_payload->>'amount', '0'));
+        else
+          event_value := 'account_activity';
+          target_value := '#personal-account';
+          message_value := format('تم تحديث سجل %s', coalesce(row_data->>'collection', 'الحساب'));
+      end case;
+
+    when 'factory_client_model_requests' then
+      if tg_op = 'UPDATE' and row_data->>'status' is not distinct from old_data->>'status' then
+        return new;
+      end if;
+      recipient_id := nullif(row_data->>'user_id', '')::uuid;
+      target_value := '#model-requests';
+      event_value := 'model_request_updated';
+      message_value := format('تم تحديث طلب الموديل %s - الحالة: %s',
+        coalesce(nullif(trim(row_data->>'model_name'), ''), 'بدون اسم'),
+        coalesce(nullif(trim(row_data->>'status'), ''), 'قيد المراجعة'));
+
+    when 'factory_worker_production_submissions' then
+      if tg_op = 'UPDATE' and row_data->>'status' is not distinct from old_data->>'status' then
+        return new;
+      end if;
+      recipient_id := nullif(row_data->>'worker_id', '')::uuid;
+      target_value := '#dashboard';
+      event_value := 'production_submission';
+      message_value := format('تم تحديث تسليم إنتاج %s - العدد %s - الحالة %s',
+        coalesce(nullif(trim(row_data->>'model_name'), ''), 'بدون اسم'),
+        coalesce(row_data->>'quantity', '0'),
+        coalesce(nullif(trim(row_data->>'status'), ''), 'بانتظار المراجعة'));
+
+    when 'factory_finished_goods' then
+      if tg_op <> 'INSERT' then
+        return new;
+      end if;
+      customer_id_value := nullif(row_data->>'customer_id', '')::uuid;
+      select user_id into recipient_id
+      from public.factory_clients
+      where id = customer_id_value;
+      order_id_value := nullif(row_data->>'order_id', '')::uuid;
+      target_value := case when order_id_value is null then '#dashboard' else '#orders' end;
+      event_value := 'finished_goods_received';
+      message_value := format('تم استلام إنتاج موديل %s - العدد %s',
+        coalesce(nullif(trim(row_data->>'model_name'), ''), 'بدون اسم'),
+        coalesce(row_data->>'quantity', '0'));
+
+    when 'factory_fabric_transactions' then
+      if tg_op <> 'INSERT' then
+        return new;
+      end if;
+      target_value := '#records';
+      event_value := 'fabric_movement';
+      message_value := format('حركة مخزون قماش: %s %s - %s',
+        coalesce(row_data->>'quantity', '0'),
+        coalesce(nullif(trim(row_data->>'transaction_type'), ''), 'تحديث'),
+        coalesce(nullif(trim(row_data->>'notes'), ''), 'دون تفاصيل'));
+
+    when 'factory_auth_events' then
+      if tg_op <> 'INSERT' then
+        return new;
+      end if;
+      recipient_id := null;
+      target_value := '#clients';
+      event_value := 'account_access';
+      select coalesce(nullif(trim(account.username), ''), nullif(trim(account.name), ''), row_data->>'user_id')
+        into order_name
+      from public.users as account
+      where account.id = nullif(row_data->>'user_id', '')::uuid;
+      message_value := format('نشاط حساب %s: %s',
+        coalesce(order_name, 'غير معروف'),
+        coalesce(nullif(trim(row_data->>'event_type'), ''), 'تسجيل دخول'));
+
+    when 'factory_clients' then
+      if tg_op = 'UPDATE'
+        and row_data->>'name' is not distinct from old_data->>'name'
+        and row_data->>'brand_name' is not distinct from old_data->>'brand_name' then
+        return new;
+      end if;
+      recipient_id := null;
+      target_value := '#clients';
+      event_value := 'client_profile_updated';
+      message_value := format('%s ملف العميل %s',
+        case when tg_op = 'INSERT' then 'تم إنشاء' else 'تم تحديث' end,
+        coalesce(nullif(trim(row_data->>'name'), ''), 'بدون اسم'));
+
+    when 'users' then
+      if tg_op = 'UPDATE'
+        and row_data->>'name' is not distinct from old_data->>'name'
+        and row_data->>'username' is not distinct from old_data->>'username'
+        and row_data->>'role' is not distinct from old_data->>'role'
+        and row_data->>'status' is not distinct from old_data->>'status' then
+        return new;
+      end if;
+      recipient_id := null;
+      target_value := '#clients';
+      event_value := 'user_account_updated';
+      message_value := format('%s حساب %s - الدور %s - الحالة %s',
+        case tg_op when 'INSERT' then 'تم إنشاء' when 'DELETE' then 'تم حذف' else 'تم تحديث' end,
+        coalesce(nullif(trim(row_data->>'name'), ''), nullif(trim(row_data->>'username'), ''), row_data->>'id'),
+        coalesce(nullif(trim(row_data->>'role'), ''), 'غير محدد'),
+        coalesce(nullif(trim(row_data->>'status'), ''), 'غير محددة'));
+
+    when 'factory_fabrics' then
+      if tg_op = 'UPDATE'
+        and row_data->>'quantity_available' is not distinct from old_data->>'quantity_available'
+        and row_data->>'name' is not distinct from old_data->>'name' then
+        return new;
+      end if;
+      recipient_id := null;
+      target_value := '#records';
+      event_value := 'fabric_stock_updated';
+      message_value := format('تم تحديث مخزون القماش %s - الرصيد %s %s',
+        coalesce(nullif(trim(row_data->>'name'), ''), 'بدون اسم'),
+        coalesce(row_data->>'quantity_available', '0'),
+        coalesce(nullif(trim(row_data->>'unit'), ''), ''));
+
+    when 'factory_worker_order_deliveries' then
+      if tg_op = 'UPDATE' and row_data->>'status' is not distinct from old_data->>'status' then
+        return new;
+      end if;
+      order_id_value := nullif(row_data->>'order_id', '')::uuid;
+      select coalesce(nullif(trim(factory_order.model_name), ''), nullif(trim(factory_order.model_number), ''), 'موديل بدون اسم'),
+             coalesce(nullif(trim(factory_order.factory_model_code), ''), nullif(trim(factory_order.client_model_code), ''), 'دون كود')
+        into order_name, order_code
+      from public.orders as factory_order
+      where factory_order.id = order_id_value;
+      recipient_id := nullif(row_data->>'worker_id', '')::uuid;
+      target_value := '#dashboard';
+      event_value := 'worker_delivery_submission';
+      message_value := format('تم %s تسليم العامل للموديل %s - كود %s - العدد %s',
+        case row_data->>'status'
+          when 'confirmed' then 'اعتماد'
+          when 'rejected' then 'رفض'
+          else 'تسجيل'
+        end,
+        coalesce(order_name, 'موديل'), coalesce(order_code, 'دون كود'),
+        coalesce(row_data->>'quantity', '0'));
+
+    else
+      if tg_op = 'DELETE' then
+        return old;
+      end if;
+      return new;
+  end case;
+
+  insert into public.factory_notifications (
+    recipient_user_id, actor_user_id, event_type, message, target_hash,
+    target_order_id, source_table, source_id
+  )
+  values (
+    recipient_id, actor_id, event_value, left(message_value, 1000), target_value,
+    order_id_value, tg_table_name, coalesce(row_data->>'id', '')
+  );
+
+  if tg_op = 'DELETE' then
+    return old;
+  end if;
+  return new;
+end;
+$$;
+
+insert into public.factory_notifications (
+  event_type, message, target_hash, target_order_id, source_table, source_id, created_at, read_at
+)
+select history.event_type, left(history.message, 1000), history.target_hash,
+       history.target_order_id, history.source_table, history.source_id,
+       history.created_at, history.created_at
+from (
+  select 'history_model'::text as event_type,
+         format('سجل سابق: موديل %s - كود %s - العدد %s',
+           coalesce(nullif(trim(model_name), ''), nullif(trim(model_number), ''), 'بدون اسم'),
+           coalesce(nullif(trim(factory_model_code), ''), nullif(trim(client_model_code), ''), 'دون كود'),
+           total_pieces::text) as message,
+         '#orders'::text as target_hash, id as target_order_id,
+         'orders'::text as source_table, id::text as source_id, created_at
+  from public.orders
+  union all
+  select 'history_model_expense',
+         format('سجل سابق: مصروف موديل %s - كود %s - السبب: %s - القيمة: %s ج.م',
+           coalesce(nullif(trim(factory_order.model_name), ''), nullif(trim(factory_order.model_number), ''), 'بدون اسم'),
+           coalesce(nullif(trim(factory_order.factory_model_code), ''), nullif(trim(factory_order.client_model_code), ''), 'دون كود'),
+           description, amount::text),
+         '#orders', order_id, 'factory_order_expenses', factory_order_expense.id::text, factory_order_expense.created_at
+  from public.factory_order_expenses as factory_order_expense
+  join public.orders as factory_order on factory_order.id = factory_order_expense.order_id
+  union all
+  select 'history_cash_transaction',
+         format('سجل سابق: حركة خزينة %s بقيمة %s ج.م - %s',
+           direction, amount::text, coalesce(nullif(trim(description), ''), nullif(trim(category), ''), 'دون تفاصيل')),
+         case when order_id is null then '#finance' else '#orders' end,
+         order_id, 'factory_cash_transactions', id::text, occurred_at
+  from public.factory_cash_transactions
+  where order_expense_id is null
+    and not exists (
+      select 1
+      from public.factory_account_expenses as account_expense
+      where account_expense.customer_id = factory_cash_transactions.customer_id
+        and account_expense.amount = factory_cash_transactions.amount
+        and account_expense.description = factory_cash_transactions.description
+        and account_expense.occurred_at = factory_cash_transactions.occurred_at
+        and account_expense.charge_to_customer
+        and account_expense.cash_withdrawn
+    )
+  union all
+  select 'history_account_expense',
+         format('سجل سابق: مصروف حساب %s بقيمة %s ج.م - %s',
+           coalesce(nullif(trim(category), ''), 'مصروف'), amount::text, description),
+         '#finance', null::uuid, 'factory_account_expenses', id::text, occurred_at
+  from public.factory_account_expenses
+  union all
+  select 'history_delivery',
+         format('سجل سابق: تسليم %s قطعة للموديل %s',
+           delivery.quantity::text,
+           coalesce(nullif(trim(factory_order.model_name), ''), nullif(trim(factory_order.model_number), ''), 'بدون اسم')),
+         '#orders', delivery.order_id, 'factory_deliveries', delivery.id::text, delivery.delivered_at
+  from public.factory_deliveries as delivery
+  join public.orders as factory_order on factory_order.id = delivery.order_id
+  union all
+  select 'history_production_stage',
+         format('سجل سابق: مرحلة %s للموديل %s - الحالة %s - المنجز %s قطعة',
+           stage.stage_name,
+           coalesce(nullif(trim(factory_order.model_name), ''), nullif(trim(factory_order.model_number), ''), 'بدون اسم'),
+           stage.status, stage.completed_quantity::text),
+         '#orders', stage.order_id, 'production_stages', stage.id::text, stage.updated_at
+  from public.production_stages as stage
+  join public.orders as factory_order on factory_order.id = stage.order_id
+  union all
+  select 'history_factory_record',
+         format('سجل سابق: %s - %s',
+           coalesce(nullif(trim(factory_record.collection), ''), 'سجل مصنع'),
+           coalesce(nullif(trim(factory_record.payload->>'description'), ''),
+                    nullif(trim(factory_record.payload->>'task'), ''),
+                    nullif(trim(factory_record.payload->>'amount'), ''),
+                    'تم حفظ سجل')),
+         case when factory_record.collection in ('payments', 'settlements', 'account_adjustments') then '#finance'
+              when factory_record.collection = 'tasks' then '#dashboard'
+              else '#personal-account' end,
+         null::uuid, 'factory_records', factory_record.id::text, factory_record.created_at
+  from public.factory_records as factory_record
+  union all
+  select 'history_model_request',
+         format('سجل سابق: طلب موديل %s - الحالة %s',
+           coalesce(nullif(trim(model_name), ''), 'بدون اسم'), status),
+         '#model-requests', null::uuid, 'factory_client_model_requests', id::text, created_at
+  from public.factory_client_model_requests
+  union all
+  select 'history_worker_submission',
+         format('سجل سابق: تسليم إنتاج %s - العدد %s - الحالة %s',
+           coalesce(nullif(trim(model_name), ''), 'بدون اسم'), quantity::text, status),
+         '#dashboard', null::uuid, 'factory_worker_production_submissions', id::text, created_at
+  from public.factory_worker_production_submissions
+  union all
+  select 'history_worker_order_delivery',
+         format('سجل سابق: تسليم العامل للموديل %s - العدد %s - الحالة %s',
+           coalesce(nullif(trim(factory_order.model_name), ''), nullif(trim(factory_order.model_number), ''), 'بدون اسم'),
+           submission.quantity::text, submission.status),
+         '#orders', submission.order_id, 'factory_worker_order_deliveries', submission.id::text, submission.created_at
+  from public.factory_worker_order_deliveries as submission
+  join public.orders as factory_order on factory_order.id = submission.order_id
+  union all
+  select 'history_finished_goods',
+         format('سجل سابق: استلام إنتاج موديل %s - العدد %s',
+           coalesce(nullif(trim(model_name), ''), 'بدون اسم'), quantity::text),
+         case when order_id is null then '#dashboard' else '#orders' end,
+         order_id, 'factory_finished_goods', id::text, confirmed_at
+  from public.factory_finished_goods
+  union all
+  select 'history_fabric_transaction',
+         format('سجل سابق: حركة قماش %s %s - %s',
+           quantity::text, transaction_type, coalesce(nullif(trim(notes), ''), 'دون تفاصيل')),
+         '#records', null::uuid, 'factory_fabric_transactions', id::text, created_at
+  from public.factory_fabric_transactions
+  union all
+  select 'history_auth_event',
+         format('سجل سابق: نشاط حساب %s - %s',
+           coalesce(nullif(trim(account.username), ''), nullif(trim(account.name), ''), auth_event.user_id::text),
+           auth_event.event_type),
+         '#clients', null::uuid, 'factory_auth_events', auth_event.id::text, auth_event.occurred_at
+  from public.factory_auth_events as auth_event
+  left join public.users as account on account.id = auth_event.user_id
+  union all
+  select 'history_client_profile',
+         format('سجل سابق: ملف العميل %s', coalesce(nullif(trim(name), ''), 'بدون اسم')),
+         '#clients', null::uuid, 'factory_clients', id::text, created_at
+  from public.factory_clients
+  union all
+  select 'history_user_account',
+         format('سجل سابق: حساب %s - الدور %s - الحالة %s',
+           coalesce(nullif(trim(name), ''), nullif(trim(username), ''), id::text),
+           coalesce(nullif(trim(role), ''), 'غير محدد'),
+           coalesce(nullif(trim(status), ''), 'غير محددة')),
+         '#clients', null::uuid, 'users', id::text, created_at
+  from public.users
+  union all
+  select 'history_fabric_stock',
+         format('سجل سابق: رصيد القماش %s - الكمية %s %s',
+           coalesce(nullif(trim(name), ''), 'بدون اسم'),
+           quantity_available::text, coalesce(nullif(trim(unit), ''), '')),
+         '#records', null::uuid, 'factory_fabrics', id::text, updated_at
+  from public.factory_fabrics
+) as history
+where not exists (
+  select 1
+  from public.factory_notifications as existing_notification
+  where existing_notification.source_table = history.source_table
+    and existing_notification.source_id = history.source_id
+    and existing_notification.event_type = history.event_type
+);
+
+drop trigger if exists factory_notifications_orders on public.orders;
+create trigger factory_notifications_orders after insert or update or delete on public.orders
+  for each row execute function public.emit_factory_notification();
+drop trigger if exists factory_notifications_order_expenses on public.factory_order_expenses;
+create trigger factory_notifications_order_expenses after insert on public.factory_order_expenses
+  for each row execute function public.emit_factory_notification();
+drop trigger if exists factory_notifications_cash_transactions on public.factory_cash_transactions;
+create trigger factory_notifications_cash_transactions after insert on public.factory_cash_transactions
+  for each row execute function public.emit_factory_notification();
+drop trigger if exists factory_notifications_account_expenses on public.factory_account_expenses;
+create trigger factory_notifications_account_expenses after insert on public.factory_account_expenses
+  for each row execute function public.emit_factory_notification();
+drop trigger if exists factory_notifications_deliveries on public.factory_deliveries;
+create trigger factory_notifications_deliveries after insert on public.factory_deliveries
+  for each row execute function public.emit_factory_notification();
+drop trigger if exists factory_notifications_production_stages on public.production_stages;
+create trigger factory_notifications_production_stages after insert or update on public.production_stages
+  for each row execute function public.emit_factory_notification();
+drop trigger if exists factory_notifications_records on public.factory_records;
+create trigger factory_notifications_records after insert or update or delete on public.factory_records
+  for each row execute function public.emit_factory_notification();
+drop trigger if exists factory_notifications_client_model_requests on public.factory_client_model_requests;
+create trigger factory_notifications_client_model_requests after insert or update on public.factory_client_model_requests
+  for each row execute function public.emit_factory_notification();
+drop trigger if exists factory_notifications_worker_submissions on public.factory_worker_production_submissions;
+create trigger factory_notifications_worker_submissions after insert or update on public.factory_worker_production_submissions
+  for each row execute function public.emit_factory_notification();
+drop trigger if exists factory_notifications_worker_order_deliveries on public.factory_worker_order_deliveries;
+create trigger factory_notifications_worker_order_deliveries after insert or update on public.factory_worker_order_deliveries
+  for each row execute function public.emit_factory_notification();
+drop trigger if exists factory_notifications_finished_goods on public.factory_finished_goods;
+create trigger factory_notifications_finished_goods after insert on public.factory_finished_goods
+  for each row execute function public.emit_factory_notification();
+drop trigger if exists factory_notifications_fabric_transactions on public.factory_fabric_transactions;
+create trigger factory_notifications_fabric_transactions after insert on public.factory_fabric_transactions
+  for each row execute function public.emit_factory_notification();
+drop trigger if exists factory_notifications_auth_events on public.factory_auth_events;
+create trigger factory_notifications_auth_events after insert on public.factory_auth_events
+  for each row execute function public.emit_factory_notification();
+drop trigger if exists factory_notifications_clients on public.factory_clients;
+create trigger factory_notifications_clients after insert or update on public.factory_clients
+  for each row execute function public.emit_factory_notification();
+drop trigger if exists factory_notifications_fabrics on public.factory_fabrics;
+create trigger factory_notifications_fabrics after insert or update on public.factory_fabrics
+  for each row execute function public.emit_factory_notification();
+drop trigger if exists factory_notifications_users on public.users;
+create trigger factory_notifications_users after insert or update or delete on public.users
+  for each row execute function public.emit_factory_notification();
+
+revoke all on function public.emit_factory_notification() from public, anon, authenticated;
+
 do $$
 declare
   table_name text;
@@ -9538,7 +10195,8 @@ begin
       'factory_worker_production_submissions',
       'factory_finished_goods',
       'factory_client_model_requests',
-      'factory_cutting_stories'
+      'factory_cutting_stories',
+      'factory_notifications'
     ] loop
       if not exists (
         select 1
@@ -9566,5 +10224,6 @@ alter table public.factory_worker_production_submissions replica identity full;
 alter table public.factory_finished_goods replica identity full;
 alter table public.factory_client_model_requests replica identity full;
 alter table public.factory_cutting_stories replica identity full;
+alter table public.factory_notifications replica identity full;
 
 notify pgrst, 'reload schema';

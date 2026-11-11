@@ -15,7 +15,6 @@ let realtimeRefreshRunning = false;
 let realtimeRefreshPending = false;
 let realtimeEditProtectionBound = false;
 let realtimeNotifications = [];
-let notificationStorageAccount = "";
 let onlineUserCount = 0;
 let onlineUsers = [];
 let activeFinanceTab = "payments";
@@ -39,7 +38,6 @@ let selectedWorkforceMonth = `${new Date().getFullYear()}-${String(new Date().ge
 let selectedWorkforceDate = workforceDateKey(new Date());
 let selectedWorkforceCutoffDate = "";
 let showWorkforceRolloverModal = false;
-const REALTIME_NOTIFICATION_MESSAGE = "تحديث جديد في البرنامج";
 const rolePages = {
   admin: "admin.html",
   cutting: "cutting.html",
@@ -334,6 +332,29 @@ async function saveFlexibleRecordsBatch(collection, records) {
     .from("factory_records")
     .upsert(rows, { onConflict: "id" });
   if (error) throw error;
+}
+
+async function readFactoryNotifications(session) {
+  const notifications = [];
+  const pageSize = 1000;
+  for (let offset = 0; ; offset += pageSize) {
+    let query = supabaseClient
+      .from("factory_notifications")
+      .select("id, recipient_user_id, actor_user_id, event_type, message, target_hash, target_order_id, created_at, read_at")
+      .order("created_at", { ascending: false })
+      .range(offset, offset + pageSize - 1);
+    if (session.role !== "admin") query = query.eq("recipient_user_id", session.accountId);
+    const { data, error } = await query;
+    if (error) {
+      if (error.code === "42P01" || error.code === "PGRST205") {
+        throw new Error("جدول الإشعارات غير موجود. شغّل أحدث نسخة من supabase/schema.sql في SQL Editor.");
+      }
+      throw error;
+    }
+    notifications.push(...(data || []));
+    if (!data || data.length < pageSize) break;
+  }
+  return notifications;
 }
 
 async function readDashboardData(session) {
@@ -927,6 +948,7 @@ async function readDashboardData(session) {
   });
   data.voidedPayments = data.payments.filter((payment) => payment.accountVoided === true);
   data.payments = data.payments.filter((payment) => payment.accountVoided !== true);
+  data.notifications = await readFactoryNotifications(session);
   return data;
 }
 
@@ -2474,7 +2496,7 @@ function clientOrderCards(orders) {
   const quantityFormat = new Intl.NumberFormat("ar-EG-u-nu-latn");
   return `<div class="order-cards client-order-cards">${orders.map((item) => {
     const detailsId = `client-model-details-${String(item.id || "order").replace(/[^a-zA-Z0-9_-]/g, "")}`;
-    return `<article class="order-card client-order-card">
+    return `<article class="order-card client-order-card" data-client-model-card="${escapeHtml(item.id)}">
     <header class="order-card-heading">${modelImageMarkup(item.modelImageUrls || item.modelImageUrl)}<div><p class="order-card-label">كود الموديل: ${escapeHtml(item.factoryModelCode || item.clientModelCode || item.modelNumber || "—")}</p><h3>${escapeHtml(item.name || "موديل بدون اسم")}</h3></div>${statusTag(item.displayStatus || item.status || "قيد الانتظار")}</header>
     <div class="client-order-card-summary"><div><span>العدد الإجمالي</span><strong>${item.quantity ? quantityFormat.format(item.quantity) : item.originalQuantity ? quantityFormat.format(item.originalQuantity) : "بانتظار الحصر"}</strong></div><div><span>المستلم فعلياً</span><strong>${quantityFormat.format(item.deliveredPieces || 0)}</strong></div></div>
     <button class="button button-secondary" type="button" data-client-model-toggle data-client-model-order-id="${escapeHtml(item.id)}" aria-haspopup="dialog" aria-controls="${detailsId}">عرض التفاصيل</button>
@@ -2555,6 +2577,7 @@ function clientOrderDetailsMarkup(order) {
     ["overview", "ملخص الموديل"],
     ["counts", "الأعداد والألوان"],
     ["deliveries", "التسليمات"],
+    ["expenses", "المصروفات الخارجية"],
     ["technical", "التفاصيل الفنية"]
   ];
   return `<div id="${detailsId}" class="client-model-details">
@@ -2571,9 +2594,11 @@ function clientOrderDetailsMarkup(order) {
     </section>
     <section id="${detailsId}-panel-deliveries" class="client-model-tab-panel" role="tabpanel" data-client-model-panel="deliveries" aria-labelledby="${detailsId}-tab-deliveries" hidden>
       <h3 class="modal-subheading">استلامات الألوان والمقاسات</h3>${orderDeliveryComparisonMarkup(order)}
-      <h3 class="modal-subheading">مصروفات هذا الموديل على حسابك</h3>${clientExpenses.length
-        ? table(["بيان المصروف","القيمة","التاريخ"], clientExpenses.map((entry) =>
-          `<tr><td>${escapeHtml(entry.description || "مصروف موديل")}</td><td>${money(entry.amount)}</td><td>${formatDateTime(entry.created_at)}</td></tr>`
+    </section>
+    <section id="${detailsId}-panel-expenses" class="client-model-tab-panel" role="tabpanel" data-client-model-panel="expenses" aria-labelledby="${detailsId}-tab-expenses" hidden>
+      <h3 class="modal-subheading">سجل المصروفات الخارجية والإضافية لهذا الموديل</h3>${clientExpenses.length
+        ? table(["السبب / بيان المصروف","نوع المصروف","القيمة","التاريخ والوقت"], clientExpenses.map((entry) =>
+          `<tr><td>${escapeHtml(entry.description || "مصروف موديل")}</td><td>${escapeHtml(modelExpenseTypeLabel(entry.expense_type))}</td><td>${money(entry.amount)}</td><td>${formatDateTime(entry.created_at)}</td></tr>`
         ))
         : '<div class="empty-state">لا توجد مصروفات محمّلة على حسابك لهذا الموديل.</div>'}
     </section>
@@ -4283,6 +4308,17 @@ function adminView(data, accounts) {
   const activeOrders = data.models.filter((order) => !order.archivedAt && !order.workflowArchivedAt);
   const totalUnits = activeOrders.reduce((sum, item) => sum + Number(item.quantity), 0);
   const paid = data.payments.reduce((sum, item) => sum + Number(item.amount), 0);
+  const notificationAccountById = new Map([...data.users, ...accounts].map((account) => [account.id, account]));
+  const activityRows = (data.notifications || []).map((notification) => {
+    const actor = notificationAccountById.get(notification.actor_user_id);
+    const recipient = notification.recipient_user_id
+      ? notificationAccountById.get(notification.recipient_user_id)
+      : null;
+    return `<tr><td>${formatDateTime(notification.created_at)}</td><td>${escapeHtml(actor?.name || actor?.username || "النظام")}</td><td><button class="row-action" type="button" data-notification-id="${escapeHtml(notification.id)}">${escapeHtml(notification.message)}</button></td><td>${escapeHtml(recipient?.name || recipient?.username || "سجل الإدارة")}</td></tr>`;
+  });
+  const activityLog = activityRows.length
+    ? table(["التاريخ والوقت","المنفّذ","الحركة","الحساب المعني"], activityRows)
+    : '<div class="empty-state">لا توجد حركات مسجلة بعد.</div>';
   const clientOptions = data.clients.map((client) =>
     `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)}</option>`
   ).join("");
@@ -4316,6 +4352,7 @@ function adminView(data, accounts) {
   return `
     <section id="dashboard" class="dashboard-section">
       ${adminDashboardView(data)}<div class="stats-grid">${stat("إجمالي القطع", new Intl.NumberFormat("ar-EG-u-nu-latn").format(totalUnits), "قطعة")}${stat("المدفوعات المسجلة", money(paid), "إجمالي الدفعات")}${stat("طلبات الانصراف", data.leaves.filter((item) => item.status === "قيد المراجعة").length, "بانتظار المراجعة")}</div>
+      ${panel("سجل حركات المصنع بالكامل", activityLog, "سجل دائم مرتب زمنيًا، مع إشعارات الحسابات المرتبطة بكل حركة.")}
     </section>
     <section id="orders" class="dashboard-section">
       <div class="client-management-tabs order-management-tabs" role="tablist" aria-label="إدارة الموديلات والطلبيات">
@@ -8081,7 +8118,7 @@ function developerFooterMarkup() {
 function render(session, data, accounts) {
   bindImagePickerControls();
   data.pendingAccounts = accounts;
-  initializeRealtimeNotifications(session);
+  initializeRealtimeNotifications(data.notifications || []);
   document.querySelectorAll("body > #order-modal").forEach((modal) => modal.remove());
   const info = roleInfo[session.role];
   const username = escapeHtml(session.username);
@@ -8102,7 +8139,7 @@ function render(session, data, accounts) {
     <div class="app-shell${collapsedClass}">
       <button class="sidebar-backdrop" type="button" data-sidebar-close aria-label="إغلاق القائمة الجانبية"></button>
       <aside class="sidebar" id="sidebar"><a class="brand" href="../index.html"><img class="brand-logo" src="../assets/al-motamayez-logo.png" alt="AL-MOTAMAYEZ logo"><span class="brand-copy"><strong>AL-MOTAMAYEZ</strong></span></a><nav aria-label="القائمة الرئيسية"><p class="side-label">القائمة الرئيسية</p>${navigation}</nav><div class="sidebar-bottom"><div class="profile-chip"><span class="avatar">${escapeHtml(username.slice(0, 1))}</span><div class="profile-details"><strong>${escapeHtml(username)}</strong><span>${escapeHtml(session.roleName)}</span>${["worker", "cutting", "sewing"].includes(session.role) ? `<small>${escapeHtml(session.fullName)} · ${escapeHtml(session.phone || "الهاتف غير مسجل")}</small>` : ""}</div></div><button class="logout-button" id="logout" type="button">↪ تسجيل الخروج</button>${developerFooterMarkup()}</div></aside>
-      <main class="main-content"><header class="topbar"><div class="topbar-leading"><button class="sidebar-toggle" type="button" data-sidebar-toggle aria-controls="sidebar" aria-expanded="true" aria-label="طي القائمة الجانبية"><span aria-hidden="true">☰</span></button><div class="topbar-title"><h1>${info.title}</h1><p>${info.description}</p></div>${session.role === "admin" ? workforceDateToolbarMarkup() : ""}</div><div class="header-brand">${session.role === "admin" ? `<button class="online-indicator${onlineUserCount ? " online" : ""}" data-online-indicator type="button" title="عرض الحسابات المتصلة"><span class="online-indicator-dot"></span><span>متصلون الآن: <strong data-online-count>${onlineUserCount}</strong></span></button>` : ""}<div class="notification-control"><button class="live-notification-button" type="button" data-live-notifications aria-label="إشعارات تحديثات البرنامج" aria-expanded="false"><span aria-hidden="true">🔔</span><span class="live-notification-badge" data-live-badge aria-live="polite" hidden></span></button><section class="notification-dropdown" data-notification-dropdown hidden aria-label="إشعارات تحديثات البرنامج"><header><strong>تحديثات البرنامج</strong><button type="button" class="notification-mark-read" data-mark-notifications-read>تعليم الكل كمقروء</button></header><div class="notification-list" data-notification-list>${notificationListMarkup()}</div></section></div><img class="header-logo" src="../assets/al-motamayez-logo.png" alt="AL-MOTAMAYEZ logo"><div class="brand-copy"><strong>AL-MOTAMAYEZ</strong></div><span class="date-label">${new Intl.DateTimeFormat("ar-EG-u-nu-latn", { dateStyle: "full" }).format(new Date())}</span></div></header>
+      <main class="main-content"><header class="topbar"><div class="topbar-leading"><button class="sidebar-toggle" type="button" data-sidebar-toggle aria-controls="sidebar" aria-expanded="true" aria-label="طي القائمة الجانبية"><span aria-hidden="true">☰</span></button><div class="topbar-title"><h1>${info.title}</h1><p>${info.description}</p></div>${session.role === "admin" ? workforceDateToolbarMarkup() : ""}</div><div class="header-brand">${session.role === "admin" ? `<button class="online-indicator${onlineUserCount ? " online" : ""}" data-online-indicator type="button" title="عرض الحسابات المتصلة"><span class="online-indicator-dot"></span><span>متصلون الآن: <strong data-online-count>${onlineUserCount}</strong></span></button>` : ""}<div class="notification-control"><button class="live-notification-button" type="button" data-live-notifications aria-label="إشعارات المصنع" aria-expanded="false"><span aria-hidden="true">🔔</span><span class="live-notification-badge" data-live-badge aria-live="polite" hidden></span></button><section class="notification-dropdown" data-notification-dropdown hidden aria-label="إشعارات المصنع"><header><strong>إشعارات المصنع</strong><button type="button" class="notification-mark-read" data-mark-notifications-read>تعليم الكل كمقروء</button></header><div class="notification-list" data-notification-list>${notificationListMarkup()}</div></section></div><img class="header-logo" src="../assets/al-motamayez-logo.png" alt="AL-MOTAMAYEZ logo"><div class="brand-copy"><strong>AL-MOTAMAYEZ</strong></div><span class="date-label">${new Intl.DateTimeFormat("ar-EG-u-nu-latn", { dateStyle: "full" }).format(new Date())}</span></div></header>
     ${data.orderReadWarning ? `<div class="notice" role="alert">${escapeHtml(data.orderReadWarning)}</div>` : ""}
     ${content}
       ${session.role === "admin" ? '<div class="modal-backdrop" id="model-expense-modal" hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="model-expense-title"><button class="modal-close" type="button" data-close-model-expense aria-label="إغلاق">×</button><h2 id="model-expense-title">إضافة مصروف للموديل</h2><p data-model-expense-name></p><form class="modal-form" data-model-expense-form><input type="hidden" name="orderId"><label for="model-expense-description">بيان المصروف</label><input id="model-expense-description" name="description" maxlength="240" required><label class="field model-expense-customer-toggle"><input type="checkbox" name="billToCustomer" checked><span>تحميل هذا المصروف على حساب العميل وإظهاره في بوابته</span></label><label for="model-expense-type">نوع المصروف عند عدم تحميله على العميل</label><select id="model-expense-type" name="expenseType" required><option value="treasury_only">مصروف تشغيلي من الخزنة فقط</option><option value="included_in_price">مصروف مدمج ضمن سعر القطعة</option></select><small class="model-expense-impact-hint">عند تفعيل الخيار يُضاف المصروف لحساب العميل. عند إلغاء التفعيل يبقى للإدارة ولا يظهر في بوابة العميل.</small><label for="model-expense-amount">قيمة المصروف (ج.م)</label><input id="model-expense-amount" name="amount" type="number" min="0.01" max="999999999999.99" step="0.01" required><div class="form-actions"><button class="button button-primary" type="submit">حفظ المصروف</button><button class="row-action" type="button" data-close-model-expense>إلغاء</button></div></form></section></div>' : ""}
@@ -8122,7 +8159,7 @@ function render(session, data, accounts) {
       </section>
     </div>`;
   activateDashboardView(window.location.hash.slice(1) || "dashboard", false);
-  bindSidebar();
+  bindSidebar(session);
   bindActions(session);
   refreshNotificationDropdown();
   updateOnlineIndicator();
@@ -8178,7 +8215,7 @@ window.addEventListener("hashchange", () => {
   }
 });
 
-function bindSidebar() {
+function bindSidebar(session) {
   const app = document.querySelector(".app-shell");
   const toggle = document.querySelector("[data-sidebar-toggle]");
   const setExpanded = (expanded) => {
@@ -8208,24 +8245,48 @@ function bindSidebar() {
       notificationDropdown.hidden = !notificationDropdown.hidden;
       notificationButton.setAttribute("aria-expanded", String(!notificationDropdown.hidden));
     });
-    document.querySelector("[data-mark-notifications-read]")?.addEventListener("click", () => {
-      realtimeNotifications.forEach((notification) => { notification.read = true; });
-      persistRealtimeNotifications();
-      refreshNotificationDropdown();
-    });
-    notificationDropdown.addEventListener("click", (event) => {
-      const notificationButtonClicked = event.target.closest("[data-notification-id]");
-      if (!notificationButtonClicked) return;
-      const notification = realtimeNotifications.find((entry) => entry.id === notificationButtonClicked.dataset.notificationId);
-      if (notification) {
-        notification.read = true;
-        persistRealtimeNotifications();
-        refreshNotificationDropdown();
-        notificationDropdown.hidden = true;
-        notificationButton.setAttribute("aria-expanded", "false");
-      }
-    });
   }
+  app.addEventListener("click", async (event) => {
+    const markAllButton = event.target.closest("[data-mark-notifications-read]");
+    if (markAllButton) {
+      markAllButton.disabled = true;
+      try {
+        const { error } = await supabaseClient.from("factory_notifications")
+          .update({ read_at: new Date().toISOString() })
+          .is("read_at", null);
+        if (error) throw error;
+        realtimeNotifications = realtimeNotifications.map((notification) => ({
+          ...notification,
+          read_at: notification.read_at || new Date().toISOString()
+        }));
+        refreshNotificationDropdown();
+      } catch (error) {
+        reportDashboardFailure(session, "تعذر تعليم الإشعارات كمقروءة", error);
+      } finally {
+        markAllButton.disabled = false;
+      }
+      return;
+    }
+    const notificationButtonClicked = event.target.closest("[data-notification-id]");
+    if (!notificationButtonClicked) return;
+    const notification = realtimeNotifications.find((entry) => entry.id === notificationButtonClicked.dataset.notificationId);
+    if (!notification) return;
+    try {
+      if (!notification.read_at) {
+        const { error } = await supabaseClient.from("factory_notifications")
+          .update({ read_at: new Date().toISOString() })
+          .eq("id", notification.id);
+        if (error) throw error;
+        notification.read_at = new Date().toISOString();
+        refreshNotificationDropdown();
+      }
+      notificationDropdown.hidden = true;
+      notificationButton.setAttribute("aria-expanded", "false");
+      navigateToNotification(session, notification);
+    } catch (error) {
+      reportDashboardFailure(session, "تعذر فتح الإشعار", error);
+    }
+  });
   document.querySelector("[data-online-indicator]")?.addEventListener("click", () => {
     renderOnlineUsersList();
     const onlineUsersModal = document.querySelector("[data-online-users-modal]");
@@ -8251,7 +8312,7 @@ function bindSidebar() {
 function updateRealtimeBadge() {
   const badge = document.querySelector("[data-live-badge]");
   if (!badge) return;
-  const unreadCount = realtimeNotifications.filter((notification) => !notification.read).length;
+  const unreadCount = realtimeNotifications.filter((notification) => !notification.read_at).length;
   badge.hidden = unreadCount <= 0;
   badge.textContent = unreadCount > 99 ? "99+" : String(unreadCount);
 }
@@ -8280,66 +8341,16 @@ function renderOnlineUsersList() {
   }).join("");
 }
 
-function notificationStorageKey(accountId) {
-  return `factory-live-notifications:${accountId}`;
-}
-
-function initializeRealtimeNotifications(session) {
-  if (notificationStorageAccount === session.accountId) {
-    filterRealtimeNotifications();
-    return;
-  }
-  notificationStorageAccount = session.accountId;
-  try {
-    const saved = JSON.parse(localStorage.getItem(notificationStorageKey(session.accountId)) || "[]");
-    realtimeNotifications = Array.isArray(saved)
-      ? saved.filter((item) => item && typeof item.id === "string")
-        .map((item) => ({
-          id: crypto.randomUUID(),
-          message: REALTIME_NOTIFICATION_MESSAGE,
-          createdAt: typeof item.createdAt === "string" ? item.createdAt : new Date().toISOString(),
-          read: Boolean(item.read)
-        }))
-        .slice(0, 40)
-      : [];
-    filterRealtimeNotifications();
-  } catch (error) {
-    realtimeNotifications = [];
-    console.warn("تعذر تحميل الإشعارات المحفوظة محلياً.", error);
-  }
-}
-
-function filterRealtimeNotifications() {
-  realtimeNotifications = realtimeNotifications.map((notification) => ({
-    id: notification.id,
-    message: REALTIME_NOTIFICATION_MESSAGE,
-    createdAt: notification.createdAt,
-    read: Boolean(notification.read)
-  }));
-  persistRealtimeNotifications();
-}
-
-function persistRealtimeNotifications() {
-  if (!notificationStorageAccount) return;
-  try {
-    const safeNotifications = realtimeNotifications.slice(0, 40).map((notification) => ({
-      id: notification.id,
-      message: REALTIME_NOTIFICATION_MESSAGE,
-      createdAt: notification.createdAt,
-      read: Boolean(notification.read)
-    }));
-    localStorage.setItem(notificationStorageKey(notificationStorageAccount), JSON.stringify(safeNotifications));
-  } catch (error) {
-    console.warn("تعذر حفظ حالة قراءة الإشعارات محلياً.", error);
-  }
+function initializeRealtimeNotifications(notifications) {
+  realtimeNotifications = Array.isArray(notifications) ? notifications : [];
 }
 
 function notificationListMarkup() {
   if (!realtimeNotifications.length) return '<p class="notification-empty">لا توجد تحديثات حديثة.</p>';
   return realtimeNotifications.slice(0, 20).map((notification) => `
-    <button class="notification-entry${notification.read ? " read" : " unread"}" type="button" data-notification-id="${escapeHtml(notification.id)}">
-      <span class="notification-entry-message">${REALTIME_NOTIFICATION_MESSAGE}</span>
-      <time>${formatDateTime(notification.createdAt)}</time>
+    <button class="notification-entry${notification.read_at ? " read" : " unread"}" type="button" data-notification-id="${escapeHtml(notification.id)}">
+      <span class="notification-entry-message">${escapeHtml(notification.message)}</span>
+      <time>${formatDateTime(notification.created_at)}</time>
     </button>`).join("");
 }
 
@@ -8349,16 +8360,44 @@ function refreshNotificationDropdown() {
   updateRealtimeBadge();
 }
 
-function recordRealtimeNotification(payload = {}) {
-  realtimeNotifications.unshift({
-    id: crypto.randomUUID(),
-    message: REALTIME_NOTIFICATION_MESSAGE,
-    createdAt: payload.commit_timestamp || new Date().toISOString(),
-    read: false
-  });
-  realtimeNotifications = realtimeNotifications.slice(0, 40);
-  persistRealtimeNotifications();
-  refreshNotificationDropdown();
+function navigateToNotification(session, notification) {
+  const allowedTargets = new Set(["#dashboard", "#orders", "#finance", "#records", "#clients", "#model-requests", "#personal-account"]);
+  const targetHash = allowedTargets.has(notification.target_hash) ? notification.target_hash : "#dashboard";
+  activateDashboardView(targetHash.slice(1));
+  if (!notification.target_order_id) return;
+  window.setTimeout(() => {
+    if (session.role === "client") {
+      document.querySelector('[data-client-orders-tab="all"]')?.click();
+      const modelButton = [...document.querySelectorAll("[data-client-model-order-id]")]
+        .find((button) => button.dataset.clientModelOrderId === notification.target_order_id);
+      modelButton?.click();
+      if (notification.event_type === "model_expense") {
+        window.setTimeout(() => {
+          document.querySelector('.client-model-details [data-client-model-tab="expenses"]')?.click();
+        }, 0);
+      }
+      return;
+    }
+    if (session.role === "admin") {
+      document.querySelector('[data-orders-tab="models"]')?.click();
+      const modelButton = [...document.querySelectorAll("[data-open-model-id]")]
+        .find((button) => button.dataset.openModelId === notification.target_order_id);
+      if (modelButton) {
+        modelButton.click();
+        return;
+      }
+      const order = dashboardData?.models.find((item) => item.id === notification.target_order_id);
+      const modal = document.querySelector("#model-details-modal");
+      if (!order || !modal) return;
+      modal.dataset.orderId = order.id;
+      modal.querySelector("#model-details-modal-content").innerHTML = modelDetailsModalView(order, true);
+      modal.querySelector("[data-edit-model-from-details]").hidden = Boolean(order.archivedAt);
+      const deleteButton = modal.querySelector("[data-action='delete-order']");
+      deleteButton.dataset.orderId = order.id;
+      deleteButton.hidden = !orderCanBeDeleted(order);
+      modal.hidden = false;
+    }
+  }, 0);
 }
 
 function subscribeToFactoryUpdates(session) {
@@ -8369,6 +8408,12 @@ function subscribeToFactoryUpdates(session) {
     .channel(`factory-dashboard-${session.accountId}`)
     .on("postgres_changes", { event: "*", schema: "public", table: "factory_live_signals" }, (payload) => scheduleRealtimeRefresh(session, "الطلبات ومراحل الإنتاج", payload));
   channel = channel
+    .on("postgres_changes", {
+      event: "INSERT",
+      schema: "public",
+      table: "factory_notifications",
+      ...(session.role === "admin" ? {} : { filter: `recipient_user_id=eq.${session.accountId}` })
+    }, (payload) => scheduleRealtimeRefresh(session, "الإشعارات", payload))
     .on("postgres_changes", { event: "*", schema: "public", table: "factory_records" }, (payload) => scheduleRealtimeRefresh(session, "السجلات", payload))
     .on("postgres_changes", { event: "*", schema: "public", table: "factory_deliveries" }, (payload) => scheduleRealtimeRefresh(session, "التسليمات", payload))
     .on("postgres_changes", { event: "*", schema: "public", table: "factory_worker_production_submissions" }, (payload) => scheduleRealtimeRefresh(session, "تسليمات الإنتاج", payload))
@@ -8488,7 +8533,6 @@ function bindRealtimeEditProtection(session) {
 }
 
 function scheduleRealtimeRefresh(session, source, payload) {
-  recordRealtimeNotification(payload);
   if (hasActiveDashboardEditor()) {
     realtimeRefreshPending = true;
     if (realtimeRefreshTimer) {
@@ -8525,10 +8569,6 @@ async function refreshFromRealtime(session, source) {
   } finally {
     realtimeRefreshRunning = false;
   }
-}
-
-function enrichRealtimeNotifications() {
-  filterRealtimeNotifications();
 }
 
 async function refreshDashboard(session, protectEdits = false) {
