@@ -1634,6 +1634,40 @@ body[data-dashboard-role] .topbar {
   -webkit-backdrop-filter: blur(14px);
 }
 
+@media (max-width: 800px) {
+  body[data-dashboard-role] .app-shell .sidebar {
+    z-index: 3001;
+    transition: transform .22s ease, visibility 0s linear .22s;
+    visibility: hidden;
+  }
+
+  body[data-dashboard-role] .app-shell.drawer-open .sidebar {
+    visibility: visible;
+    transition: transform .22s ease, visibility 0s;
+  }
+
+  body[data-dashboard-role] .app-shell .sidebar-backdrop {
+    z-index: 3000;
+  }
+
+  body[data-dashboard-role] .sidebar-drawer-close {
+    position: absolute;
+    z-index: 1;
+    top: 14px;
+    left: 14px;
+    display: grid;
+    width: 36px;
+    height: 36px;
+    place-items: center;
+    border: 1px solid var(--app-line);
+    border-radius: 9px;
+    color: var(--app-text);
+    background: var(--app-panel);
+    font-size: 24px;
+    line-height: 1;
+  }
+}
+
 body[data-dashboard-role] .panel,
 body[data-dashboard-role] .order-card,
 body[data-dashboard-role] .client-account-card,

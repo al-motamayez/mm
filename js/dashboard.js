@@ -8138,7 +8138,7 @@ function render(session, data, accounts) {
   document.querySelector("#app").innerHTML = `
     <div class="app-shell${collapsedClass}">
       <button class="sidebar-backdrop" type="button" data-sidebar-close aria-label="إغلاق القائمة الجانبية"></button>
-      <aside class="sidebar" id="sidebar"><a class="brand" href="../index.html"><img class="brand-logo" src="../assets/al-motamayez-logo.png" alt="AL-MOTAMAYEZ logo"><span class="brand-copy"><strong>AL-MOTAMAYEZ</strong></span></a><nav aria-label="القائمة الرئيسية"><p class="side-label">القائمة الرئيسية</p>${navigation}</nav><div class="sidebar-bottom"><div class="profile-chip"><span class="avatar">${escapeHtml(username.slice(0, 1))}</span><div class="profile-details"><strong>${escapeHtml(username)}</strong><span>${escapeHtml(session.roleName)}</span>${["worker", "cutting", "sewing"].includes(session.role) ? `<small>${escapeHtml(session.fullName)} · ${escapeHtml(session.phone || "الهاتف غير مسجل")}</small>` : ""}</div></div><button class="logout-button" id="logout" type="button">↪ تسجيل الخروج</button>${developerFooterMarkup()}</div></aside>
+      <aside class="sidebar" id="sidebar"><button class="sidebar-drawer-close" type="button" data-sidebar-close aria-label="إغلاق القائمة الجانبية">×</button><a class="brand" href="../index.html"><img class="brand-logo" src="../assets/al-motamayez-logo.png" alt="AL-MOTAMAYEZ logo"><span class="brand-copy"><strong>AL-MOTAMAYEZ</strong></span></a><nav aria-label="القائمة الرئيسية"><p class="side-label">القائمة الرئيسية</p>${navigation}</nav><div class="sidebar-bottom"><div class="profile-chip"><span class="avatar">${escapeHtml(username.slice(0, 1))}</span><div class="profile-details"><strong>${escapeHtml(username)}</strong><span>${escapeHtml(session.roleName)}</span>${["worker", "cutting", "sewing"].includes(session.role) ? `<small>${escapeHtml(session.fullName)} · ${escapeHtml(session.phone || "الهاتف غير مسجل")}</small>` : ""}</div></div><button class="logout-button" id="logout" type="button">↪ تسجيل الخروج</button>${developerFooterMarkup()}</div></aside>
       <main class="main-content"><header class="topbar"><div class="topbar-leading"><button class="sidebar-toggle" type="button" data-sidebar-toggle aria-controls="sidebar" aria-expanded="true" aria-label="طي القائمة الجانبية"><span aria-hidden="true">☰</span></button><div class="topbar-title"><h1>${info.title}</h1><p>${info.description}</p></div>${session.role === "admin" ? workforceDateToolbarMarkup() : ""}</div><div class="header-brand">${session.role === "admin" ? `<button class="online-indicator${onlineUserCount ? " online" : ""}" data-online-indicator type="button" title="عرض الحسابات المتصلة"><span class="online-indicator-dot"></span><span>متصلون الآن: <strong data-online-count>${onlineUserCount}</strong></span></button>` : ""}<div class="notification-control"><button class="live-notification-button" type="button" data-live-notifications aria-label="إشعارات المصنع" aria-expanded="false"><span aria-hidden="true">🔔</span><span class="live-notification-badge" data-live-badge aria-live="polite" hidden></span></button><section class="notification-dropdown" data-notification-dropdown hidden aria-label="إشعارات المصنع"><header><strong>إشعارات المصنع</strong><button type="button" class="notification-mark-read" data-mark-notifications-read>تعليم الكل كمقروء</button></header><div class="notification-list" data-notification-list>${notificationListMarkup()}</div></section></div><img class="header-logo" src="../assets/al-motamayez-logo.png" alt="AL-MOTAMAYEZ logo"><div class="brand-copy"><strong>AL-MOTAMAYEZ</strong></div><span class="date-label">${new Intl.DateTimeFormat("ar-EG-u-nu-latn", { dateStyle: "full" }).format(new Date())}</span></div></header>
     ${data.orderReadWarning ? `<div class="notice" role="alert">${escapeHtml(data.orderReadWarning)}</div>` : ""}
     ${content}
@@ -8234,9 +8234,18 @@ function bindSidebar(session) {
     app.classList.toggle("sidebar-collapsed", sidebarCollapsed);
     setExpanded(!sidebarCollapsed);
   });
-  document.querySelector("[data-sidebar-close]")?.addEventListener("click", () => {
+  const closeDrawer = () => {
     app.classList.remove("drawer-open");
     setExpanded(false);
+  };
+  document.querySelectorAll("[data-sidebar-close]").forEach((closeButton) => {
+    closeButton.addEventListener("click", closeDrawer);
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && app.classList.contains("drawer-open")) {
+      closeDrawer();
+      toggle?.focus();
+    }
   });
   const notificationButton = document.querySelector("[data-live-notifications]");
   const notificationDropdown = document.querySelector("[data-notification-dropdown]");

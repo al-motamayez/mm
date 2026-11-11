@@ -135,6 +135,7 @@ input:focus, select:focus { border-color: #5e9b83; box-shadow: 0 0 0 3px #5e9b83
 .sidebar-toggle { display: grid; flex: 0 0 42px; width: 42px; height: 42px; place-items: center; border: 1px solid var(--line); border-radius: 10px; color: var(--green); background: #fff; font-size: 18px; }
 .sidebar-toggle:hover { border-color: #abc6b7; background: var(--green-pale); }
 .sidebar-backdrop { display: none; }
+.sidebar-drawer-close { display: none; }
 .sidebar-collapsed .sidebar { flex-basis: 78px; width: 78px; padding-right: 16px; padding-left: 16px; }
 .sidebar-collapsed .brand { justify-content: center; }
 .sidebar-collapsed .brand-copy, .sidebar-collapsed .side-label, .sidebar-collapsed .nav-text, .sidebar-collapsed .profile-details, .sidebar-collapsed .logout-button { display: none; }
