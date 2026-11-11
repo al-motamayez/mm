@@ -8590,7 +8590,6 @@ async function refreshDashboard(session, protectEdits = false) {
     realtimeRefreshPending = true;
     return;
   }
-  enrichRealtimeNotifications();
   render(session, data, accounts);
 }
 
