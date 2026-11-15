@@ -558,7 +558,7 @@ async function readDashboardData(session) {
   data.payments = payments;
   data.accountAdjustments = accountAdjustments;
   data.settlements = settlements;
-  data.deliveries = deliveriesResult.data || [];
+  data.deliveries = uniqueFactoryDeliveries(deliveriesResult.data || []);
   data.workerOrderDeliveries = workerOrderDeliveriesResult.data || [];
   data.workerDeliveryModels = workerDeliveryModelsResult.data || [];
   data.cashTransactions = cashTransactionsResult.data || [];
@@ -2452,6 +2452,62 @@ function orderCanBeDeleted(item) {
     && !item.fabric
     && !item.cutterName
     && unstartedStageStatuses.has(item.cuttingStageStatus || "");
+}
+
+function uniqueFactoryDeliveries(deliveries) {
+  const seenIds = new Set();
+  return deliveries.filter((delivery) => {
+    if (!delivery || typeof delivery.id !== "string" || !delivery.id) {
+      throw new Error("يحتوي سجل التسليم على دفعة دون معرّف.");
+    }
+    if (seenIds.has(delivery.id)) return false;
+    seenIds.add(delivery.id);
+    return true;
+  });
+}
+
+async function deleteFactoryOrderFromDashboard(session, order, button) {
+  if (!orderCanBeDeleted(order)) {
+    window.factoryUI.toast("لا يمكن حذف موديل بدأ إنتاجه أو ارتبط بسجل مالي أو تسليم.", "error");
+    return;
+  }
+  if (!await window.factoryUI.confirmAction({
+    title: "حذف الموديل",
+    message: `سيُحذف ${order.name || order.modelNumber || "الموديل"} فقط إذا لم يبدأ قصه ولم يرتبط بأي سجل إنتاجي أو مالي. سيرفض النظام الحذف عند وجود أثر، ويمكن عندها استخدام «إيقاف / أرشفة» للحفاظ على الحسابات والتاريخ.`,
+    confirmLabel: "حذف الموديل",
+    danger: true
+  })) return;
+  button.disabled = true;
+  let orderDeleted = false;
+  try {
+    const { error } = await supabaseClient.rpc("delete_factory_order", {
+      requested_order_id: order.id
+    });
+    if (error?.code === "PGRST202") {
+      throw new Error("دالة حذف الموديل غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
+    }
+    if (error) throw error;
+    orderDeleted = true;
+    let imageCleanupFailed = false;
+    for (const imageUrl of new Set([...(order.modelImageUrls || []), order.modelImageUrl, order.modelImageUrl2].filter(Boolean))) {
+      try {
+        await deleteOrderModelImage(imageUrl, order.id);
+      } catch (imageError) {
+        imageCleanupFailed = true;
+        console.warn("The model was deleted, but one of its images could not be removed.", imageError);
+      }
+    }
+    document.querySelector("#order-modal")?.setAttribute("hidden", "");
+    await refreshDashboard(session);
+    window.factoryUI.toast(imageCleanupFailed
+      ? "تم حذف الموديل، لكن تعذر حذف إحدى صوره من التخزين."
+      : "تم حذف الموديل.");
+  } catch (error) {
+    if (!orderDeleted) button.disabled = false;
+    reportDashboardFailure(session, orderDeleted
+      ? "تم حذف الموديل لكن تعذر تحديث اللوحة"
+      : "تعذر حذف الموديل", error);
+  }
 }
 
 function orderCards(models, withActions = false) {
@@ -4399,7 +4455,7 @@ function adminView(data, accounts) {
           <div class="field"><label for="model-remaining">المتبقي المتوقع بعد العربون</label><output id="model-remaining" class="calculated-value">0 ج.م</output></div>
           <div class="field"><label for="client-balance-preview">الرصيد المتوقع للعميل بعد الحفظ</label><output id="client-balance-preview" class="calculated-value">اختر العميل</output></div>
         </div></section>
-        <div class="form-actions"><button class="button button-primary" type="submit">حفظ الطلبية</button><button class="row-action" type="button" data-cancel-edit hidden>إلغاء التعديل</button><button class="row-action" type="button" data-close-order>إغلاق</button></div>
+        <div class="form-actions"><button class="button button-primary" type="submit">حفظ الطلبية</button><button class="row-action" type="button" data-cancel-edit hidden>إلغاء التعديل</button><button class="row-action order-delete-action" type="button" data-delete-order-from-editor hidden>حذف الموديل</button><button class="row-action" type="button" data-close-order>إغلاق</button></div>
       </form><div data-order-cutting-editor hidden></div></section></div>
       <div class="modal-backdrop" id="delivery-modal" hidden><section class="modal-card delivery-modal-card" role="dialog" aria-modal="true" aria-labelledby="delivery-modal-title"><button class="modal-close" type="button" data-close-delivery aria-label="إغلاق">×</button><h2 id="delivery-modal-title">تسجيل تسليم جديد</h2><p id="delivery-modal-description">أدخل كمية هذه الدفعة واسم مستلمها؛ ستُضاف إلى إجمالي ما تم تسليمه حتى الآن.</p><form id="delivery-form" class="modal-form"><input type="hidden" name="orderId"><input type="hidden" name="finalize" value=""><label for="delivery-order-select" data-delivery-order-field hidden>الطلبية الجاهزة</label><select id="delivery-order-select" name="orderSelector" data-delivery-order-field hidden required></select><label for="delivery-mode" data-delivery-mode-field hidden>طريقة إدخال التسليم</label><select id="delivery-mode" name="deliveryMode" data-delivery-mode-field hidden><option value="total">إدخال الإجمالي فقط</option><option value="detailed">حسب اللون والمقاس</option></select><div id="delivery-allocation" data-delivery-allocation hidden></div><label for="delivery-quantity" id="delivery-quantity-label">كمية التسليم</label><input id="delivery-quantity" name="quantity" type="number" min="1" step="1" required><label for="delivery-recipient">اسم المستلم</label><input id="delivery-recipient" name="recipientName" required><div class="form-actions"><button class="button button-primary" type="submit">تسجيل التسليم</button><button class="row-action" type="button" data-close-delivery>إلغاء</button></div></form></section></div>
     </section>
@@ -11867,6 +11923,7 @@ function bindActions(session) {
     resetModelImageSlots();
     orderForm.querySelector('[type="submit"]').textContent = "حفظ الطلبية";
     orderForm.querySelector("[data-cancel-edit]").hidden = true;
+    orderForm.querySelector("[data-delete-order-from-editor]").hidden = true;
     document.querySelector("#order-modal-title").textContent = "إضافة موديل / طلبية";
     updateOrderTotals();
   };
@@ -11936,6 +11993,9 @@ function bindActions(session) {
     orderForm.querySelector("#model-price-history-note").hidden = currentOrder.deliveredPieces <= 0;
     orderForm.querySelector('[type="submit"]').textContent = "حفظ التعديلات";
     orderForm.querySelector("[data-cancel-edit]").hidden = false;
+    const deleteOrderButton = orderForm.querySelector("[data-delete-order-from-editor]");
+    deleteOrderButton.dataset.orderId = currentOrder.id;
+    deleteOrderButton.hidden = !orderCanBeDeleted(currentOrder);
     document.querySelector("#order-modal-title").textContent = "تعديل بيانات الموديل";
     updateOrderTotals();
     orderModal.hidden = false;
@@ -12100,6 +12160,14 @@ function bindActions(session) {
   document.querySelectorAll("[data-close-order]").forEach((button) => button.addEventListener("click", closeOrderModal));
   orderModal.addEventListener("click", (event) => {
     if (event.target === orderModal) closeOrderModal();
+    const deleteButton = event.target.closest("[data-delete-order-from-editor]");
+    if (!deleteButton) return;
+    const order = dashboardData.models.find((item) => item.id === deleteButton.dataset.orderId);
+    if (!order) {
+      window.factoryUI.toast("تعذر العثور على الموديل. حدّث الصفحة وحاول مجددًا.", "error");
+      return;
+    }
+    deleteFactoryOrderFromDashboard(session, order, deleteButton);
   });
   document.querySelectorAll("[data-cancel-edit]").forEach((button) => button.addEventListener("click", () => {
     const form = button.closest("form");
@@ -13046,38 +13114,7 @@ function bindActions(session) {
         window.factoryUI.toast("تعذر العثور على الموديل. حدّث الصفحة وحاول مجددًا.", "error");
         return;
       }
-      if (!await window.factoryUI.confirmAction({
-        title: "حذف الموديل",
-        message: `سيُحذف ${order.name || order.modelNumber || "الموديل"} فقط إذا لم يبدأ قصه ولم يرتبط بأي سجل إنتاجي أو مالي. سيرفض النظام الحذف عند وجود أثر، ويمكن عندها استخدام «إيقاف / أرشفة» للحفاظ على الحسابات والتاريخ.`,
-        confirmLabel: "حذف الموديل",
-        danger: true
-      })) return;
-      button.disabled = true;
-      try {
-        const { error } = await supabaseClient.rpc("delete_factory_order", {
-          requested_order_id: order.id
-        });
-        if (error?.code === "PGRST202") {
-          throw new Error("دالة حذف الموديل غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
-        }
-        if (error) throw error;
-        let imageCleanupFailed = false;
-        for (const imageUrl of new Set([...(order.modelImageUrls || []), order.modelImageUrl, order.modelImageUrl2].filter(Boolean))) {
-          try {
-            await deleteOrderModelImage(imageUrl, order.id);
-          } catch (imageError) {
-            imageCleanupFailed = true;
-            console.warn("The model was deleted, but one of its images could not be removed.", imageError);
-          }
-        }
-        await refreshDashboard(session);
-        window.factoryUI.toast(imageCleanupFailed
-          ? "تم حذف الموديل، لكن تعذر حذف إحدى صوره من التخزين."
-          : "تم حذف الموديل.");
-      } catch (error) {
-        button.disabled = false;
-        reportDashboardFailure(session, "تعذر حذف الموديل", error);
-      }
+      await deleteFactoryOrderFromDashboard(session, order, button);
       return;
     }
     if (button.dataset.action === "record-delivery" || button.dataset.action === "complete-handover") {

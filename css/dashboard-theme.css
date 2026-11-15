@@ -822,6 +822,10 @@ body[data-dashboard-role] #model-details-modal {
   z-index: 1310;
 }
 
+body[data-dashboard-role] .modal-backdrop.custom-color-modal {
+  z-index: 1320;
+}
+
 body[data-dashboard-role] .modal-card h2,
 body[data-dashboard-role] .confirm-title {
   color: #f0f5f8;
