@@ -648,6 +648,20 @@ body[data-dashboard-role] .client-management-tab[aria-selected="true"] {
   background: #20523f;
 }
 
+body[data-dashboard-role] .order-edit-tabs {
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+body[data-dashboard-role] .order-edit-tabs .client-management-tab {
+  flex: 1 1 145px;
+  white-space: nowrap;
+}
+
+body[data-dashboard-role] [data-model-edit-section][hidden] {
+  display: none !important;
+}
+
 body[data-dashboard-role] .client-quick-tabs,
 body[data-dashboard-role] .client-model-tabs {
   border-color: var(--app-line);

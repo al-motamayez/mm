@@ -3185,32 +3185,23 @@ function modelStatusReviewView(data) {
   const allStatuses = [...new Set(orders.flatMap((order) => factoryOrderStatusSequence(order)))];
   return `<div class="clients-toolbar"><div><h2>الموديلات</h2><p>حالات الموديل موحدة حسب دورة الإنتاج، وتُضاف المراحل الإضافية وفق الأقسام المختارة.</p></div><label class="field model-status-filter"><span>تصفية حسب الحالة</span><select data-filter-model-status><option value="">كل الحالات</option>${statusOptions(allStatuses, "")}</select></label></div>
     ${orders.length ? `<div class="model-status-list">${orders.map((order) => {
-      const isLocked = Boolean(order.archivedAt) || LOCKED_FACTORY_ORDER_STATUSES.includes(order.status);
+      const isLocked = Boolean(order.archivedAt)
+        || LOCKED_FACTORY_ORDER_STATUSES.includes(order.status)
+        || Number(order.deliveredPieces || 0) > 0;
       const selectedStatus = canonicalFactoryOrderStatus(order.status);
       const allOrderStatuses = factoryOrderStatusSequence(order);
       const additionalStages = (order.workStages || []).filter((stage) => stage !== "cutting" && stage !== "sewing");
-      const additionalStatuses = additionalStages.flatMap(workStageStatusLabels);
-      const additionalStagesComplete = additionalStages.every((stage) =>
-        (order.completedAdditionalStages || []).includes(stage)
-      );
-      const canManageStageStatus = selectedStatus === "تمت الخياطة"
-        || (!order.workStages?.includes("sewing") && order.workStages?.includes("cutting") && selectedStatus === "تم القص" && additionalStages.length > 0)
-        || additionalStatuses.includes(selectedStatus);
-      const statuses = canManageStageStatus
-        ? [...new Set([selectedStatus, ...additionalStatuses, ...(additionalStagesComplete ? ["جاهز للتسليم"] : [])])]
-        : selectedStatus === "قيد الانتظار"
-          ? ["قيد الانتظار", "قيد الفرش"]
-          : allOrderStatuses.filter((status) => status !== "تم التسليم");
-      if (selectedStatus === "تم التسليم") statuses.push(selectedStatus);
-      const workflowManaged = !canManageStageStatus && selectedStatus !== "قيد الانتظار";
+      const statuses = [...new Set([
+        ...allOrderStatuses,
+        ...additionalStages.flatMap(workStageStatusLabels),
+        selectedStatus
+      ])].filter((status) => status !== "تم التسليم");
       return `<article class="model-status-row" data-model-status-row data-current-status="${escapeHtml(order.status)}">
       <div class="model-status-info"><strong>${escapeHtml(order.name)}</strong><span>العميل: ${escapeHtml(order.client || "—")}</span><span>العدد: ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity)} قطعة</span><span>السعر: ${money(order.pricePerPiece)}</span></div>
       ${statusTag(order.displayStatus || selectedStatus)}
-      <label class="model-status-control"><span>الحالة${isLocked ? " · مقفلة" : workflowManaged ? " · تُدار من سير الإنتاج" : " · إدارة المرحلة الإضافية"}</span><select data-model-status="${escapeHtml(order.id)}"${isLocked || workflowManaged ? " disabled" : ""}>${statusOptions(statuses, selectedStatus)}</select></label>
-      <button class="button button-secondary" type="button" data-save-model-status="${escapeHtml(order.id)}"${isLocked || workflowManaged ? " disabled" : ""}>حفظ الحالة</button>
-      ${isLocked ? '<span class="order-delete-protected">لا يمكن تغيير حالة موديل تم تسليمه أو إغلاقه.</span>' : ""}
-      ${workflowManaged ? '<span class="order-delete-protected">تُحدّث الحالة من إجراءات القص والخياطة.</span>' : ""}
-      ${canManageStageStatus && !additionalStagesComplete ? '<span class="order-delete-protected">لا يمكن اختيار «جاهز للتسليم» قبل اكتمال جميع المراحل الإضافية.</span>' : ""}
+      <label class="model-status-control"><span>الحالة${isLocked ? " · مقفلة" : " · إدارة يدوية"}</span><select data-model-status="${escapeHtml(order.id)}"${isLocked ? " disabled" : ""}>${statusOptions(statuses, selectedStatus)}</select></label>
+      <button class="button button-secondary" type="button" data-save-model-status="${escapeHtml(order.id)}"${isLocked ? " disabled" : ""}>حفظ الحالة</button>
+      ${isLocked ? '<span class="order-delete-protected">لا يمكن تغيير حالة موديل بدأ تسليمه أو أُغلق.</span>' : '<span class="muted">يؤدي تغيير الحالة إلى تحديث المرحلة الحالية وإظهار الموديل في القسم الموافق لها.</span>'}
     </article>`;
     }).join("")}</div>` : '<div class="empty-state">لا توجد موديلات لمراجعتها.</div>'}`;
 }
@@ -4421,30 +4412,40 @@ function adminView(data, accounts) {
       </div>
       <div data-orders-tab-panel="status"${activeOrdersTab === "status" ? "" : " hidden"}>${modelStatusReviewView(data)}</div>
       <div class="modal-backdrop" id="order-modal" hidden><section class="modal-card order-modal-card" role="dialog" aria-modal="true" aria-labelledby="order-modal-title"><button class="modal-close" type="button" data-close-order aria-label="إغلاق">×</button><h2 id="order-modal-title">إضافة موديل / طلبية</h2><p>يمكن ترك العدد فارغًا حتى انتهاء الفرش والقص، ثم إدخال العدد الفعلي عند تعديل الطلب.</p>            <form id="model-form" class="order-form modal-form" novalidate><input type="hidden" name="editIndex" value=""><input type="hidden" name="savedOrderId" value="">
-        <section class="form-section"><h3>المعلومات الأساسية <span>إجباري</span></h3><div class="form-section-grid">
+        <div class="client-management-tabs order-edit-tabs" role="tablist" aria-label="أقسام تعديل الموديل">
+          <button type="button" class="client-management-tab active" role="tab" aria-selected="true" data-model-edit-tab="details">بيانات الموديل</button>
+          <button type="button" class="client-management-tab" role="tab" aria-selected="false" data-model-edit-tab="production">مراحل التشغيل</button>
+          <button type="button" class="client-management-tab" role="tab" aria-selected="false" data-model-edit-tab="counts">الأعداد والألوان والقص</button>
+          <button type="button" class="client-management-tab" role="tab" aria-selected="false" data-model-edit-tab="finance">التفاصيل المالية</button>
+        </div>
+        <section class="form-section" data-model-edit-section="details"><h3>المعلومات الأساسية <span>إجباري</span></h3><div class="form-section-grid">
           <input type="hidden" name="customerId">
           <div class="field model-customer-field"><label for="model-client">اختيار اسم العميل</label><select id="model-client" name="customerSelection"><option value="">اختر اسم العميل</option>${clientOptions}</select><small>اختر العميل أو البراند؛ اختيار أحدهما يلغي الآخر.</small></div>
           <div class="field model-brand-field"><label for="model-brand">اختيار اسم البراند</label><select id="model-brand" name="brandSelection"><option value="">اختر اسم البراند</option>${brandOptions}</select></div>
           <div class="field model-name-field"><label for="model-name">اسم الموديل</label><input id="model-name" name="name"></div>
           <div class="field"><label for="model-system-code">كود الموديل بالنظام</label><input id="model-system-code" name="factoryModelCode" readonly placeholder="يُنشأ تلقائياً بعد الحفظ"></div>
           <div class="field"><label for="model-client-code">كود/رقم الموديل للعميل</label><input id="model-client-code" name="clientModelCode" maxlength="120" autocomplete="off"></div>
+        </div></section>
+        <section class="form-section" data-model-edit-section="counts" hidden><h3>الأعداد والألوان</h3><div class="form-section-grid">
           <div class="field model-quantity-field"><label for="model-quantity">العدد الكلي</label><input id="model-quantity" name="quantity" type="number" min="0" step="1" placeholder="أدخل العدد أو اتركه حتى انتهاء القص"><small data-quantity-lock-note hidden>تم تثبيت الأعداد بعد بدء مراحل الإنتاج ولا يمكن تعديلها.</small><small data-quantity-entry-note>يمكن إدخال العدد الآن أو تأجيله؛ عند اختيار الألوان والمقاسات يوزع النظام العدد تلقائياً.</small></div>
           <div class="field" data-original-quantity-field hidden><label for="model-original-quantity">العدد المطلوب الأصلي</label><input id="model-original-quantity" name="originalQuantity" type="number" min="0" step="1"></div>
         </div></section>
-        <section class="form-section"><h3>التفاصيل التشغيلية <span>اختياري</span></h3><div class="form-section-grid">
+        <section class="form-section" data-model-edit-section="production" hidden><h3>مراحل التشغيل <span>اختياري</span></h3><div class="form-section-grid">
           <div class="field wide"><label for="model-production-type">مسار التشغيل</label><select id="model-production-type" name="productionType"><option value="full_cutting">قص وفرش داخل المصنع</option><option value="cutting_only">قص بس (بدون خياطة داخلية)</option><option value="ready_sewing">موديل جاهز ومقصوص مسبقاً</option></select><small>اختر «قص بس» لتسليم الموديل بعد اكتمال القص دون إدخاله للخياطة؛ أو رتّب المراحل المطلوبة أدناه.</small></div>
           <fieldset class="field work-stage-picker"><legend>مراحل الموديل المطلوبة</legend><div class="work-stage-options" data-work-stage-options>${WORK_STAGES.map(([key, label]) => workStageOptionMarkup(key, label, ["cutting", "sewing", "finishing"].includes(key))).join("")}</div><div class="work-stage-custom-entry"><input type="text" data-custom-work-stage maxlength="50" aria-label="اسم مرحلة مخصصة" placeholder="مرحلة إضافية مثل تركيب حبل"><button class="row-action" type="button" data-add-work-stage>＋ إضافة مرحلة</button></div><small>اختر المراحل بالترتيب المطلوب؛ يظهر رقم كل مرحلة حسب أسبقية اختيارها.</small></fieldset>
-          ${colorPickerMarkup("", "model-colors")}
-          ${sizePickerMarkup("", "model-sizes", true, true)}
-          <div class="model-allocation field"><label>توزيع العدد على الألوان والمقاسات</label><div data-model-allocation-grid><p class="muted">أدخل العدد الكلي واختر الألوان والمقاسات لعرض التوزيع.</p></div><input type="hidden" name="colorSizeDistribution" value='{"colors":[]}'></div>
           <div class="field model-image-field"><span>صور الموديل (اختياري - صورتان كحد أقصى)</span><small>يمكن رفع أو تبديل كل صورة أو حذفها. الحد الأقصى لكل صورة 25 ميجابايت.</small><div class="model-image-slots" data-model-image-slots>${[1, 2].map((slot) => `<section class="model-image-slot" data-model-image-slot="${slot}"><strong>الصورة ${slot}</strong><input type="file" name="modelImage${slot}" accept="image/*" hidden><div data-model-image-preview="${slot}"></div><div class="form-actions"><button class="row-action" type="button" data-model-image-replace="${slot}"><span aria-hidden="true">📷</span> ${slot === 1 ? "إضافة / تبديل الصورة" : "إضافة الصورة الثانية"}</button><button class="row-action order-delete-action" type="button" data-model-image-delete="${slot}" hidden>حذف الصورة</button></div></section>`).join("")}</div></div>
           <div class="field" data-expected-delivery-field><label for="model-expected-delivery">تاريخ التسليم المتوقع (اختياري)</label><input id="model-expected-delivery" name="expectedDeliveryDate" type="date"></div>
           <div class="field"><label for="model-status">حالة الطلب</label><select id="model-status" name="status">${FACTORY_ORDER_STATUSES.map((status) => `<option>${status}</option>`).join("")}</select><small data-workflow-status-hint hidden>حالة الإنتاج الحالية تُدار من خطوات التشغيل، وستبقى كما هي عند حفظ بيانات الموديل.</small></div>
           <div class="field" data-initial-delivery-field hidden><label for="model-delivered-pieces">العدد المسلّم</label><input id="model-delivered-pieces" name="deliveredPieces" type="text" inputmode="numeric" autocomplete="off"><small>يُسجل كدفعة تسليم تاريخية ويُحتسب ضمن حساب العميل.</small></div>
           <div class="field" data-model-priority-field><label for="model-priority">أولوية التنفيذ</label><select id="model-priority" name="priority"><option>عادي</option><option>مرتفع</option><option>عاجل</option></select></div>
         </div></section>
-        <section class="form-section cutting-pricing-preview-section"><h3>بيانات القص الفعلية</h3><div data-cutting-pricing-details class="cutting-pricing-details"><p class="muted">تظهر تفاصيل القص والخامة هنا عند تسعير موديل مسجل.</p></div></section>
-        <section class="form-section"><h3>التفاصيل المالية <span>اختياري</span></h3><div class="form-section-grid">
+        <section class="form-section" data-model-edit-section="counts" hidden><h3>الأعداد والألوان</h3><div class="form-section-grid">
+          ${colorPickerMarkup("", "model-colors")}
+          ${sizePickerMarkup("", "model-sizes", true, true)}
+          <div class="model-allocation field"><label>توزيع العدد على الألوان والمقاسات</label><div data-model-allocation-grid><p class="muted">أدخل العدد الكلي واختر الألوان والمقاسات لعرض التوزيع.</p></div><input type="hidden" name="colorSizeDistribution" value='{"colors":[]}'></div>
+        </div></section>
+        <section class="form-section cutting-pricing-preview-section" data-model-edit-section="counts" hidden><h3>بيانات القص الفعلية</h3><div data-cutting-pricing-details class="cutting-pricing-details"><p class="muted">تظهر تفاصيل القص والخامة هنا عند تسعير موديل مسجل.</p></div></section>
+        <section class="form-section" data-model-edit-section="finance" hidden><h3>التفاصيل المالية <span>اختياري</span></h3><div class="form-section-grid">
           <div class="field"><label for="model-pricing-mode">طريقة التسعير</label><select id="model-pricing-mode" name="pricingMode"><option value="total">سعر إجمالي للقطعة</option><option value="stages">تسعير كل قسم للقطعة</option></select></div>
           <div class="field stage-prices-field" data-stage-prices-field hidden><label>سعر القطعة لكل قسم (ج.م)</label><div class="stage-prices-list" data-stage-prices-list></div><small>سعر القطعة الإجمالي يساوي مجموع أسعار الأقسام المختارة.</small></div>
           <input type="hidden" name="stagePrices" value="{}">
@@ -11545,6 +11546,17 @@ function bindActions(session) {
       row.hidden = Boolean(modelStatusFilter.value) && row.dataset.currentStatus !== modelStatusFilter.value;
     });
   });
+  document.querySelectorAll("[data-model-edit-tab]").forEach((tab) => tab.addEventListener("click", () => {
+    const selectedSection = tab.dataset.modelEditTab;
+    document.querySelectorAll("[data-model-edit-tab]").forEach((item) => {
+      const selected = item === tab;
+      item.classList.toggle("active", selected);
+      item.setAttribute("aria-selected", String(selected));
+    });
+    document.querySelectorAll("[data-model-edit-section]").forEach((section) => {
+      section.hidden = section.dataset.modelEditSection !== selectedSection;
+    });
+  }));
   document.querySelectorAll("[data-save-model-status]").forEach((button) => button.addEventListener("click", async () => {
     const order = dashboardData.models.find((item) => item.id === button.dataset.saveModelStatus);
     const select = button.closest("[data-model-status-row]")?.querySelector("[data-model-status]");
@@ -11552,7 +11564,9 @@ function bindActions(session) {
       window.factoryUI.toast("تعذر العثور على الموديل أو الحالة المحددة.", "error");
       return;
     }
-    if (order.archivedAt || LOCKED_FACTORY_ORDER_STATUSES.includes(order.status)) {
+    if (order.archivedAt
+        || LOCKED_FACTORY_ORDER_STATUSES.includes(order.status)
+        || Number(order.deliveredPieces || 0) > 0) {
       window.factoryUI.toast("تم تسليم الموديل أو إغلاقه؛ لا يمكن تغيير حالته.", "error");
       return;
     }
@@ -11560,34 +11574,16 @@ function bindActions(session) {
       window.factoryUI.toast("الحالة المحددة هي الحالة الحالية بالفعل.");
       return;
     }
-    if (["في انتظار الخياطة", "جاري الخياطة", "تمت الخياطة"].includes(canonicalFactoryOrderStatus(select.value))) {
-      window.factoryUI.toast("لا تغيّر حالة الخياطة يدوياً؛ استخدم أزرار نقل الطلب وبدء الخياطة وإنهائها.", "error");
-      return;
-    }
-    const stageManagedStatuses = [
-      "جاري التشطيب", "تم التشطيب", "جاري المكواة", "تم الكي",
-      "جاري الطباعة", "تمت الطباعة", "جاري التكييس", "تم التكييس",
-      "جاري الفرز", "تم الفرز", "جاهز للتسليم",
-      ...(order.workStages || []).filter(isCustomWorkStage).flatMap(workStageStatusLabels)
-    ];
-    if (!stageManagedStatuses.includes(select.value) && isFactoryOrderWorkflowManaged(order)) {
-      window.factoryUI.toast("لا يمكن إرجاع موديل دخل مراحل التشغيل من هنا؛ استخدم أدوات سير العمل.", "error");
-      return;
-    }
     button.disabled = true;
     try {
-      if (stageManagedStatuses.includes(select.value)) {
-        const { error } = await supabaseClient.rpc("admin_update_factory_order_stage_status", {
-          requested_order_id: order.id,
-          requested_status: select.value
-        });
-        if (error?.code === "PGRST202") {
-          throw new Error("دالة تحديث حالة المراحل الإضافية غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
-        }
-        if (error) throw error;
-      } else {
-        await persistFactoryOrder(order, { status: select.value });
+      const { error } = await supabaseClient.rpc("admin_set_factory_order_status", {
+        requested_order_id: order.id,
+        requested_status: select.value
+      });
+      if (error?.code === "PGRST202") {
+        throw new Error("دالة التغيير اليدوي لحالة الموديل غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
       }
+      if (error) throw error;
       activeOrdersTab = "status";
       await refreshDashboard(session);
       activateDashboardView("orders");

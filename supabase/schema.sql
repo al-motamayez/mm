@@ -1282,6 +1282,10 @@ alter table public.orders
       'جاري المكواة', 'تم الكي', 'جاري الطباعة', 'تمت الطباعة',
       'جاري التكييس', 'تم التكييس', 'جاري الفرز', 'تم الفرز', 'مكتمل', 'جاهز للتسليم', 'تم التسليم'
     )
+    or (
+      length(status) between 4 and 55
+      and (status like 'جاري %' or status like 'تم %')
+    )
   );
 
 update public.orders as factory_order
@@ -2304,6 +2308,179 @@ begin
   end if;
 
   raise exception 'The requested status is not an admin-manageable production stage.';
+end;
+$$;
+
+create or replace function public.admin_set_factory_order_status(
+  requested_order_id uuid,
+  requested_status text
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  current_order public.orders%rowtype;
+  normalized_status text;
+  target_stage_name text;
+  target_stage_status text;
+  target_stage_position integer;
+  selected_stage record;
+  target_completed boolean;
+begin
+  if not public.is_active_factory_admin() then
+    raise exception 'Only active admins can change factory order statuses.';
+  end if;
+  if requested_order_id is null or requested_status is null then
+    raise exception 'Choose an order and a valid production status.';
+  end if;
+
+  select *
+    into current_order
+  from public.orders
+  where id = requested_order_id
+  for update;
+  if not found
+     or current_order.archived_at is not null
+     or current_order.workflow_archived_at is not null
+     or current_order.status = 'تم التسليم'
+     or current_order.delivered_pieces > 0 then
+    raise exception 'Delivered, closed, or unavailable orders cannot have their production status changed.';
+  end if;
+
+  normalized_status := case requested_status
+    when 'مكتمل' then 'تمت الخياطة'
+    else requested_status
+  end;
+
+  if normalized_status = 'قيد الانتظار' then
+    target_stage_name := null;
+  elsif normalized_status in ('قيد الفرش', 'تم الفرش', 'جاهز للقص') then
+    if not (current_order.work_stages @> array['cutting']::text[]) then
+      raise exception 'The selected order has no cutting stage.';
+    end if;
+    target_stage_name := 'cutting';
+    target_stage_status := normalized_status;
+  elsif normalized_status = 'تم القص' then
+    if not (current_order.work_stages @> array['cutting']::text[]) then
+      raise exception 'The selected order has no cutting stage.';
+    end if;
+    if current_order.work_stages @> array['sewing']::text[] then
+      target_stage_name := 'sewing';
+      target_stage_status := 'متاح للخياطة';
+      normalized_status := 'في انتظار الخياطة';
+    else
+      target_stage_name := 'cutting';
+      target_stage_status := 'مكتمل';
+    end if;
+  elsif normalized_status = 'في انتظار الخياطة' then
+    if not (current_order.work_stages @> array['sewing']::text[]) then
+      raise exception 'The selected order has no sewing stage.';
+    end if;
+    target_stage_name := 'sewing';
+    target_stage_status := 'متاح للخياطة';
+  elsif normalized_status = 'جاري الخياطة' then
+    if not (current_order.work_stages @> array['sewing']::text[]) then
+      raise exception 'The selected order has no sewing stage.';
+    end if;
+    target_stage_name := 'sewing';
+    target_stage_status := 'قيد الخياطة';
+  elsif normalized_status = 'تمت الخياطة' then
+    if not (current_order.work_stages @> array['sewing']::text[]) then
+      raise exception 'The selected order has no sewing stage.';
+    end if;
+    target_stage_name := 'sewing';
+    target_stage_status := 'مكتمل';
+  elsif normalized_status = 'جاهز للتسليم' then
+    target_stage_name := null;
+  else
+    select stage.stage_name,
+           requested_status in (
+             case stage.stage_name
+               when 'finishing' then 'تم التشطيب'
+               when 'ironing' then 'تم الكي'
+               when 'printing' then 'تمت الطباعة'
+               when 'packaging' then 'تم التكييس'
+               when 'sorting' then 'تم الفرز'
+               else 'تم ' || stage.stage_name
+             end
+           )
+      into target_stage_name, target_completed
+    from unnest(current_order.work_stages) with ordinality as stage(stage_name, position)
+    where stage.stage_name not in ('cutting', 'sewing')
+      and requested_status in (
+        case stage.stage_name
+          when 'finishing' then 'جاري التشطيب'
+          when 'ironing' then 'جاري المكواة'
+          when 'printing' then 'جاري الطباعة'
+          when 'packaging' then 'جاري التكييس'
+          when 'sorting' then 'جاري الفرز'
+          else 'جاري ' || stage.stage_name
+        end,
+        case stage.stage_name
+          when 'finishing' then 'تم التشطيب'
+          when 'ironing' then 'تم الكي'
+          when 'printing' then 'تمت الطباعة'
+          when 'packaging' then 'تم التكييس'
+          when 'sorting' then 'تم الفرز'
+          else 'تم ' || stage.stage_name
+        end
+      )
+    order by stage.position
+    limit 1;
+
+    if target_stage_name is null then
+      raise exception 'The requested status is not available for this order.';
+    end if;
+    target_stage_status := case when target_completed then 'مكتمل' else 'قيد التنفيذ' end;
+  end if;
+
+  if normalized_status = 'جاهز للتسليم' then
+    if current_order.total_pieces <= 0 then
+      raise exception 'Record the actual order quantity before marking it ready for delivery.';
+    end if;
+    update public.production_stages
+    set status = 'مكتمل',
+        updated_at = now()
+    where order_id = requested_order_id
+      and stage_name = any(current_order.work_stages);
+    update public.production_stages
+    set status = 'جاهز للتسليم',
+        updated_at = now()
+    where order_id = requested_order_id
+      and stage_name = 'delivery';
+  elsif normalized_status = 'قيد الانتظار' then
+    update public.production_stages
+    set status = 'معلق',
+        updated_at = now()
+    where order_id = requested_order_id;
+  else
+    target_stage_position := array_position(current_order.work_stages, target_stage_name);
+    for selected_stage in
+      select stage_name, position
+      from unnest(current_order.work_stages) with ordinality as stage(stage_name, position)
+    loop
+      update public.production_stages
+      set status = case
+            when selected_stage.position < target_stage_position then 'مكتمل'
+            when selected_stage.position = target_stage_position then target_stage_status
+            else 'معلق'
+          end,
+          updated_at = now()
+      where order_id = requested_order_id
+        and stage_name = selected_stage.stage_name;
+    end loop;
+    update public.production_stages
+    set status = 'معلق',
+        updated_at = now()
+    where order_id = requested_order_id
+      and stage_name = 'delivery';
+  end if;
+
+  update public.orders
+  set status = normalized_status
+  where id = requested_order_id;
 end;
 $$;
 
@@ -6127,7 +6304,8 @@ begin
      or current_order.workflow_archived_at is not null then
     raise exception 'Closed or archived factory orders cannot be completed again.';
   end if;
-  if current_order.status = 'تم التسليم' then
+  if current_order.status in ('تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق')
+     and current_order.delivered_pieces >= current_order.total_pieces then
     raise exception 'Closed factory orders cannot be completed again.';
   end if;
   if current_order.total_pieces <= 0 then
@@ -9294,6 +9472,8 @@ revoke all on function public.save_factory_order(uuid, uuid, text, text, integer
 grant execute on function public.save_factory_order(uuid, uuid, text, text, integer, integer, text, text, text, text, text, integer, numeric, numeric, date, text, text, jsonb, text, jsonb, text[], text, jsonb, numeric, text, text) to authenticated;
 revoke all on function public.admin_update_factory_order_stage_status(uuid, text) from public, anon, authenticated;
 grant execute on function public.admin_update_factory_order_stage_status(uuid, text) to authenticated;
+revoke all on function public.admin_set_factory_order_status(uuid, text) from public, anon, authenticated;
+grant execute on function public.admin_set_factory_order_status(uuid, text) to authenticated;
 revoke all on function public.record_factory_delivery(uuid, integer, text) from public, anon, authenticated;
 grant execute on function public.record_factory_delivery(uuid, integer, text) to authenticated;
 revoke all on function public.record_factory_delivery_with_distribution(uuid, integer, text, jsonb) from public, anon, authenticated;
