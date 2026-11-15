@@ -7595,25 +7595,27 @@ begin
   from public.orders
   where id = requested_order_id
   for update;
-  if not found
-     or current_order.archived_at is not null
-     or current_order.status = 'تم التسليم' then
-    raise exception 'Delivered or archived orders cannot have cutting quantities changed.';
+  if not found then
+    raise exception 'The factory order for this cutting bed does not exist.';
   end if;
-  if current_order.status in (
-       'في انتظار الخياطة', 'جاري الخياطة', 'تمت الخياطة',
-       'جاري التشطيب', 'تم التشطيب', 'جاري المكواة', 'تم الكي',
-       'جاري الطباعة', 'تمت الطباعة', 'جاري التكييس', 'تم التكييس',
-       'جاري الفرز', 'تم الفرز', 'مكتمل', 'جاهز للتسليم'
-     )
-     or exists (
-       select 1
-       from public.production_stages as stage
-       where stage.order_id = requested_order_id
-         and stage.stage_name = 'sewing'
-         and stage.status in ('متاح للخياطة', 'قيد الخياطة', 'قيد التنفيذ', 'مكتمل')
-     ) then
-    raise exception 'Cutting quantities cannot be changed after the order enters sewing.';
+  if current_order.archived_at is null
+     and current_order.workflow_archived_at is null
+     and current_order.status not in ('تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق') then
+    if current_order.status in (
+         'في انتظار الخياطة', 'جاري الخياطة', 'تمت الخياطة',
+         'جاري التشطيب', 'تم التشطيب', 'جاري المكواة', 'تم الكي',
+         'جاري الطباعة', 'تمت الطباعة', 'جاري التكييس', 'تم التكييس',
+         'جاري الفرز', 'تم الفرز', 'مكتمل', 'جاهز للتسليم'
+       )
+       or exists (
+         select 1
+         from public.production_stages as stage
+         where stage.order_id = requested_order_id
+           and stage.stage_name = 'sewing'
+           and stage.status in ('متاح للخياطة', 'قيد الخياطة', 'قيد التنفيذ', 'مكتمل')
+       ) then
+      raise exception 'Cutting quantities cannot be changed after the order enters sewing.';
+    end if;
   end if;
 
   select *
