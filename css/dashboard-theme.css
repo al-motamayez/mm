@@ -648,6 +648,58 @@ body[data-dashboard-role] .client-management-tab[aria-selected="true"] {
   background: #20523f;
 }
 
+body[data-dashboard-role] .client-profile-alert-badge {
+  display: inline-grid;
+  min-width: 20px;
+  height: 20px;
+  margin-inline-start: 7px;
+  padding: 0 5px;
+  place-items: center;
+  border-radius: 999px;
+  color: #fff;
+  background: #c62828;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+body[data-dashboard-role] .client-profile-notification-list {
+  display: grid;
+  gap: 9px;
+}
+
+body[data-dashboard-role] .client-profile-notification {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 5px 12px;
+  padding: 12px;
+  border: 1px solid var(--app-line);
+  border-radius: 10px;
+  background: #17222d;
+}
+
+body[data-dashboard-role] .client-profile-notification.unread {
+  border-inline-start: 4px solid #d32f2f;
+}
+
+body[data-dashboard-role] .client-profile-notification p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--app-text);
+}
+
+body[data-dashboard-role] .client-profile-notification time {
+  color: var(--app-muted);
+  font-size: 12px;
+}
+
+body[data-dashboard-role] .client-profile-notification-new {
+  color: #ff8a80;
+  font-size: 12px;
+  font-weight: 800;
+}
+
 body[data-dashboard-role] .order-edit-tabs {
   flex-wrap: wrap;
   margin-bottom: 14px;
@@ -1170,8 +1222,30 @@ body[data-dashboard-role] .model-status-info strong {
 }
 
 body[data-dashboard-role] .model-status-info span,
-body[data-dashboard-role] .model-status-control {
+body[data-dashboard-role] .model-status-control,
+body[data-dashboard-role] .model-status-current > span,
+body[data-dashboard-role] .model-status-facts small,
+body[data-dashboard-role] .model-status-hint {
   color: var(--app-muted);
+}
+
+body[data-dashboard-role] .model-status-facts > span {
+  border-color: var(--app-line);
+  background: #111a23;
+}
+
+body[data-dashboard-role] .model-status-facts strong {
+  color: #e5edf2;
+}
+
+body[data-dashboard-role] .model-repeat-badge {
+  border-color: #406451;
+  color: #b7e5c7;
+  background: #20352b;
+}
+
+body[data-dashboard-role] .model-status-flow-arrow {
+  color: #92d3a9;
 }
 
 body[data-dashboard-role] .model-preview-link:hover,
@@ -1180,6 +1254,14 @@ body[data-dashboard-role] .model-preview-link:focus-visible {
 }
 
 @media (max-width: 700px) {
+  body[data-dashboard-role] .model-status-list {
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr));
+  }
+
+  body[data-dashboard-role] .model-status-row {
+    min-height: 0;
+  }
+
   body[data-dashboard-role] .topbar {
     align-items: flex-start;
   }

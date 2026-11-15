@@ -751,6 +751,8 @@ async function readDashboardData(session) {
       clientId: order.client_id,
       customerId: order.customer_id,
       modelSerial: Number(order.model_serial || 0),
+      parentOrderId: order.parent_order_id || "",
+      factoryModelCatalogId: order.factory_model_catalog_id || "",
       factoryModelCode: order.factory_model_code || "",
       clientModelCode: order.client_model_code || "",
       createdAt: order.created_at || "",
@@ -3179,6 +3181,7 @@ function adminDashboardView(data) {
 
 function modelStatusReviewView(data) {
   const orders = data.models;
+  const repeatLabels = factoryModelRepeatLabels(orders, data.cuttingStories || []);
   const statusOptions = (statuses, selected) => statuses
     .map((status) => `<option value="${escapeHtml(status)}"${selected === status ? " selected" : ""}>${escapeHtml(status)}</option>`)
     .join("");
@@ -3196,14 +3199,75 @@ function modelStatusReviewView(data) {
         ...additionalStages.flatMap(workStageStatusLabels),
         selectedStatus
       ])].filter((status) => status !== "تم التسليم");
+      const code = order.factoryModelCode || order.clientModelCode || order.modelNumber || "—";
+      const repeatLabel = repeatLabels.orders.get(order.id);
+      const formatPieces = (quantity) => new Intl.NumberFormat("ar-EG-u-nu-latn").format(quantity || 0);
+      const deliveredPieces = Number(order.deliveredPieces || 0);
+      const remainingPieces = Math.max(Number(order.quantity || 0) - deliveredPieces, 0);
       return `<article class="model-status-row" data-model-status-row data-current-status="${escapeHtml(order.status)}">
-      <div class="model-status-info"><strong>${escapeHtml(order.name)}</strong><span>العميل: ${escapeHtml(order.client || "—")}</span><span>العدد: ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(order.quantity)} قطعة</span><span>السعر: ${money(order.pricePerPiece)}</span></div>
-      ${statusTag(order.displayStatus || selectedStatus)}
-      <label class="model-status-control"><span>الحالة${isLocked ? " · مقفلة" : " · إدارة يدوية"}</span><select data-model-status="${escapeHtml(order.id)}"${isLocked ? " disabled" : ""}>${statusOptions(statuses, selectedStatus)}</select></label>
-      <button class="button button-secondary" type="button" data-save-model-status="${escapeHtml(order.id)}"${isLocked ? " disabled" : ""}>حفظ الحالة</button>
-      ${isLocked ? '<span class="order-delete-protected">لا يمكن تغيير حالة موديل بدأ تسليمه أو أُغلق.</span>' : '<span class="muted">يؤدي تغيير الحالة إلى تحديث المرحلة الحالية وإظهار الموديل في القسم الموافق لها.</span>'}
+      <header class="model-status-card-header">${modelImageMarkup(order.modelImageUrls || order.modelImageUrl, `صورة ${order.name}`, "model-status-image")}<div class="model-status-info"><strong>${escapeHtml(order.name)}</strong><span>الكود: ${escapeHtml(code)}</span></div>${repeatLabel ? `<span class="model-repeat-badge">${escapeHtml(repeatLabel)}</span>` : ""}</header>
+      <div class="model-status-facts"><span><small>العميل</small><strong>${escapeHtml(order.client || "—")}</strong></span><span><small>الإجمالي</small><strong>${formatPieces(order.quantity)} قطعة</strong></span><span><small>المسلّم</small><strong>${formatPieces(deliveredPieces)} قطعة</strong></span><span><small>المتبقي</small><strong>${formatPieces(remainingPieces)} قطعة</strong></span><span><small>سعر القطعة</small><strong>${money(order.pricePerPiece)}</strong></span></div>
+      <div class="model-status-current"><span>الحالة الحالية</span>${statusTag(order.displayStatus || selectedStatus)}</div>
+      <div class="model-status-control"><label><span>${isLocked ? "الحالة مقفلة" : "اختر الحالة التالية"}</span><select data-model-status="${escapeHtml(order.id)}"${isLocked ? " disabled" : ""}>${statusOptions(statuses, selectedStatus)}</select></label><span class="model-status-flow-arrow" aria-hidden="true">←</span><button class="button button-secondary" type="button" data-save-model-status="${escapeHtml(order.id)}"${isLocked ? " disabled" : ""} aria-label="حفظ الحالة الجديدة">تحديث</button></div>
+      ${isLocked ? '<span class="order-delete-protected">لا يمكن تغيير حالة موديل بدأ تسليمه أو أُغلق.</span>' : '<span class="model-status-hint">يؤدي التحديث إلى نقل الموديل للقسم الموافق للحالة الجديدة.</span>'}
     </article>`;
     }).join("")}</div>` : '<div class="empty-state">لا توجد موديلات لمراجعتها.</div>'}`;
+}
+
+function factoryModelRepeatLabels(orders, stories) {
+  const orderLabels = new Map();
+  const storyLabels = new Map();
+  const orderFamilies = new Map();
+  const familyKeyForOrder = (order) => order.factoryModelCatalogId
+    ? `catalog:${order.factoryModelCatalogId}`
+    : `order:${order.parentOrderId || order.id}`;
+  const orderById = new Map(orders.map((order) => [order.id, order]));
+
+  orders.forEach((order) => {
+    const key = familyKeyForOrder(order);
+    const family = orderFamilies.get(key) || [];
+    family.push(order);
+    orderFamilies.set(key, family);
+  });
+
+  const repeatCounts = new Map();
+  orderFamilies.forEach((family, key) => {
+    const catalogFamily = key.startsWith("catalog:");
+    const root = catalogFamily ? null : family.find((order) => order.id === key.slice("order:".length));
+    const ordered = [...family].sort((left, right) =>
+      String(left.createdAt || "").localeCompare(String(right.createdAt || ""))
+      || String(left.id).localeCompare(String(right.id)));
+    let repeatNumber = 0;
+    ordered.forEach((order) => {
+      if (!catalogFamily && root?.id === order.id) return;
+      repeatNumber += 1;
+      orderLabels.set(order.id, `تكرار ${repeatNumber}`);
+    });
+    repeatCounts.set(key, repeatNumber);
+    if (!catalogFamily && family.length > 1 && root) orderLabels.set(root.id, "الموديل الأصلي");
+  });
+
+  const pendingStoriesByFamily = new Map();
+  [...stories]
+    .filter((story) => story.source_order_id || story.catalog_model_id)
+    .sort((left, right) => String(left.created_at || "").localeCompare(String(right.created_at || "")))
+    .forEach((story) => {
+      const sourceOrder = orderById.get(story.source_order_id);
+      const key = story.catalog_model_id
+        ? `catalog:${story.catalog_model_id}`
+        : sourceOrder ? familyKeyForOrder(sourceOrder) : "";
+      if (!key) return;
+      const approvedLabel = story.approved_order_id && orderLabels.get(story.approved_order_id);
+      if (approvedLabel) {
+        storyLabels.set(story.id, approvedLabel);
+        return;
+      }
+      const previousStories = pendingStoriesByFamily.get(key) || 0;
+      storyLabels.set(story.id, `تكرار ${(repeatCounts.get(key) || 0) + previousStories + 1}`);
+      pendingStoriesByFamily.set(key, previousStories + 1);
+    });
+
+  return { orders: orderLabels, stories: storyLabels };
 }
 
 function clientAccountLinkOptions(client, data) {
@@ -3255,6 +3319,16 @@ function clientFinancialStatementMarkup(entries) {
       : '<div class="empty-state">لا توجد حركات مالية مسجلة لهذا العميل حتى الآن.</div>'}`;
 }
 
+function clientProfileNotifications(client, data) {
+  const orderIds = new Set(data.models
+    .filter((order) => order.customerId === client.id)
+    .map((order) => order.id));
+  return (data.notifications || [])
+    .filter((notification) => orderIds.has(notification.target_order_id)
+      || (client.user_id && notification.recipient_user_id === client.user_id))
+    .sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime());
+}
+
 function clientDetailsView(client, data) {
   const summary = clientAccountSummary(client, data);
   const pricedOrders = summary.orders.filter((order) => order.pricePerPiece > 0);
@@ -3276,6 +3350,25 @@ function clientDetailsView(client, data) {
   const clientOrdersById = new Map(data.models
     .filter((order) => order.customerId === client.id)
     .map((order) => [order.id, order]));
+  const profileNotifications = clientProfileNotifications(client, data);
+  const unreadProfileNotifications = profileNotifications.filter((notification) => !notification.read_at);
+  const modelExpenseEntries = [...summary.orders, ...archivedOrders]
+    .flatMap((order) => (order.expenseEntries || [])
+      .filter((expense) => expense.expense_type === "customer_cash")
+      .map((expense) => ({
+        ...expense,
+        modelName: order.name || order.modelNumber || "موديل بدون اسم",
+        modelCode: order.factoryModelCode || order.clientModelCode || order.modelNumber || "—"
+      })))
+    .sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime());
+  const profileNotificationRows = profileNotifications.length
+    ? `<div class="client-profile-notification-list">${profileNotifications.map((notification) =>
+      `<article class="client-profile-notification${notification.read_at ? "" : " unread"}">
+        <p>${escapeHtml(notification.message)}</p>
+        <time datetime="${escapeHtml(notification.created_at || "")}">${formatDateTime(notification.created_at)}</time>
+        ${notification.read_at ? '<span class="status">مقروء</span>' : '<span class="client-profile-notification-new">جديد</span>'}
+      </article>`).join("")}</div>`
+    : '<div class="empty-state">لا توجد إضافات أو تنبيهات مسجلة لهذا العميل.</div>';
   const deliveries = data.deliveries.filter((delivery) =>
     delivery.customer_id === client.id || clientOrdersById.has(delivery.order_id)
   );
@@ -3410,8 +3503,10 @@ function clientDetailsView(client, data) {
     <div class="modal-backdrop" data-client-expense-modal hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="client-expense-title"><button class="modal-close" type="button" data-close-client-expense aria-label="إغلاق">×</button><h2 id="client-expense-title">إضافة مصروف للعميل</h2><p>حدد هل يُحمّل المبلغ على حساب العميل، وهل تم سحبه فعلياً من الخزنة.</p><form class="form-grid payment-form" data-client-expense-form="${escapeHtml(client.id)}"><label class="field"><span>بند المصروف</span><input name="category" maxlength="120" placeholder="مثل: نقل، خامات، تشغيل" required></label><label class="field"><span>قيمة المصروف (ج.م)</span><input name="amount" type="number" min="0.01" max="999999999999.99" step="0.01" required></label><label class="field wide"><span>الوصف / التفاصيل</span><textarea name="description" rows="3" maxlength="500" required></textarea></label><label class="field"><span>تاريخ المصروف</span><input name="occurredAt" type="datetime-local" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}" required></label><label class="field"><span>طريقة السحب من الخزنة (إن وُجد)</span><select name="paymentMethod" required><option value="">اختر طريقة الدفع</option><option value="نقدي">نقدي - كاش</option><option value="تحويل بنكي">تحويل بنكي</option><option value="إنستا باي">إنستا باي</option></select></label><label class="field wide checkbox-field"><input type="checkbox" name="chargeToCustomer" checked><span>على العميل — يُضاف إلى رصيده ويظهر في بوابته</span></label><label class="field wide checkbox-field"><input type="checkbox" name="cashWithdrawn"><span>سحب فعلي من الخزنة — يؤثر على النقدية</span></label><div class="form-actions wide"><button class="button button-primary" type="submit">حفظ المصروف وتحديث الحساب</button><button class="row-action" type="button" data-close-client-expense>إلغاء</button></div></form></section></div>
     <div class="client-management-tabs" role="tablist" aria-label="تبويبات ملف العميل">
       <button type="button" role="tab" aria-selected="${activeClientProfileTab === "overview"}" class="client-management-tab${activeClientProfileTab === "overview" ? " active" : ""}" data-client-profile-tab="overview">الملف والحساب</button>
+      <button type="button" role="tab" aria-selected="${activeClientProfileTab === "models"}" class="client-management-tab${activeClientProfileTab === "models" ? " active" : ""}" data-client-profile-tab="models">الموديلات ومصروفاتها</button>
       <button type="button" role="tab" aria-selected="${activeClientProfileTab === "waiting"}" class="client-management-tab${activeClientProfileTab === "waiting" ? " active" : ""}" data-client-profile-tab="waiting">الموديلات قيد الانتظار / لم تُقص بعد</button>
       <button type="button" role="tab" aria-selected="${activeClientProfileTab === "statement"}" class="client-management-tab${activeClientProfileTab === "statement" ? " active" : ""}" data-client-profile-tab="statement">كشف الحساب والسجل المالي</button>
+      <button type="button" role="tab" aria-selected="${activeClientProfileTab === "alerts"}" class="client-management-tab${activeClientProfileTab === "alerts" ? " active" : ""}" data-client-profile-tab="alerts">التنبيهات${unreadProfileNotifications.length ? `<span class="client-profile-alert-badge" aria-label="${unreadProfileNotifications.length} تنبيه جديد">${new Intl.NumberFormat("ar-EG-u-nu-latn").format(unreadProfileNotifications.length)}</span>` : ""}</button>
     </div>
     <div data-client-profile-panel="overview"${activeClientProfileTab === "overview" ? "" : " hidden"}>
     ${accountLinkSection}
@@ -3435,7 +3530,12 @@ function clientDetailsView(client, data) {
     <section class="client-detail-section">${panel("كشف الحساب والسجل المالي", `<p>يعرض ملخص رصيد كل طلب حسب حالته، ثم التسليمات والدفعات والمصروفات والخصومات والتسويات بترتيب زمني.</p>${orderLedgerSection}${clientFinancialStatementMarkup(financialEntries)}`)}</section>
     <div class="modal-backdrop" data-client-payment-modal hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="client-payment-edit-title"><button class="modal-close" type="button" data-close-client-payment aria-label="إغلاق">×</button><h2 id="client-payment-edit-title">تعديل دفعة العميل</h2><form class="form-grid payment-form" data-client-payment-edit-form><input type="hidden" name="recordId"><label class="field"><span>المبلغ (ج.م)</span><input name="amount" type="number" min="0.01" step="0.01" required></label><label class="field"><span>التاريخ</span><input name="date" type="date" required></label><label class="field"><span>طريقة الدفع</span><select name="method" required><option value="">اختر طريقة الدفع</option><option value="نقدي">نقدي - كاش</option><option value="تحويل بنكي">تحويل بنكي</option><option value="إنستا باي">إنستا باي</option></select></label><label class="field"><span>رقم الطلبية / المرجع</span><input name="reference" maxlength="160"></label><label class="field wide"><span>ملاحظات</span><input name="notes" maxlength="500"></label><div class="form-actions wide"><button class="button button-primary" type="submit">حفظ التعديل</button><button class="row-action" type="button" data-close-client-payment>إلغاء</button></div></form></section></div>
     </div>
-    <div data-client-profile-panel="overview"${activeClientProfileTab === "overview" ? "" : " hidden"}>
+    <div data-client-profile-panel="models"${activeClientProfileTab === "models" ? "" : " hidden"}>
+    <section class="client-detail-section">${panel(`مصروفات الموديلات (${modelExpenseEntries.length})`, modelExpenseEntries.length
+      ? table(["الموديل","كود الموديل","السبب / البيان","القيمة","التاريخ"], modelExpenseEntries.map((entry) =>
+        `<tr><td>${escapeHtml(entry.modelName)}</td><td>${escapeHtml(entry.modelCode)}</td><td>${escapeHtml(entry.description || "مصروف موديل")}</td><td>${money(entry.amount)}</td><td>${formatDateTime(entry.created_at)}</td></tr>`))
+      : '<div class="empty-state">لا توجد مصروفات موديلات محمّلة على حساب هذا العميل.</div>',
+    "يعرض هذا السجل سبب كل مصروف على العميل وقيمته وتاريخ إضافته.")}</section>
     <section class="client-detail-section"><header class="section-heading"><div><h2>الموديلات التي تم تسعيرها</h2><p>يُحتسب المطلوب المالي على الكمية التي تم تسليمها.</p></div><button class="button button-secondary" type="button" data-open-order-for-client="${escapeHtml(client.id)}">＋ إضافة موديل للعميل</button></header>${pricedOrders.length ? `<div class="order-cards">${pricedOrders.map((order) => orderCard(order)).join("")}</div>` : '<div class="empty-state">لا توجد موديلات مسعّرة في الفترة الحالية.</div>'}</section>
     <section class="client-detail-section"><header class="section-heading"><div><h2>موديلات لم تُسعّر بعد</h2><p>طلبات في القص أو مراحل التشغيل الأخرى.</p></div></header>${unpricedOrders.filter((order) => !waitingOrderIds.has(order.id)).length ? `<div class="order-cards">${unpricedOrders.filter((order) => !waitingOrderIds.has(order.id)).map((order) => orderCard(order)).join("")}</div>` : '<div class="empty-state">لا توجد موديلات بانتظار التسعير.</div>'}</section>
     <section class="client-detail-section">${panel("الموديلات المسلّمة", deliveries.length ? table(["الصورة","الموديل","كود الموديل","الكمية","سعر القطعة","القيمة المستحقة","المستلم","التاريخ"], deliveries.map((delivery) => { const order = clientOrdersById.get(delivery.order_id); return `<tr><td>${modelImageMarkup(order?.modelImageUrls || order?.modelImageUrl, `صورة ${order?.name || "الموديل"}`) || "—"}</td><td>${escapeHtml(order?.name || "طلب مؤرشف")}</td><td>${escapeHtml(order?.factoryModelCode || order?.clientModelCode || order?.modelNumber || "—")}</td><td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(delivery.quantity)} قطعة</td><td>${money(delivery.price_per_piece)}</td><td>${money(delivery.amount ?? Number(delivery.quantity || 0) * Number(delivery.price_per_piece || 0))}</td><td>${escapeHtml(delivery.recipient_name || "—")}</td><td>${formatDigitalDateTime(delivery.delivered_at)}</td></tr>`; })) : '<div class="empty-state">لا توجد تسليمات مسجلة لهذا العميل.</div>')}</section>
@@ -3445,6 +3545,11 @@ function clientDetailsView(client, data) {
       ${summary.settlements.length ? `<div class="settlement-history">${summary.settlements.map((entry) => `<article class="settlement-card"><div><strong>رصيد سابق مرحّل</strong><small>${formatDateTime(entry.date || entry._createdAt)}</small></div><div><span>رصيد افتتاحي</span><strong>${money(entry.openingBalance)}</strong></div><div><span>قيمة التسليمات</span><strong>${money(entry.deliveredTotal)}</strong></div><div><span>مصروفات وعهد</span><strong>${money(entry.clientExpensesTotal || 0)}</strong></div><div><span>خصومات التسوية</span><strong>${money(entry.accountAdjustmentsTotal || 0)}</strong></div><div><span>المدفوع</span><strong>${money(Number(entry.orderPaidTotal || 0) + Number(entry.paymentsTotal || 0))}</strong></div><div><span>رصيد الفترة الختامي</span><strong>${money(entry.balance)}</strong></div></article>`).join("")}</div>` : '<div class="empty-state">لم تتم تصفية حساب العميل سابقًا.</div>'}
       ${archivedOrders.length ? `<h3 class="history-subheading">الموديلات والطلبات المؤرشفة</h3><div class="order-cards">${archivedOrders.map((order) => orderCard(order, true)).join("")}</div>` : ""}
     </section>
+    </div>
+    <div data-client-profile-panel="alerts"${activeClientProfileTab === "alerts" ? "" : " hidden"}>
+      <section class="client-detail-section">${panel("الإضافات والتنبيهات الجديدة", `${unreadProfileNotifications.length
+        ? `<div class="form-actions"><button class="button button-secondary" type="button" data-client-mark-alerts-read="${escapeHtml(client.id)}">تعليم التنبيهات الجديدة كمقروءة (${unreadProfileNotifications.length})</button></div>`
+        : ""}${profileNotificationRows}`, "تُعرض الإضافات المرتبطة بموديلات العميل أو حسابه مع سبب الإضافة وتاريخها.")}</section>
     </div>`;
 }
 
@@ -4367,7 +4472,7 @@ function adminView(data, accounts) {
     ? table(["التاريخ والوقت","المنفّذ","الحركة","الحساب المعني"], activityRows)
     : '<div class="empty-state">لا توجد حركات مسجلة بعد.</div>';
   const clientOptions = data.clients.map((client) =>
-    `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)}</option>`
+    `<option value="${escapeHtml(client.id)}">${escapeHtml(client.name)}${client.brand_name ? ` · ${escapeHtml(client.brand_name)}` : ""}</option>`
   ).join("");
   const brandOptions = data.clients.filter((client) => client.brand_name)
     .map((client) => `<option value="${escapeHtml(client.id)}">${escapeHtml(client.brand_name)}</option>`)
@@ -4413,39 +4518,37 @@ function adminView(data, accounts) {
       <div data-orders-tab-panel="status"${activeOrdersTab === "status" ? "" : " hidden"}>${modelStatusReviewView(data)}</div>
       <div class="modal-backdrop" id="order-modal" hidden><section class="modal-card order-modal-card" role="dialog" aria-modal="true" aria-labelledby="order-modal-title"><button class="modal-close" type="button" data-close-order aria-label="إغلاق">×</button><h2 id="order-modal-title">إضافة موديل / طلبية</h2><p>يمكن ترك العدد فارغًا حتى انتهاء الفرش والقص، ثم إدخال العدد الفعلي عند تعديل الطلب.</p>            <form id="model-form" class="order-form modal-form" novalidate><input type="hidden" name="editIndex" value=""><input type="hidden" name="savedOrderId" value="">
         <div class="client-management-tabs order-edit-tabs" role="tablist" aria-label="أقسام تعديل الموديل">
-          <button type="button" class="client-management-tab active" role="tab" aria-selected="true" data-model-edit-tab="details">بيانات الموديل</button>
+          <button type="button" class="client-management-tab active" role="tab" aria-selected="true" data-model-edit-tab="details">بيانات الموديل الأساسية</button>
           <button type="button" class="client-management-tab" role="tab" aria-selected="false" data-model-edit-tab="production">مراحل التشغيل</button>
-          <button type="button" class="client-management-tab" role="tab" aria-selected="false" data-model-edit-tab="counts">الأعداد والألوان والقص</button>
+          <button type="button" class="client-management-tab" role="tab" aria-selected="false" data-model-edit-tab="counts">إعدادات القص والألوان والمقاسات</button>
           <button type="button" class="client-management-tab" role="tab" aria-selected="false" data-model-edit-tab="finance">التفاصيل المالية</button>
         </div>
         <section class="form-section" data-model-edit-section="details"><h3>المعلومات الأساسية <span>إجباري</span></h3><div class="form-section-grid">
           <input type="hidden" name="customerId">
-          <div class="field model-customer-field"><label for="model-client">اختيار اسم العميل</label><select id="model-client" name="customerSelection"><option value="">اختر اسم العميل</option>${clientOptions}</select><small>اختر العميل أو البراند؛ اختيار أحدهما يلغي الآخر.</small></div>
-          <div class="field model-brand-field"><label for="model-brand">اختيار اسم البراند</label><select id="model-brand" name="brandSelection"><option value="">اختر اسم البراند</option>${brandOptions}</select></div>
+          <div class="field model-customer-field"><label for="model-client">اختيار اسم العميل</label><select id="model-client" name="customerSelection"><option value="">اختر اسم العميل</option>${clientOptions}</select><small>يظهر اسم البراند بجانب ملف العميل عند توفره.</small></div>
+          <div class="field model-brand-field" hidden><label for="model-brand">اختيار اسم البراند</label><select id="model-brand" name="brandSelection"><option value="">اختر اسم البراند</option>${brandOptions}</select></div>
           <div class="field model-name-field"><label for="model-name">اسم الموديل</label><input id="model-name" name="name"></div>
           <div class="field"><label for="model-system-code">كود الموديل بالنظام</label><input id="model-system-code" name="factoryModelCode" readonly placeholder="يُنشأ تلقائياً بعد الحفظ"></div>
           <div class="field"><label for="model-client-code">كود/رقم الموديل للعميل</label><input id="model-client-code" name="clientModelCode" maxlength="120" autocomplete="off"></div>
-        </div></section>
-        <section class="form-section" data-model-edit-section="counts" hidden><h3>الأعداد والألوان</h3><div class="form-section-grid">
-          <div class="field model-quantity-field"><label for="model-quantity">العدد الكلي</label><input id="model-quantity" name="quantity" type="number" min="0" step="1" placeholder="أدخل العدد أو اتركه حتى انتهاء القص"><small data-quantity-lock-note hidden>تم تثبيت الأعداد بعد بدء مراحل الإنتاج ولا يمكن تعديلها.</small><small data-quantity-entry-note>يمكن إدخال العدد الآن أو تأجيله؛ عند اختيار الألوان والمقاسات يوزع النظام العدد تلقائياً.</small></div>
-          <div class="field" data-original-quantity-field hidden><label for="model-original-quantity">العدد المطلوب الأصلي</label><input id="model-original-quantity" name="originalQuantity" type="number" min="0" step="1"></div>
+          <div class="field model-image-field"><span>صورة الموديل (اختياري - صورتان كحد أقصى)</span><small>يمكن رفع أو تبديل كل صورة أو حذفها. الحد الأقصى لكل صورة 25 ميجابايت.</small><div class="model-image-slots" data-model-image-slots>${[1, 2].map((slot) => `<section class="model-image-slot" data-model-image-slot="${slot}"><strong>الصورة ${slot}</strong><input type="file" name="modelImage${slot}" accept="image/*" hidden><div data-model-image-preview="${slot}"></div><div class="form-actions"><button class="row-action" type="button" data-model-image-replace="${slot}"><span aria-hidden="true">📷</span> ${slot === 1 ? "إضافة / تبديل الصورة" : "إضافة الصورة الثانية"}</button><button class="row-action order-delete-action" type="button" data-model-image-delete="${slot}" hidden>حذف الصورة</button></div></section>`).join("")}</div></div>
         </div></section>
         <section class="form-section" data-model-edit-section="production" hidden><h3>مراحل التشغيل <span>اختياري</span></h3><div class="form-section-grid">
           <div class="field wide"><label for="model-production-type">مسار التشغيل</label><select id="model-production-type" name="productionType"><option value="full_cutting">قص وفرش داخل المصنع</option><option value="cutting_only">قص بس (بدون خياطة داخلية)</option><option value="ready_sewing">موديل جاهز ومقصوص مسبقاً</option></select><small>اختر «قص بس» لتسليم الموديل بعد اكتمال القص دون إدخاله للخياطة؛ أو رتّب المراحل المطلوبة أدناه.</small></div>
           <fieldset class="field work-stage-picker"><legend>مراحل الموديل المطلوبة</legend><div class="work-stage-options" data-work-stage-options>${WORK_STAGES.map(([key, label]) => workStageOptionMarkup(key, label, ["cutting", "sewing", "finishing"].includes(key))).join("")}</div><div class="work-stage-custom-entry"><input type="text" data-custom-work-stage maxlength="50" aria-label="اسم مرحلة مخصصة" placeholder="مرحلة إضافية مثل تركيب حبل"><button class="row-action" type="button" data-add-work-stage>＋ إضافة مرحلة</button></div><small>اختر المراحل بالترتيب المطلوب؛ يظهر رقم كل مرحلة حسب أسبقية اختيارها.</small></fieldset>
-          <div class="field model-image-field"><span>صور الموديل (اختياري - صورتان كحد أقصى)</span><small>يمكن رفع أو تبديل كل صورة أو حذفها. الحد الأقصى لكل صورة 25 ميجابايت.</small><div class="model-image-slots" data-model-image-slots>${[1, 2].map((slot) => `<section class="model-image-slot" data-model-image-slot="${slot}"><strong>الصورة ${slot}</strong><input type="file" name="modelImage${slot}" accept="image/*" hidden><div data-model-image-preview="${slot}"></div><div class="form-actions"><button class="row-action" type="button" data-model-image-replace="${slot}"><span aria-hidden="true">📷</span> ${slot === 1 ? "إضافة / تبديل الصورة" : "إضافة الصورة الثانية"}</button><button class="row-action order-delete-action" type="button" data-model-image-delete="${slot}" hidden>حذف الصورة</button></div></section>`).join("")}</div></div>
           <div class="field" data-expected-delivery-field><label for="model-expected-delivery">تاريخ التسليم المتوقع (اختياري)</label><input id="model-expected-delivery" name="expectedDeliveryDate" type="date"></div>
           <div class="field"><label for="model-status">حالة الطلب</label><select id="model-status" name="status">${FACTORY_ORDER_STATUSES.map((status) => `<option>${status}</option>`).join("")}</select><small data-workflow-status-hint hidden>حالة الإنتاج الحالية تُدار من خطوات التشغيل، وستبقى كما هي عند حفظ بيانات الموديل.</small></div>
           <div class="field" data-initial-delivery-field hidden><label for="model-delivered-pieces">العدد المسلّم</label><input id="model-delivered-pieces" name="deliveredPieces" type="text" inputmode="numeric" autocomplete="off"><small>يُسجل كدفعة تسليم تاريخية ويُحتسب ضمن حساب العميل.</small></div>
           <div class="field" data-model-priority-field><label for="model-priority">أولوية التنفيذ</label><select id="model-priority" name="priority"><option>عادي</option><option>مرتفع</option><option>عاجل</option></select></div>
         </div></section>
-        <section class="form-section" data-model-edit-section="counts" hidden><h3>الأعداد والألوان</h3><div class="form-section-grid">
+        <section class="form-section" data-model-edit-section="counts" hidden><h3>إعدادات الألوان والمقاسات</h3><div class="form-section-grid">
           ${colorPickerMarkup("", "model-colors")}
           ${sizePickerMarkup("", "model-sizes", true, true)}
           <div class="model-allocation field"><label>توزيع العدد على الألوان والمقاسات</label><div data-model-allocation-grid><p class="muted">أدخل العدد الكلي واختر الألوان والمقاسات لعرض التوزيع.</p></div><input type="hidden" name="colorSizeDistribution" value='{"colors":[]}'></div>
         </div></section>
         <section class="form-section cutting-pricing-preview-section" data-model-edit-section="counts" hidden><h3>بيانات القص الفعلية</h3><div data-cutting-pricing-details class="cutting-pricing-details"><p class="muted">تظهر تفاصيل القص والخامة هنا عند تسعير موديل مسجل.</p></div></section>
         <section class="form-section" data-model-edit-section="finance" hidden><h3>التفاصيل المالية <span>اختياري</span></h3><div class="form-section-grid">
+          <div class="field model-quantity-field"><label for="model-quantity">إجمالي عدد القطع</label><input id="model-quantity" name="quantity" type="number" min="0" step="1" placeholder="أدخل العدد أو اتركه حتى انتهاء القص"><small data-quantity-lock-note hidden>تم تثبيت الأعداد بعد بدء مراحل الإنتاج ولا يمكن تعديلها.</small><small data-quantity-entry-note>يمكن إدخال العدد الآن أو تأجيله حتى تسجيل إجمالي القص.</small></div>
+          <div class="field" data-original-quantity-field hidden><label for="model-original-quantity">العدد المطلوب الأصلي</label><input id="model-original-quantity" name="originalQuantity" type="number" min="0" step="1"></div>
           <div class="field"><label for="model-pricing-mode">طريقة التسعير</label><select id="model-pricing-mode" name="pricingMode"><option value="total">سعر إجمالي للقطعة</option><option value="stages">تسعير كل قسم للقطعة</option></select></div>
           <div class="field stage-prices-field" data-stage-prices-field hidden><label>سعر القطعة لكل قسم (ج.م)</label><div class="stage-prices-list" data-stage-prices-list></div><small>سعر القطعة الإجمالي يساوي مجموع أسعار الأقسام المختارة.</small></div>
           <input type="hidden" name="stagePrices" value="{}">
@@ -5150,6 +5253,7 @@ function adminCuttingTransferView(data) {
   const transferredOrderCards = transferredOrders.length
     ? `<div class="cutting-admin-order-grid">${transferredOrders.map((order) => orderCard(order, true)).join("")}</div>`
     : '<div class="empty-state">لا توجد قصات محوّلة للخياطة في السجل بعد.</div>';
+  const repeatLabels = factoryModelRepeatLabels(data.models, cuttingStories);
   const storyCards = (stories) => stories.length
     ? `<div class="cutting-story-list">${stories.map((story) => {
       const statusLabel = story.archived_at
@@ -5164,7 +5268,8 @@ function adminCuttingTransferView(data) {
       const actions = story.status === "pending" && !story.archived_at
         ? `<div class="form-actions"><button class="button button-primary" type="button" data-action="approve-cutting-story-model" data-story-id="${escapeHtml(story.id)}">تأكيد وإضافة للموديلات</button><button class="button button-secondary" type="button" data-action="approve-cutting-story-sewing" data-story-id="${escapeHtml(story.id)}">تأكيد وإرسال للخياطة</button><button class="button button-danger" type="button" data-action="reject-cutting-story" data-story-id="${escapeHtml(story.id)}">رفض القصة</button></div>`
         : story.approved_order_id ? '<a class="row-action" href="#orders">الانتقال إلى الموديلات</a>' : "";
-      return `<article class="cutting-story-card"><header class="cutting-story-heading">${modelImageMarkup(story.model_image_url)}<div><h3>${escapeHtml(story.model_name || story.model_number || "قصة بدون اسم")}</h3><p>كود الموديل بالنظام: ${escapeHtml(story.factory_model_code || "—")} · كود/رقم الموديل للعميل: ${escapeHtml(story.model_number || "—")} · العميل: ${escapeHtml(story.customer_name || "—")}</p><small>المشرف المسؤول: ${escapeHtml(story.submitted_by_name || "مشرف القص")}</small><div class="production-record-date"><span>تاريخ الإرسال:</span><time class="digital-date-time" datetime="${escapeHtml(story.created_at || "")}">${formatDigitalDateTime(story.created_at)}</time></div></div><span>${statusTag(statusLabel)}</span></header><div class="cutting-story-facts"><div><span>إجمالي القطع</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(story.total_pieces)} قطعة</strong></div><div><span>المقاسات</span><strong>${escapeHtml(cuttingStorySizeSummary(story.size_data))}</strong></div></div><div class="form-actions">${productionDetailsButton("story", story)}${actions}</div></article>`;
+      const repeatLabel = repeatLabels.stories.get(story.id);
+      return `<article class="cutting-story-card"><header class="cutting-story-heading">${modelImageMarkup(story.model_image_url)}<div><h3>${escapeHtml(story.model_name || story.model_number || "قصة بدون اسم")}${repeatLabel ? ` <span class="model-repeat-badge">${escapeHtml(repeatLabel)}</span>` : ""}</h3><p>كود الموديل بالنظام: ${escapeHtml(story.factory_model_code || "—")} · كود/رقم الموديل للعميل: ${escapeHtml(story.model_number || "—")} · العميل: ${escapeHtml(story.customer_name || "—")}</p><small>المشرف المسؤول: ${escapeHtml(story.submitted_by_name || "مشرف القص")}</small><div class="production-record-date"><span>تاريخ الإرسال:</span><time class="digital-date-time" datetime="${escapeHtml(story.created_at || "")}">${formatDigitalDateTime(story.created_at)}</time></div></div><span>${statusTag(statusLabel)}</span></header><div class="cutting-story-facts"><div><span>إجمالي القطع</span><strong>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(story.total_pieces)} قطعة</strong></div><div><span>المقاسات</span><strong>${escapeHtml(cuttingStorySizeSummary(story.size_data))}</strong></div></div><div class="form-actions">${productionDetailsButton("story", story)}${actions}</div></article>`;
     }).join("")}</div>`
     : '<div class="empty-state">لا توجد قصص في هذا السجل.</div>';
   const activeTab = activeAdminCuttingTab === "active";
@@ -9713,6 +9818,35 @@ function bindClientDetailActions(session) {
       document.querySelectorAll("#client-details [data-client-profile-panel]").forEach((panel) => {
         panel.hidden = panel.dataset.clientProfilePanel !== activeClientProfileTab;
       });
+    });
+  });
+  document.querySelectorAll("#client-details [data-client-mark-alerts-read]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const client = dashboardData.clients.find((item) => item.id === button.dataset.clientMarkAlertsRead);
+      if (!client) {
+        window.factoryUI.toast("تعذر العثور على ملف العميل.", "error");
+        return;
+      }
+      const unreadIds = clientProfileNotifications(client, dashboardData)
+        .filter((notification) => !notification.read_at)
+        .map((notification) => notification.id);
+      if (!unreadIds.length) return;
+      button.disabled = true;
+      let updated = false;
+      try {
+        const { error } = await supabaseClient.from("factory_notifications")
+          .update({ read_at: new Date().toISOString() })
+          .in("id", unreadIds)
+          .is("read_at", null);
+        if (error) throw error;
+        updated = true;
+        await refreshDashboard(session);
+      } catch (error) {
+        button.disabled = false;
+        reportDashboardFailure(session, updated
+          ? "تم تعليم التنبيهات كمقروءة، لكن تعذر تحديث العرض"
+          : "تعذر تعليم تنبيهات العميل كمقروءة", error);
+      }
     });
   });
   const filterStatement = () => {

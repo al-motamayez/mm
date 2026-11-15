@@ -4129,6 +4129,35 @@ from public.orders as factory_order
 where story.source_order_id = factory_order.id
   and factory_order.factory_model_code is not null;
 
+update public.orders as repeated_order
+set parent_order_id = coalesce(source_order.parent_order_id, source_order.id),
+    factory_model_catalog_id = source_order.factory_model_catalog_id,
+    model_serial = source_order.model_serial,
+    factory_model_code = source_order.factory_model_code
+from public.factory_cutting_stories as story
+join public.orders as source_order on source_order.id = story.source_order_id
+where story.approved_order_id = repeated_order.id
+  and repeated_order.id <> source_order.id
+  and (
+    repeated_order.parent_order_id is distinct from coalesce(source_order.parent_order_id, source_order.id)
+    or repeated_order.factory_model_catalog_id is distinct from source_order.factory_model_catalog_id
+    or repeated_order.model_serial is distinct from source_order.model_serial
+    or repeated_order.factory_model_code is distinct from source_order.factory_model_code
+  );
+
+update public.orders as repeated_order
+set factory_model_catalog_id = catalog_model.id,
+    model_serial = null,
+    factory_model_code = catalog_model.factory_model_code
+from public.factory_cutting_stories as story
+join public.factory_model_catalog as catalog_model on catalog_model.id = story.catalog_model_id
+where story.approved_order_id = repeated_order.id
+  and (
+    repeated_order.factory_model_catalog_id is distinct from catalog_model.id
+    or repeated_order.model_serial is not null
+    or repeated_order.factory_model_code is distinct from catalog_model.factory_model_code
+  );
+
 create or replace function public.replace_factory_cutting_request_reservations(
   requested_request_id uuid,
   requested_customer_id uuid,
