@@ -10472,6 +10472,7 @@ declare
   selected_customer_id uuid;
   target_order_id uuid;
   target_catalog_id uuid;
+  target_customer_id uuid;
   target_client_id uuid;
   source_model_name text;
   source_client_model_code text;
@@ -10524,6 +10525,7 @@ begin
     target_order_id := target_order.id;
     target_catalog_id := target_order.factory_model_catalog_id;
     target_client_id := target_order.client_id;
+    target_customer_id := target_order.customer_id;
     selected_customer_id := target_order.customer_id;
     source_model_name := coalesce(target_order.model_name, target_order.model_number, '');
     source_client_model_code := coalesce(target_order.client_model_code, '');
