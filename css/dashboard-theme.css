@@ -884,8 +884,20 @@ body[data-dashboard-role] #client-account-modal {
   z-index: 1300;
 }
 
+body[data-dashboard-role] .modal-backdrop {
+  z-index: 1300;
+}
+
+body[data-dashboard-role] .confirm-backdrop {
+  z-index: 1400;
+}
+
 body[data-dashboard-role] #model-details-modal {
   z-index: 1310;
+}
+
+body[data-dashboard-role] .client-model-merge-modal {
+  z-index: 1390;
 }
 
 body[data-dashboard-role] .modal-backdrop.custom-color-modal {

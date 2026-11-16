@@ -10437,4 +10437,289 @@ alter table public.factory_client_model_requests replica identity full;
 alter table public.factory_cutting_stories replica identity full;
 alter table public.factory_notifications replica identity full;
 
+alter table public.factory_model_catalog
+  add column if not exists merged_into_order_id uuid references public.orders (id) on delete set null,
+  add column if not exists merged_into_catalog_model_id uuid references public.factory_model_catalog (id) on delete set null,
+  add column if not exists merged_at timestamptz;
+
+alter table public.factory_client_model_requests
+  add column if not exists merged_into_order_id uuid references public.orders (id) on delete set null,
+  add column if not exists merged_into_catalog_model_id uuid references public.factory_model_catalog (id) on delete set null,
+  add column if not exists merged_at timestamptz;
+
+alter table public.factory_client_model_requests
+  drop constraint if exists factory_client_model_requests_status_check,
+  add constraint factory_client_model_requests_status_check
+    check (status in ('pending', 'reviewed', 'accepted', 'rejected', 'merged'));
+
+create or replace function public.admin_merge_factory_client_model(
+  requested_source_type text,
+  requested_source_id uuid,
+  requested_target_type text,
+  requested_target_id uuid
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  source_order public.orders%rowtype;
+  source_catalog public.factory_model_catalog%rowtype;
+  source_request public.factory_client_model_requests%rowtype;
+  target_order public.orders%rowtype;
+  target_catalog public.factory_model_catalog%rowtype;
+  selected_customer_id uuid;
+  target_order_id uuid;
+  target_catalog_id uuid;
+  target_client_id uuid;
+  source_model_name text;
+  source_client_model_code text;
+  source_model_image_url text;
+  source_colors text := '';
+  source_color_names jsonb := '{}'::jsonb;
+  source_sizes text := '';
+  source_color_size_distribution jsonb := '{"colors":[]}'::jsonb;
+  source_work_stages text[] := array['cutting', 'sewing', 'finishing']::text[];
+  source_production_type text := 'full_cutting';
+  source_pricing_mode text := 'total';
+  source_stage_prices jsonb := '{}'::jsonb;
+  source_price_per_piece numeric(12, 2) := 0;
+  repeated_quantity integer := 0;
+  previous_family_quantity integer := 0;
+  new_order_id uuid;
+  family_quantity integer := 0;
+  resolved_model_code text;
+begin
+  if not public.is_active_factory_admin() then
+    raise exception 'Only active admins can merge client models.';
+  end if;
+  if requested_source_type not in ('order', 'catalog', 'request')
+     or requested_target_type not in ('order', 'catalog')
+     or requested_source_id is null
+     or requested_target_id is null then
+    raise exception 'Choose a valid pending model and original model.';
+  end if;
+
+  if requested_target_type = 'order' then
+    select * into target_order
+    from public.orders
+    where id = requested_target_id
+    for update;
+    if not found then
+      raise exception 'The selected original order no longer exists.';
+    end if;
+    if target_order.parent_order_id is not null then
+      select * into target_order
+      from public.orders
+      where id = target_order.parent_order_id
+      for update;
+      if not found then
+        raise exception 'The selected original model has no valid root order.';
+      end if;
+    end if;
+    if target_order.archived_at is not null or target_order.workflow_archived_at is not null then
+      raise exception 'An archived model cannot be used as the merge target.';
+    end if;
+    target_order_id := target_order.id;
+    target_catalog_id := target_order.factory_model_catalog_id;
+    target_client_id := target_order.client_id;
+    selected_customer_id := target_order.customer_id;
+    source_model_name := coalesce(target_order.model_name, target_order.model_number, '');
+    source_client_model_code := coalesce(target_order.client_model_code, '');
+    source_model_image_url := coalesce(target_order.model_image_url, '');
+    source_colors := coalesce(target_order.colors, '');
+    source_color_names := coalesce(target_order.color_names, '{}'::jsonb);
+    source_sizes := coalesce(target_order.sizes, '');
+    source_color_size_distribution := coalesce(target_order.color_size_distribution, '{"colors":[]}'::jsonb);
+    source_work_stages := coalesce(target_order.work_stages, source_work_stages);
+    source_production_type := coalesce(target_order.production_type, source_production_type);
+    source_pricing_mode := coalesce(target_order.pricing_mode, source_pricing_mode);
+    source_stage_prices := coalesce(target_order.stage_prices, '{}'::jsonb);
+    source_price_per_piece := coalesce(target_order.price_per_piece, 0);
+    select coalesce(sum(factory_order.total_pieces), 0)::integer
+      into previous_family_quantity
+    from public.orders as factory_order
+    where factory_order.id = target_order_id
+       or factory_order.parent_order_id = target_order_id
+       or (target_catalog_id is not null and factory_order.factory_model_catalog_id = target_catalog_id);
+  else
+    select * into target_catalog
+    from public.factory_model_catalog
+    where id = requested_target_id
+      and archived_at is null
+    for update;
+    if not found then
+      raise exception 'The selected original catalog model no longer exists.';
+    end if;
+    target_catalog_id := target_catalog.id;
+    target_customer_id := target_catalog.customer_id;
+    source_model_name := target_catalog.model_name;
+    source_client_model_code := target_catalog.client_model_code;
+    source_model_image_url := target_catalog.model_image_url;
+    select user_id into target_client_id
+    from public.factory_clients
+    where id = target_customer_id;
+    if not found then
+      raise exception 'The original client profile no longer exists.';
+    end if;
+    select coalesce(sum(factory_order.total_pieces), 0)::integer
+      into previous_family_quantity
+    from public.orders as factory_order
+    where factory_order.factory_model_catalog_id = target_catalog_id;
+  end if;
+
+  if requested_source_type = 'order' then
+    select * into source_order
+    from public.orders
+    where id = requested_source_id
+    for update;
+    if not found then
+      raise exception 'The pending order no longer exists.';
+    end if;
+    if source_order.customer_id is distinct from selected_customer_id
+       or (requested_target_type = 'order' and coalesce(source_order.parent_order_id, source_order.id) = target_order_id)
+       or source_order.parent_order_id is not null
+       or exists (
+         select 1 from public.orders as existing_repeat
+         where existing_repeat.parent_order_id = source_order.id
+       )
+       or source_order.archived_at is not null
+       or source_order.workflow_archived_at is not null
+       or source_order.status not in ('', 'pending', 'قيد الانتظار', 'معلق', 'تحت الإنشاء')
+       or source_order.delivered_pieces > 0
+       or exists (
+         select 1 from public.factory_cutting_stories as story
+         where story.source_order_id = source_order.id
+            or story.approved_order_id = source_order.id
+       )
+       or exists (
+         select 1 from public.production_stages as stage
+         where stage.order_id = source_order.id
+           and lower(stage.stage_name) in ('cutting', 'قص', 'تقطيع')
+           and (
+             coalesce(stage.completed_quantity, 0) > 0
+             or lower(coalesce(stage.status, '')) not in
+               ('', 'pending', 'قيد الانتظار', 'معلق', 'بانتظار', 'not_started', 'لم يبدأ', 'في الانتظار')
+           )
+       )
+       or exists (
+         select 1 from public.factory_deliveries as delivery
+         where delivery.order_id = source_order.id
+       ) then
+      raise exception 'Only an uncut, undelivered pending model can be merged as a repeat.';
+    end if;
+    selected_customer_id := source_order.customer_id;
+    repeated_quantity := source_order.total_pieces;
+
+    update public.orders
+    set parent_order_id = target_order_id,
+        factory_model_catalog_id = target_catalog_id,
+        model_serial = case when target_catalog_id is null then
+          (select model_serial from public.orders where id = target_order_id)
+          else null end
+    where id = source_order.id;
+
+  elsif requested_source_type = 'catalog' then
+    select * into source_catalog
+    from public.factory_model_catalog
+    where id = requested_source_id
+      and archived_at is null
+    for update;
+    if not found then
+      raise exception 'The pending catalog model no longer exists.';
+    end if;
+    if source_catalog.customer_id is distinct from selected_customer_id
+       or (requested_target_type = 'catalog' and source_catalog.id = target_catalog_id)
+       or exists (
+         select 1 from public.factory_cutting_stories as story
+         where story.catalog_model_id = source_catalog.id
+       ) then
+      raise exception 'This catalog model cannot be merged into the selected original model.';
+    end if;
+    update public.factory_cutting_requests
+    set source_order_id = target_order_id,
+        catalog_model_id = target_catalog_id
+    where catalog_model_id = source_catalog.id;
+    update public.factory_model_catalog
+    set archived_at = now(),
+        merged_into_order_id = target_order_id,
+        merged_into_catalog_model_id = target_catalog_id,
+        merged_at = now()
+    where id = source_catalog.id;
+
+  else
+    select * into source_request
+    from public.factory_client_model_requests
+    where id = requested_source_id
+      and status = 'pending'
+    for update;
+    if not found then
+      raise exception 'The pending client model request no longer exists or was already reviewed.';
+    end if;
+    select client.id, client.user_id
+      into selected_customer_id, target_client_id
+    from public.factory_clients as client
+    where client.id = source_request.client_id
+    for key share;
+    if not found or selected_customer_id is distinct from target_customer_id then
+      raise exception 'The pending request and original model must belong to the same client.';
+    end if;
+    repeated_quantity := coalesce(source_request.quantity, 0);
+    if repeated_quantity > 0 then
+      insert into public.orders (
+        client_id, customer_id, model_name, model_number, parent_order_id,
+        factory_model_catalog_id, client_model_code, sender_name,
+        original_total_pieces, total_pieces, colors, color_names, sizes,
+        price_per_piece, model_image_url, priority, production_type,
+        work_stages, pricing_mode, stage_prices, color_size_distribution, status
+      )
+      values (
+        target_client_id, selected_customer_id, source_model_name,
+        coalesce(target_order.model_number, ''), target_order_id,
+        target_catalog_id, source_client_model_code, 'دمج طلب تكرار',
+        repeated_quantity, repeated_quantity, source_colors, source_color_names,
+        source_sizes, source_price_per_piece, source_model_image_url, 'عادي',
+        source_production_type, source_work_stages, source_pricing_mode,
+        source_stage_prices, source_color_size_distribution, 'قيد الانتظار'
+      )
+      returning id, factory_model_code into new_order_id, resolved_model_code;
+    end if;
+    update public.factory_client_model_requests
+    set status = 'merged',
+        merged_into_order_id = coalesce(new_order_id, target_order_id),
+        merged_into_catalog_model_id = target_catalog_id,
+        merged_at = now()
+    where id = source_request.id;
+  end if;
+
+  if requested_target_type = 'catalog' then
+    select coalesce(sum(factory_order.total_pieces), 0)::integer
+      into family_quantity
+    from public.orders as factory_order
+    where factory_order.factory_model_catalog_id = target_catalog_id;
+  else
+    select coalesce(sum(factory_order.total_pieces), 0)::integer
+      into family_quantity
+    from public.orders as factory_order
+    where factory_order.id = target_order_id
+       or factory_order.parent_order_id = target_order_id
+       or (target_catalog_id is not null and factory_order.factory_model_catalog_id = target_catalog_id);
+  end if;
+
+  return jsonb_build_object(
+    'merged_order_id', new_order_id,
+    'target_order_id', target_order_id,
+    'target_catalog_model_id', target_catalog_id,
+    'previous_family_quantity', previous_family_quantity,
+    'repeated_quantity', repeated_quantity,
+    'new_family_quantity', family_quantity,
+    'factory_model_code', coalesce(resolved_model_code, target_order.factory_model_code, target_catalog.factory_model_code)
+  );
+end;
+$$;
+
+revoke all on function public.admin_merge_factory_client_model(text, uuid, text, uuid) from public, anon, authenticated;
+grant execute on function public.admin_merge_factory_client_model(text, uuid, text, uuid) to authenticated;
+
 notify pgrst, 'reload schema';

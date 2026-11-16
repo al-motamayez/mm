@@ -427,7 +427,7 @@ async function readDashboardData(session) {
     : Promise.resolve({ data: [], error: null });
   const clientModelRequestsPromise = ["admin", "client"].includes(session.role)
     ? supabaseClient.from("factory_client_model_requests")
-      .select("id, client_id, user_id, model_name, model_number, quantity, notes, image_path, status, created_at")
+      .select("id, client_id, user_id, model_name, model_number, quantity, notes, image_path, status, merged_into_order_id, merged_into_catalog_model_id, merged_at, created_at")
       .order("created_at", { ascending: false })
     : Promise.resolve({ data: [], error: null });
   const cuttingStoriesPromise = session.role === "admin"
@@ -3344,8 +3344,51 @@ function clientDetailsView(client, data) {
     || Boolean(order.factoryModelCode && story.factory_model_code === order.factoryModelCode);
   const { models: waitingModels, orderIds: waitingOrderIds } =
     clientWaitingModelSummary(client, summary.orders, data);
+  const mergeTargets = new Map();
+  data.models
+    .filter((order) => order.customerId === client.id && !order.archivedAt && !order.workflowArchivedAt)
+    .forEach((order) => {
+      const rootOrder = order.parentOrderId
+        ? data.models.find((candidate) => candidate.id === order.parentOrderId)
+        : order;
+      if (!rootOrder || rootOrder.customerId !== client.id || rootOrder.archivedAt || rootOrder.workflowArchivedAt) return;
+      if (!mergeTargets.has(`order:${rootOrder.id}`)) {
+        const familyQuantity = data.models
+          .filter((candidate) => candidate.customerId === client.id
+            && (candidate.id === rootOrder.id
+              || candidate.parentOrderId === rootOrder.id
+              || (rootOrder.factoryModelCatalogId && candidate.factoryModelCatalogId === rootOrder.factoryModelCatalogId)))
+          .reduce((total, candidate) => total + Number(candidate.quantity || 0), 0);
+        mergeTargets.set(`order:${rootOrder.id}`, {
+          type: "order",
+          id: rootOrder.id,
+          name: rootOrder.name,
+          code: rootOrder.factoryModelCode || rootOrder.clientModelCode || rootOrder.modelNumber,
+          quantity: familyQuantity,
+          catalogId: rootOrder.factoryModelCatalogId || ""
+        });
+      }
+    });
+  const orderTargetCodes = new Set([...mergeTargets.values()].map((target) => target.code).filter(Boolean));
+  (data.modelCatalog || [])
+    .filter((model) => model.customer_id === client.id && !model.archived_at && !orderTargetCodes.has(model.factory_model_code))
+    .forEach((model) => {
+      mergeTargets.set(`catalog:${model.id}`, {
+        type: "catalog",
+        id: model.id,
+        name: model.model_name,
+        code: model.factory_model_code || model.client_model_code,
+        quantity: data.models
+          .filter((order) => order.factoryModelCatalogId === model.id)
+          .reduce((total, order) => total + Number(order.quantity || 0), 0),
+        catalogId: model.id
+      });
+    });
+  const mergeTargetOptions = [...mergeTargets.values()].map((target) =>
+    `<option value="${target.type}:${escapeHtml(target.id)}" data-merge-target-type="${target.type}" data-merge-target-id="${escapeHtml(target.id)}" data-merge-target-quantity="${target.quantity}" data-merge-target-catalog-id="${escapeHtml(target.catalogId)}">${escapeHtml(target.name || "موديل بدون اسم")} · ${escapeHtml(target.code || "—")}</option>`
+  ).join("");
   const clientRequestRows = (requests) => requests.map((request) =>
-    `<tr><td>${escapeHtml(request.model_name || "—")}</td><td>${escapeHtml(request.model_number || "—")}</td><td>${request.quantity ?? "—"}</td><td>${modelImageMarkup(request.imageUrl, `صورة الموديل ${request.model_name || ""}`) || "—"}</td><td>${statusTag(request.status === "pending" ? "بانتظار المراجعة" : request.status)}</td><td>${formatDateTime(request.created_at)}</td></tr>`
+    `<tr><td>${escapeHtml(request.model_name || "—")}</td><td>${escapeHtml(request.model_number || "—")}</td><td>${request.quantity ?? "—"}</td><td>${modelImageMarkup(request.imageUrl, `صورة الموديل ${request.model_name || ""}`) || "—"}</td><td>${statusTag(request.status === "pending" ? "بانتظار المراجعة" : request.status === "merged" ? "تم الدمج" : request.status)}</td><td>${request.status === "merged" ? escapeHtml((data.models.find((order) => order.id === request.merged_into_order_id)?.factoryModelCode || data.modelCatalog.find((model) => model.id === request.merged_into_catalog_model_id)?.factory_model_code || "مرتبط بالموديل الأصلي")) : ""}</td><td>${formatDateTime(request.created_at)}</td></tr>`
   );
   const clientOrdersById = new Map(data.models
     .filter((order) => order.customerId === client.id)
@@ -3512,9 +3555,9 @@ function clientDetailsView(client, data) {
     ${accountLinkSection}
     ${clientFabricBalanceSection}
     ${panel("موديلات مطلوبة للقص / قيد الانتظار", pendingClientModelRequests.length
-      ? table(["اسم الموديل","كود/رقم العميل","العدد","الصورة","الحالة","تاريخ الطلب"], clientRequestRows(pendingClientModelRequests))
+      ? table(["اسم الموديل","كود/رقم العميل","العدد","الصورة","الحالة","الموديل الأصلي","تاريخ الطلب"], clientRequestRows(pendingClientModelRequests))
       : '<div class="empty-state">لا توجد طلبات قص بانتظار المراجعة.</div>', "هذه الطلبات منفصلة عن سجل الموديلات ولا تدخل التشغيل أو الحساب حتى إتمام القص فعلياً.")}
-    ${reviewedClientModelRequests.length ? panel("طلبات القص السابقة", table(["اسم الموديل","كود/رقم العميل","العدد","الصورة","الحالة","تاريخ الطلب"], clientRequestRows(reviewedClientModelRequests))) : ""}
+    ${reviewedClientModelRequests.length ? panel("طلبات القص السابقة", table(["اسم الموديل","كود/رقم العميل","العدد","الصورة","الحالة","الموديل الأصلي","تاريخ الطلب"], clientRequestRows(reviewedClientModelRequests))) : ""}
     <div class="stats-grid client-finance-summary">${summary.latestSettlement ? stat("الرصيد المرحّل من آخر تصفية", money(summary.openingBalance), "قبل حركات الفترة الحالية") : ""}${stat("المتبقي من البضاعة بحالات التشغيل الأخرى", money(summary.pendingGoodsBalance), "بعد تخصيص الدفعات؛ لا يدخل في المستحقات")}${stat("المستحق للطلبات الجاهزة أو المسلّمة", money(summary.deliveredDue), "حسب حالة الطلب وبعد تخصيص الدفعات")}${stat("مصروفات وعهد العميل", money(summary.clientExpensesTotal))}${stat("خصومات التسوية", money(summary.accountAdjustmentsTotal), "خصومات غير نقدية")}${stat("إجمالي المدفوع", money(summary.paid))}${stat("الرصيد الإجمالي", money(summary.balance), summary.balance === 0 ? "تم السداد بالكامل" : summary.balance < 0 ? "رصيد دائن للعميل" : summary.deliveredDue > 0 ? "يوجد مستحق حسب حالة الطلب" : summary.hasUndeliveredGoods ? "يشمل بضاعة بحالات تشغيل أخرى" : "لا يوجد مستحق حالياً")}</div>
     </div>
     <div data-client-profile-panel="waiting"${activeClientProfileTab === "waiting" ? "" : " hidden"}>
@@ -3522,9 +3565,25 @@ function clientDetailsView(client, data) {
         ? `<div class="client-waiting-model-grid">${waitingModels.map((model) => `<article class="client-waiting-model-card">
             ${modelImageMarkup(model.image, `صورة الموديل ${model.name || ""}`)}
             <div><h3>${escapeHtml(model.name || "موديل بدون اسم")}</h3><p>كود الموديل: <strong>${escapeHtml(model.code || "—")}</strong></p>${statusTag("قيد الانتظار")}</div>
+            ${model.canMerge === false ? '<span class="status">مرتبط كتكرار</span>' : `<button class="button button-secondary client-model-merge-trigger" type="button" data-merge-client-model data-merge-source-type="${escapeHtml(model.sourceType)}" data-merge-source-id="${escapeHtml(model.sourceId)}">دمج</button>`}
           </article>`).join("")}</div>`
         : '<div class="empty-state">لا توجد موديلات غير مقصوصة أو بانتظار قصة لهذا العميل.</div>',
-      "الموديلات الجديدة التي لم تُسجل لها قصة قص بعد.")}</section>
+      "اختر الموديل الأصلي لربط الموديل المكرر به كتكرار محفوظ.")}</section>
+      <div class="modal-backdrop client-model-merge-modal" data-client-model-merge-modal hidden>
+        <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="client-model-merge-title">
+          <button class="modal-close" type="button" data-close-client-model-merge aria-label="إغلاق">×</button>
+          <h2 id="client-model-merge-title">دمج موديل مع موديل أصلي</h2>
+          <p>سيُربط الموديل كتكرار للموديل الأصلي، مع الاحتفاظ بسجل الطلب ومنع تكرار كود القص.</p>
+          <form class="client-model-merge-form" data-client-model-merge-form data-customer-id="${escapeHtml(client.id)}">
+            <input type="hidden" name="sourceType">
+            <input type="hidden" name="sourceId">
+            <label class="field"><span>الموديل الأصلي للعميل</span><select name="target" required><option value="">اختر الموديل الأصلي</option>${mergeTargetOptions}</select></label>
+            <div class="client-model-merge-preview" data-client-model-merge-preview hidden aria-live="polite"></div>
+            <p class="field-hint" data-client-merge-no-targets hidden>لا توجد موديلات أخرى لهذا العميل يمكن الدمج معها.</p>
+            <div class="form-actions"><button class="button button-primary" type="submit"${mergeTargets.size ? "" : " disabled"}>تأكيد الدمج</button><button class="row-action" type="button" data-close-client-model-merge>إلغاء</button></div>
+          </form>
+        </section>
+      </div>
     </div>
     <div data-client-profile-panel="statement"${activeClientProfileTab === "statement" ? "" : " hidden"}>
     <section class="client-detail-section">${panel("كشف الحساب والسجل المالي", `<p>يعرض ملخص رصيد كل طلب حسب حالته، ثم التسليمات والدفعات والمصروفات والخصومات والتسويات بترتيب زمني.</p>${orderLedgerSection}${clientFinancialStatementMarkup(financialEntries)}`)}</section>
@@ -5825,7 +5884,7 @@ function clientView(data, session) {
       : '<div class="empty-state">لا توجد حركات قماش مسجلة.</div>')}</section>`;
   const clientModelRequests = (data.clientModelRequests || []).filter((request) => request.user_id === session.accountId);
   const requestRows = (requests) => requests.map((request) =>
-    `<tr><td>${escapeHtml(request.model_name || "—")}</td><td>${escapeHtml(request.model_number || "—")}</td><td>${request.quantity ?? "—"}</td><td>${modelImageMarkup(request.imageUrl, `صورة القطعة ${request.model_name || ""}`) || "—"}</td><td>${statusTag(request.status === "pending" ? "بانتظار مراجعة الإدارة" : request.status)}</td><td>${formatDateTime(request.created_at)}</td></tr>`
+    `<tr><td>${escapeHtml(request.model_name || "—")}</td><td>${escapeHtml(request.model_number || "—")}</td><td>${request.quantity ?? "—"}</td><td>${modelImageMarkup(request.imageUrl, `صورة القطعة ${request.model_name || ""}`) || "—"}</td><td>${statusTag(request.status === "pending" ? "بانتظار مراجعة الإدارة" : request.status === "merged" ? "تم الدمج" : request.status)}</td><td>${formatDateTime(request.created_at)}</td></tr>`
   );
   const pendingClientModelRequests = clientModelRequests.filter((request) => request.status === "pending");
   const reviewedClientModelRequests = clientModelRequests.filter((request) => request.status !== "pending");
@@ -5855,7 +5914,7 @@ function clientModelRequestsAdminView(data) {
   const clientName = (clientId) => data.clients.find((client) => client.id === clientId)?.name || "عميل";
   return `<section id="client-model-requests" class="dashboard-section">${panel("طلبات القصص / الموديلات الجديدة من العملاء", requests.length
     ? table(["العميل","اسم الموديل","كود/رقم الموديل للعميل","العدد","الصورة","ملاحظات","الحالة","تاريخ الإرسال"], requests.map((request) =>
-      `<tr><td>${escapeHtml(clientName(request.client_id))}</td><td>${escapeHtml(request.model_name || "—")}</td><td>${escapeHtml(request.model_number || "—")}</td><td>${request.quantity ?? "—"}</td><td>${modelImageMarkup(request.imageUrl, `صورة القطعة ${request.model_name || ""}`) || "—"}</td><td>${escapeHtml(request.notes || "—")}</td><td>${statusTag(request.status === "pending" ? "بانتظار المراجعة" : request.status)}</td><td>${formatDateTime(request.created_at)}</td></tr>`
+      `<tr><td>${escapeHtml(clientName(request.client_id))}</td><td>${escapeHtml(request.model_name || "—")}</td><td>${escapeHtml(request.model_number || "—")}</td><td>${request.quantity ?? "—"}</td><td>${modelImageMarkup(request.imageUrl, `صورة القطعة ${request.model_name || ""}`) || "—"}</td><td>${escapeHtml(request.notes || "—")}</td><td>${statusTag(request.status === "pending" ? "بانتظار المراجعة" : request.status === "merged" ? "تم الدمج" : request.status)}</td><td>${formatDateTime(request.created_at)}</td></tr>`
     ))
     : '<div class="empty-state">لا توجد طلبات قصص أو موديلات جديدة من العملاء.</div>')}</section>`;
 }
@@ -6056,23 +6115,31 @@ function clientWaitingModelSummary(client, orders, data) {
   );
   const entries = [
     ...waitingOrders.map((order) => ({
-      key: order.factoryModelCode || order.modelNumber || order.id,
+      key: `order:${order.parentOrderId || order.id}`,
       name: order.name,
       code: order.factoryModelCode,
       image: order.modelImageUrls || order.modelImageUrl,
-      orderId: order.id
+      orderId: order.id,
+      sourceType: "order",
+      sourceId: order.id,
+      canMerge: !order.parentOrderId
+        && !orders.some((candidate) => candidate.parentOrderId === order.id)
     })),
     ...catalogModels.map((model) => ({
-      key: model.factory_model_code || model.id,
+      key: `catalog:${model.id}`,
       name: model.model_name,
       code: model.factory_model_code,
-      image: model.model_image_url || DEFAULT_MODEL_IMAGE_URL
+      image: model.model_image_url || DEFAULT_MODEL_IMAGE_URL,
+      sourceType: "catalog",
+      sourceId: model.id
     })),
     ...pendingRequests.map((request) => ({
-      key: request.model_number || request.model_name || request.id,
+      key: `request:${request.id}`,
       name: request.model_name,
       code: request.model_number,
-      image: request.imageUrl
+      image: request.imageUrl,
+      sourceType: "request",
+      sourceId: request.id
     }))
   ];
   return {
@@ -9819,6 +9886,135 @@ function bindClientDetailActions(session) {
         panel.hidden = panel.dataset.clientProfilePanel !== activeClientProfileTab;
       });
     });
+  });
+  const mergeModal = document.querySelector("#client-details [data-client-model-merge-modal]");
+  const mergeForm = mergeModal?.querySelector("[data-client-model-merge-form]");
+  const mergeTargetSelect = mergeForm?.elements.target;
+  const mergePreview = mergeForm?.querySelector("[data-client-model-merge-preview]");
+  const closeMergeModal = () => {
+    if (mergeModal) mergeModal.hidden = true;
+    mergeForm?.reset();
+    if (mergePreview) {
+      mergePreview.hidden = true;
+      mergePreview.textContent = "";
+    }
+  };
+  const updateMergePreview = () => {
+    if (!mergeTargetSelect || !mergePreview) return;
+    const selectedOption = mergeTargetSelect.selectedOptions[0];
+    if (!selectedOption?.dataset.mergeTargetType) {
+      mergePreview.hidden = true;
+      mergePreview.textContent = "";
+      return;
+    }
+    const sourceType = mergeForm.elements.sourceType.value;
+    const sourceId = mergeForm.elements.sourceId.value;
+    const sourceRequest = sourceType === "request"
+      ? dashboardData.clientModelRequests.find((request) => request.id === sourceId)
+      : null;
+    const sourceOrder = sourceType === "order"
+      ? dashboardData.models.find((order) => order.id === sourceId)
+      : null;
+    const repeatedQuantity = Number(sourceRequest?.quantity || sourceOrder?.quantity || 0);
+    const originalQuantity = Number(selectedOption.dataset.mergeTargetQuantity || 0);
+    const totalQuantity = originalQuantity + repeatedQuantity;
+    const number = (value) => new Intl.NumberFormat("ar-EG-u-nu-latn").format(value);
+    mergePreview.innerHTML = repeatedQuantity > 0
+      ? `<span>العدد المسجل على الموديل الأصلي: <strong>${number(originalQuantity)}</strong></span><span>عدد التكرار المضاف: <strong>${number(repeatedQuantity)}</strong></span><strong>إجمالي كمية الموديل بعد الدمج: ${number(totalQuantity)} قطعة</strong>`
+      : `<span>العدد المسجل على الموديل الأصلي: <strong>${number(originalQuantity)}</strong></span><span>لا يوجد عدد قص مسجل للموديل المدمج؛ سيعتمد كود الموديل الأصلي.</span>`;
+    mergePreview.hidden = false;
+  };
+  document.querySelectorAll("#client-details [data-merge-client-model]").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (!mergeModal || !mergeForm || !mergeTargetSelect) return;
+      const sourceType = button.dataset.mergeSourceType;
+      const sourceId = button.dataset.mergeSourceId;
+      const sourceOrder = sourceType === "order"
+        ? dashboardData.models.find((order) => order.id === sourceId)
+        : null;
+      const sourceRootOrderId = sourceOrder?.parentOrderId || sourceOrder?.id;
+      mergeForm.elements.sourceType.value = sourceType;
+      mergeForm.elements.sourceId.value = sourceId;
+      [...mergeTargetSelect.options].forEach((option) => {
+        if (!option.dataset.mergeTargetType) return;
+        const sameOrder = sourceType === "order"
+          && option.dataset.mergeTargetType === "order"
+          && option.dataset.mergeTargetId === sourceRootOrderId;
+        const sameCatalog = sourceType === "catalog"
+          && option.dataset.mergeTargetType === "catalog"
+          && option.dataset.mergeTargetId === sourceId;
+        option.hidden = sameOrder || sameCatalog;
+      });
+      const availableTarget = [...mergeTargetSelect.options]
+        .some((option) => option.dataset.mergeTargetType && !option.hidden);
+      mergeForm.querySelector('button[type="submit"]').disabled = !availableTarget;
+      mergeForm.querySelector("[data-client-merge-no-targets]").hidden = availableTarget;
+      mergeTargetSelect.value = "";
+      updateMergePreview();
+      mergeModal.hidden = false;
+      mergeTargetSelect.focus();
+    });
+  });
+  mergeTargetSelect?.addEventListener("change", updateMergePreview);
+  mergeModal?.querySelectorAll("[data-close-client-model-merge]").forEach((button) => {
+    button.addEventListener("click", closeMergeModal);
+  });
+  mergeModal?.addEventListener("click", (event) => {
+    if (event.target === mergeModal) closeMergeModal();
+  });
+  mergeForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const [targetType, targetId] = String(mergeTargetSelect?.value || "").split(":");
+    const sourceType = mergeForm.elements.sourceType.value;
+    const sourceId = mergeForm.elements.sourceId.value;
+    if (!["order", "catalog"].includes(targetType) || !targetId || !sourceId) {
+      window.factoryUI.toast("اختر موديلًا أصليًا صالحًا قبل تأكيد الدمج.", "error");
+      return;
+    }
+    const sourceRequest = sourceType === "request"
+      ? dashboardData.clientModelRequests.find((request) => request.id === sourceId)
+      : null;
+    const sourceOrder = sourceType === "order"
+      ? dashboardData.models.find((order) => order.id === sourceId)
+      : null;
+    const repeatedQuantity = Number(sourceRequest?.quantity || sourceOrder?.quantity || 0);
+    const selectedOption = mergeTargetSelect.selectedOptions[0];
+    const originalQuantity = Number(selectedOption?.dataset.mergeTargetQuantity || 0);
+    if (!await window.factoryUI.confirmAction({
+      title: "تأكيد دمج الموديل",
+      message: repeatedQuantity > 0
+        ? `سيُسجل كتكرار للموديل الأصلي. العدد الحالي ${originalQuantity} قطعة، وعدد التكرار ${repeatedQuantity} قطعة، والإجمالي ${originalQuantity + repeatedQuantity} قطعة. لن تُحذف بيانات الطلب الأصلي.`
+        : "سيُربط الموديل بكود الموديل الأصلي وتُحفظ بياناته كسجل دمج. لن تُحذف بيانات الطلب الأصلي.",
+      confirmLabel: "تأكيد الدمج"
+    })) return;
+    const submitButton = mergeForm.querySelector('button[type="submit"]');
+    submitButton.disabled = true;
+    let mergeSaved = false;
+    try {
+      const { error } = await supabaseClient.rpc("admin_merge_factory_client_model", {
+        requested_source_type: sourceType,
+        requested_source_id: sourceId,
+        requested_target_type: targetType,
+        requested_target_id: targetId
+      });
+      if (error?.code === "PGRST202") {
+        throw new Error("دالة دمج الموديلات غير موجودة. شغّل أحدث نسخة من supabase/schema.sql في SQL Editor.");
+      }
+      if (error) throw error;
+      mergeSaved = true;
+      closeMergeModal();
+      await refreshDashboard(session);
+      const client = dashboardData.clients.find((item) => item.id === mergeForm.dataset.customerId);
+      if (!client) throw new Error("تم الدمج لكن تعذر العثور على ملف العميل لتحديث العرض.");
+      document.querySelector("#client-details").innerHTML = clientDetailsView(client, dashboardData);
+      bindClientDetailActions(session);
+      window.factoryUI.toast("تم ربط الموديل بالموديل الأصلي وحفظ التكرار دون كود قص مكرر.");
+    } catch (error) {
+      submitButton.disabled = false;
+      reportDashboardFailure(session, mergeSaved
+        ? "تم الدمج لكن تعذر تحديث ملف العميل"
+        : "تعذر دمج الموديل", error);
+    }
   });
   document.querySelectorAll("#client-details [data-client-mark-alerts-read]").forEach((button) => {
     button.addEventListener("click", async () => {
