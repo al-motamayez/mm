@@ -200,6 +200,7 @@ begin
     raise exception 'A customer is required to generate a model code.';
   end if;
 
+  perform pg_advisory_xact_lock(hashtextextended('factory_model_serial_seq', 0));
   allocated_serial := nextval('public.factory_model_serial_seq');
 
   return allocated_serial;
@@ -997,6 +998,7 @@ begin
         new.model_serial := public.next_factory_model_serial(new.customer_id);
         new.factory_model_code := concat(customer_letter, '-', new.model_serial);
       else
+        perform pg_advisory_xact_lock(hashtextextended('factory_model_serial_seq', 0));
         new.model_serial := nextval('public.factory_model_serial_seq');
       end if;
     end if;
@@ -4434,6 +4436,36 @@ begin
 end;
 $$;
 
+create or replace function public.reconcile_factory_model_serial_sequence()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  highest_serial bigint;
+begin
+  perform pg_advisory_xact_lock(hashtextextended('factory_model_serial_seq', 0));
+  select greatest(
+    coalesce((
+      select max(factory_order.model_serial)
+      from public.orders as factory_order
+      where factory_order.factory_model_catalog_id is null
+        and factory_order.parent_order_id is null
+    ), 0),
+    coalesce((select max(catalog_model.model_serial) from public.factory_model_catalog as catalog_model), 0)
+  )
+  into highest_serial;
+
+  perform setval(
+    'public.factory_model_serial_seq',
+    greatest(highest_serial, 1),
+    highest_serial > 0
+  );
+end;
+$$;
+revoke all on function public.reconcile_factory_model_serial_sequence() from public, anon, authenticated;
+
 create or replace function public.admin_delete_factory_model_catalog(requested_model_id uuid)
 returns text
 language plpgsql
@@ -4458,9 +4490,12 @@ begin
   if not found then
     raise exception 'The catalog model no longer exists.';
   end if;
+  perform pg_advisory_xact_lock(hashtextextended('factory_model_serial_seq', 0));
 
   select
-    exists (
+    (to_jsonb(catalog_model)->>'merged_into_order_id') is not null
+    or (to_jsonb(catalog_model)->>'merged_into_catalog_model_id') is not null
+    or exists (
       select 1 from public.orders
       where factory_model_catalog_id = catalog_model.id
     )
@@ -4480,6 +4515,7 @@ begin
     where catalog_model_id = catalog_model.id;
     delete from public.factory_model_catalog
     where id = catalog_model.id;
+    perform public.reconcile_factory_model_serial_sequence();
     return 'deleted';
   end if;
 
@@ -7929,6 +7965,7 @@ begin
   if not found then
     raise exception 'Factory order not found.';
   end if;
+  perform pg_advisory_xact_lock(hashtextextended('factory_model_serial_seq', 0));
   if current_order.archived_at is not null then
     raise exception 'Orders in a settled financial period cannot be deleted.';
   end if;
@@ -8018,6 +8055,7 @@ begin
     and completed_story_id is null;
   delete from public.orders
   where id = requested_order_id;
+  perform public.reconcile_factory_model_serial_sequence();
 end;
 $$;
 
@@ -10452,11 +10490,13 @@ alter table public.factory_client_model_requests
   add constraint factory_client_model_requests_status_check
     check (status in ('pending', 'reviewed', 'accepted', 'rejected', 'merged'));
 
+drop function if exists public.admin_merge_factory_client_model(text, uuid, text, uuid);
 create or replace function public.admin_merge_factory_client_model(
   requested_source_type text,
   requested_source_id uuid,
   requested_target_type text,
-  requested_target_id uuid
+  requested_target_id uuid,
+  requested_source_model_image_url text
 )
 returns jsonb
 language plpgsql
@@ -10498,7 +10538,8 @@ begin
   if requested_source_type not in ('order', 'catalog', 'request')
      or requested_target_type not in ('order', 'catalog')
      or requested_source_id is null
-     or requested_target_id is null then
+     or requested_target_id is null
+     or length(coalesce(requested_source_model_image_url, '')) > 2000 then
     raise exception 'Choose a valid pending model and original model.';
   end if;
 
@@ -10556,6 +10597,7 @@ begin
     end if;
     target_catalog_id := target_catalog.id;
     target_customer_id := target_catalog.customer_id;
+    selected_customer_id := target_catalog.customer_id;
     source_model_name := target_catalog.model_name;
     source_client_model_code := target_catalog.client_model_code;
     source_model_image_url := target_catalog.model_image_url;
@@ -10659,6 +10701,10 @@ begin
     if not found then
       raise exception 'The pending client model request no longer exists or was already reviewed.';
     end if;
+    if source_request.image_path is not null
+       and length(trim(coalesce(requested_source_model_image_url, ''))) = 0 then
+      raise exception 'The pending model image could not be preserved. Refresh the client profile and try again.';
+    end if;
     select client.id, client.user_id
       into selected_customer_id, target_client_id
     from public.factory_clients as client
@@ -10667,6 +10713,9 @@ begin
     if not found or selected_customer_id is distinct from target_customer_id then
       raise exception 'The pending request and original model must belong to the same client.';
     end if;
+    source_model_name := coalesce(nullif(trim(source_request.model_name), ''), source_model_name);
+    source_client_model_code := coalesce(nullif(trim(source_request.model_number), ''), source_client_model_code);
+    source_model_image_url := coalesce(nullif(trim(requested_source_model_image_url), ''), source_model_image_url);
     repeated_quantity := coalesce(source_request.quantity, 0);
     if repeated_quantity > 0 then
       insert into public.orders (
@@ -10678,7 +10727,7 @@ begin
       )
       values (
         target_client_id, selected_customer_id, source_model_name,
-        coalesce(target_order.model_number, ''), target_order_id,
+        coalesce(nullif(trim(source_request.model_number), ''), target_order.model_number, ''), target_order_id,
         target_catalog_id, source_client_model_code, 'دمج طلب تكرار',
         repeated_quantity, repeated_quantity, source_colors, source_color_names,
         source_sizes, source_price_per_piece, source_model_image_url, 'عادي',
@@ -10721,7 +10770,7 @@ begin
 end;
 $$;
 
-revoke all on function public.admin_merge_factory_client_model(text, uuid, text, uuid) from public, anon, authenticated;
-grant execute on function public.admin_merge_factory_client_model(text, uuid, text, uuid) to authenticated;
+revoke all on function public.admin_merge_factory_client_model(text, uuid, text, uuid, text) from public, anon, authenticated;
+grant execute on function public.admin_merge_factory_client_model(text, uuid, text, uuid, text) to authenticated;
 
 notify pgrst, 'reload schema';

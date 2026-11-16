@@ -3573,7 +3573,7 @@ function clientDetailsView(client, data) {
         <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="client-model-merge-title">
           <button class="modal-close" type="button" data-close-client-model-merge aria-label="إغلاق">×</button>
           <h2 id="client-model-merge-title">دمج موديل مع موديل أصلي</h2>
-          <p>سيُربط الموديل كتكرار للموديل الأصلي، مع الاحتفاظ بسجل الطلب ومنع تكرار كود القص.</p>
+          <p>سيُربط كتكرار للموديل الأصلي مع حفظ كود العميل وصورة الطلب المعلّق، واعتماد كود المصنع الأصلي للتشغيل.</p>
           <form class="client-model-merge-form" data-client-model-merge-form data-customer-id="${escapeHtml(client.id)}">
             <input type="hidden" name="sourceType">
             <input type="hidden" name="sourceId">
@@ -9995,7 +9995,8 @@ function bindClientDetailActions(session) {
         requested_source_type: sourceType,
         requested_source_id: sourceId,
         requested_target_type: targetType,
-        requested_target_id: targetId
+        requested_target_id: targetId,
+        requested_source_model_image_url: sourceRequest?.imageUrl || ""
       });
       if (error?.code === "PGRST202") {
         throw new Error("دالة دمج الموديلات غير موجودة. شغّل أحدث نسخة من supabase/schema.sql في SQL Editor.");
