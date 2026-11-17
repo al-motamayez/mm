@@ -715,19 +715,126 @@ body[data-dashboard-role] [data-model-edit-section][hidden] {
 }
 
 body[data-dashboard-role] .client-quick-tabs,
-body[data-dashboard-role] .client-model-tabs {
+body[data-dashboard-role] .client-model-tabs,
+body[data-dashboard-role] .production-details-tabs {
   border-color: var(--app-line);
 }
 
 body[data-dashboard-role] .client-quick-tabs button,
-body[data-dashboard-role] .client-model-tabs [role="tab"] {
+body[data-dashboard-role] .client-model-tabs [role="tab"],
+body[data-dashboard-role] .production-details-tabs [role="tab"] {
   color: #b7c5ce;
 }
 
 body[data-dashboard-role] .client-quick-tabs button[aria-selected="true"],
-body[data-dashboard-role] .client-model-tabs [role="tab"][aria-selected="true"] {
+body[data-dashboard-role] .client-model-tabs [role="tab"][aria-selected="true"],
+body[data-dashboard-role] .production-details-tabs [role="tab"][aria-selected="true"] {
   border-bottom-color: var(--app-green);
   color: #d8ffed;
+}
+
+body[data-dashboard-role] .production-details-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--app-line);
+}
+
+body[data-dashboard-role] .production-details-tabs [role="tab"] {
+  min-height: 38px;
+  padding: 8px 13px;
+  border: 1px solid var(--app-line);
+  border-radius: 8px;
+  color: #bdc9d1;
+  background: #17222d;
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+body[data-dashboard-role] .production-details-tabs [role="tab"][aria-selected="true"] {
+  border-color: #388267;
+  color: #effff7;
+  background: #20523f;
+}
+
+body[data-dashboard-role] .production-details-panel {
+  min-width: 0;
+  padding: 2px 0 8px;
+}
+
+body[data-dashboard-role] .client-model-expenses-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 290px), 1fr));
+  gap: 14px;
+}
+
+body[data-dashboard-role] .client-model-expense-card {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--app-line);
+  border-radius: 12px;
+  background: #141e28;
+}
+
+body[data-dashboard-role] .client-model-expense-card > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+body[data-dashboard-role] .client-model-expense-card header small,
+body[data-dashboard-role] .client-model-expense-status {
+  color: var(--app-muted);
+}
+
+body[data-dashboard-role] .client-model-expense-card h3 {
+  margin: 4px 0 0;
+  color: var(--app-text);
+}
+
+body[data-dashboard-role] .client-model-expense-summary {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--app-line);
+  border-radius: 9px;
+  color: var(--app-muted);
+  background: #101922;
+}
+
+body[data-dashboard-role] .client-model-expense-summary span {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+body[data-dashboard-role] .client-model-expense-summary strong {
+  color: var(--app-text);
+}
+
+body[data-dashboard-role] .client-model-expense-summary .client-model-expense-amount,
+body[data-dashboard-role] .client-model-expense-amount {
+  color: #ff626b;
+  font-weight: 850;
+}
+
+body[data-dashboard-role] .client-model-expense-status {
+  margin: 0;
+  color: #ff858b;
+  font-weight: 700;
+}
+
+body[data-dashboard-role] .production-details-tabs [role="tab"]:focus-visible,
+body[data-dashboard-role] .client-model-expense-card .button:focus-visible {
+  outline: 2px solid #76ddb8;
+  outline-offset: 2px;
 }
 
 body[data-dashboard-role] .model-preview-list {
