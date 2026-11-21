@@ -1631,6 +1631,77 @@ function updateCuttingCalculation(form) {
   return { sizeData, colorPlyData: { colors: colorRows, sizes: selectedSizes, type: sizeType }, colors: [...new Set(selectedColors)], total };
 }
 
+function cuttingCompletionValidationErrors(cuttingData) {
+  const maximumQuantity = 2147483647;
+  const errors = [];
+  const { sizeData, total, colorPlyData } = cuttingData;
+  const sizes = Array.isArray(colorPlyData.sizes) ? colorPlyData.sizes : [];
+  const colors = Array.isArray(colorPlyData.colors) ? colorPlyData.colors : [];
+  const validColorRows = colors.filter((entry) =>
+    entry.name
+    && /^#[0-9A-F]{6}$/i.test(entry.color)
+    && Number.isSafeInteger(entry.plys)
+    && entry.plys >= 1
+    && entry.plys <= maximumQuantity
+  );
+  const duplicateColors = new Set();
+  const seenColors = new Set();
+
+  if (!sizeData.type) errors.push("اختر نوع المقاسات.");
+  if (!sizes.length) errors.push("حدد مقاسًا واحدًا على الأقل.");
+  if (!colors.length) errors.push("أضف لونًا واحدًا على الأقل.");
+  colors.forEach((entry, index) => {
+    const colorLabel = entry.name || `اللون رقم ${index + 1}`;
+    if (!entry.name) errors.push(`أدخل اسم اللون في الصف رقم ${index + 1}.`);
+    if (!/^#[0-9A-F]{6}$/i.test(entry.color)) errors.push(`اختر درجة لون صحيحة لـ${colorLabel}.`);
+    if (!Number.isSafeInteger(entry.plys) || entry.plys < 1 || entry.plys > maximumQuantity) {
+      errors.push(`أدخل عدد الراقات لـ${colorLabel} كعدد صحيح بين 1 و${maximumQuantity}.`);
+    }
+    const colorCode = String(entry.color || "").toUpperCase();
+    if (seenColors.has(colorCode)) duplicateColors.add(colorCode);
+    seenColors.add(colorCode);
+  });
+  duplicateColors.forEach((color) => {
+    const colorLabel = colors.find((entry) => String(entry.color || "").toUpperCase() === color)?.name || color;
+    errors.push(`درجة اللون ${colorLabel} مكررة؛ غيّرها أو احذف صف اللون المكرر.`);
+  });
+
+  const allColorsValid = colors.length > 0
+    && validColorRows.length === colors.length
+    && duplicateColors.size === 0;
+  if (sizes.length && allColorsValid) {
+    const totalPlys = validColorRows.reduce((sum, entry) => sum + entry.plys, 0);
+    if (!Number.isSafeInteger(totalPlys) || totalPlys > maximumQuantity) {
+      errors.push(`مجموع الراقات لكل الألوان يجب ألا يتجاوز ${maximumQuantity}.`);
+    }
+    const expectedTotal = totalPlys * sizes.length;
+    const hasInvalidTotal = !Number.isSafeInteger(expectedTotal) || expectedTotal < 1 || expectedTotal > maximumQuantity
+      || !Number.isSafeInteger(total) || total < 1 || total > maximumQuantity;
+    if (expectedTotal > maximumQuantity) {
+      errors.push(`إجمالي القطع الناتج يجب ألا يتجاوز ${maximumQuantity}.`);
+    } else if (!Number.isSafeInteger(expectedTotal) || expectedTotal < 1) {
+      errors.push("إجمالي القطع الناتج غير صحيح؛ راجع المقاسات والراقات.");
+    }
+    if (!Number.isSafeInteger(total) || total < 1 || total > maximumQuantity) {
+      errors.push(`إجمالي القطع المحسوب يجب أن يكون بين 1 و${maximumQuantity}.`);
+    }
+    const uniqueSizes = [...new Set(sizes)];
+    let hasInvalidSizeCount = false;
+    uniqueSizes.forEach((size) => {
+      const count = Number(sizeData.counts?.[size]);
+      if (!Number.isSafeInteger(count) || count < 1 || count > maximumQuantity) {
+        hasInvalidSizeCount = true;
+        errors.push(`العدد المحسوب للمقاس ${size} غير صحيح.`);
+      }
+    });
+    const sizeTotal = Object.values(sizeData.counts || {}).reduce((sum, count) => sum + Number(count), 0);
+    if (!hasInvalidTotal && !hasInvalidSizeCount && (sizeTotal !== expectedTotal || total !== expectedTotal)) {
+      errors.push("إجمالي القطع المحسوب لا يطابق مجموع المقاسات والراقات؛ راجع توزيع المقاسات والراقات.");
+    }
+  }
+  return errors;
+}
+
 function parseColorNames(value) {
   let parsed = value;
   if (typeof parsed === "string") {
@@ -9205,26 +9276,43 @@ function bindCuttingActions(session) {
         };
       })
       : [];
-    const multiFabricValid = !hasMultiFabricPicker || (
-      fabricLines.length > 0
-      && fabricLines.every((line) => line.name
-        && (line.colorName || line.fabricId)
-        && Number.isFinite(line.quantity)
-        && line.quantity > 0
-        && ["متر", "توب"].includes(line.unit)
-        && (line.unit !== "توب" || Number.isSafeInteger(line.quantity))
-        && (line.unit !== "متر" || Math.abs(line.quantity * 1000 - Math.round(line.quantity * 1000)) < 1e-7)
-        && (line.fabricId || (line.source && line.source.length <= 120)))
-      && [...new Set(fabricLines.filter((line) => line.fabricId).map((line) => line.fabricId))]
-        .every((fabricId) => {
+    const validationErrors = [];
+    if (hasMultiFabricPicker) {
+      if (!fabricLines.length) validationErrors.push("أضف صفًا واحدًا على الأقل للقماش المستخدم.");
+      fabricLines.forEach((line, index) => {
+        const label = `صف القماش رقم ${index + 1}`;
+        if (!line.fabricId && !line.source) validationErrors.push(`اختر صنف القماش في ${label} أو أدخل مصدر الخامة الخارجية.`);
+        if (!line.name) validationErrors.push(`أدخل اسم الصنف أو مصدر الخامة في ${label}.`);
+        if (!line.fabricId && !line.colorName) validationErrors.push(`أدخل لون الخامة الخارجية في ${label}.`);
+        if (!Number.isFinite(line.quantity) || line.quantity <= 0) {
+          validationErrors.push(`أدخل كمية صحيحة أكبر من صفر في ${label}.`);
+        }
+        if (!["متر", "توب"].includes(line.unit)) {
+          validationErrors.push(`اختر وحدة القماش في ${label}.`);
+        } else if (line.unit === "توب" && !Number.isSafeInteger(line.quantity)) {
+          validationErrors.push(`كمية ${label} بوحدة التوب يجب أن تكون عددًا صحيحًا.`);
+        } else if (line.unit === "متر"
+          && Math.abs(line.quantity * 1000 - Math.round(line.quantity * 1000)) >= 1e-7) {
+          validationErrors.push(`كمية ${label} بالمتر يجب ألا تتجاوز دقة 0.001 متر.`);
+        }
+        if (!line.fabricId && line.source.length > 120) {
+          validationErrors.push(`مصدر الخامة في ${label} يجب ألا يتجاوز 120 حرفًا.`);
+        }
+      });
+      [...new Set(fabricLines.filter((line) => line.fabricId).map((line) => line.fabricId))]
+        .forEach((lineFabricId) => {
           const allocated = fabricLines
-            .filter((line) => line.fabricId === fabricId)
+            .filter((line) => line.fabricId === lineFabricId)
             .reduce((sum, line) => sum + line.quantity, 0);
           const selectedOption = [...form.querySelectorAll("[data-fabric-line-id] option")]
-            .find((option) => option.value === fabricId);
-          return selectedOption && allocated <= Number(selectedOption.dataset.available || 0) + 1e-9;
-        })
-    );
+            .find((option) => option.value === lineFabricId);
+          if (!selectedOption) {
+            validationErrors.push("تعذر العثور على صنف القماش المحدد؛ اختر الصنف من جديد.");
+          } else if (allocated > Number(selectedOption.dataset.available || 0) + 1e-9) {
+            validationErrors.push(`كمية ${selectedOption.dataset.name || "صنف القماش"} تتجاوز الكمية المتاحة بالمخزون.`);
+          }
+        });
+    }
     const selectedFabricId = useSavedFabric
       ? form.dataset.savedFabricId
       : form.elements.fabricId?.value || "";
@@ -9247,25 +9335,28 @@ function bindCuttingActions(session) {
     const fabric = useSavedFabric
       ? form.dataset.savedFabricName
       : isExternal ? externalFabricSource : form.elements.fabricId?.selectedOptions[0]?.dataset.name || "";
-    const { sizeData, total } = cuttingData;
-    if ((!hasMultiFabricPicker && !useSavedFabric && ((!isExternal && !fabricId) || !fabric || !Number.isFinite(fabricQuantity) || fabricQuantity <= 0
-      || !["متر", "توب"].includes(fabricUnit)
-      || (!isExternal && fabricUnit !== form.elements.fabricId?.selectedOptions[0]?.dataset.unit)
-      || (isExternal && externalFabricSource.length > 120)
-      || (fabricUnit === "توب" && !Number.isSafeInteger(boltCount))
-      || !Number.isSafeInteger(boltCount)))
-      || (useSavedFabric && (!fabric || !Number.isFinite(fabricQuantity) || fabricQuantity <= 0))
-      || !multiFabricValid
-      || (requireFinal && (!sizeData.type || !Object.keys(sizeData.counts).length || !Number.isSafeInteger(total) || total <= 0
-        || cuttingData.colorPlyData.colors.length === 0
-        || cuttingData.colorPlyData.colors.some((entry) => !entry.name || !Number.isSafeInteger(entry.plys) || entry.plys < 1)
-        || new Set(cuttingData.colorPlyData.colors.map((entry) => entry.color)).size !== cuttingData.colorPlyData.colors.length))) {
+    if (!hasMultiFabricPicker && !useSavedFabric) {
+      if (!fabricId && !isExternal) validationErrors.push("اختر صنف القماش أو سجل خامة خارجية.");
+      if (!fabric) validationErrors.push(isExternal ? "أدخل اسم مصدر الخامة الخارجية." : "تعذر قراءة اسم صنف القماش المحدد.");
+      if (!Number.isFinite(fabricQuantity) || fabricQuantity <= 0) validationErrors.push("أدخل كمية سحب القماش أكبر من صفر.");
+      if (!["متر", "توب"].includes(fabricUnit)) validationErrors.push("اختر وحدة القماش.");
+      if (!isExternal && fabricId && fabricUnit !== form.elements.fabricId?.selectedOptions[0]?.dataset.unit) {
+        validationErrors.push("وحدة القماش لا تطابق الوحدة المسجلة للصنف.");
+      }
+      if (isExternal && externalFabricSource.length > 120) validationErrors.push("مصدر الخامة الخارجية يجب ألا يتجاوز 120 حرفًا.");
+      if (fabricUnit === "توب" && !Number.isSafeInteger(boltCount)) validationErrors.push("عدد الأتواب يجب أن يكون عددًا صحيحًا.");
+      if (!Number.isSafeInteger(boltCount)) validationErrors.push("عدد الأتواب المحسوب غير صحيح.");
+    } else if (useSavedFabric && (!fabric || !Number.isFinite(fabricQuantity) || fabricQuantity <= 0)) {
+      validationErrors.push("بيانات القماش المحفوظة غير مكتملة؛ حدّث بيانات القماش والكمية.");
+    }
+    if (requireFinal) validationErrors.push(...cuttingCompletionValidationErrors(cuttingData));
+    if (validationErrors.length) {
       if (notifyOnInvalid) {
-        window.factoryUI.toast(requireFinal
-          ? "أكمل المقاسات والألوان وعدد الراقات لكل لون قبل إنهاء القص."
-          : hasMultiFabricPicker
-            ? "أكمل اختيار لون وكمية صحيحة لكل صنف، ولا تتجاوز الكمية المتاحة."
-            : "اختر القماش وأدخل كمية سحب صحيحة تطابق وحدة الصنف المسجلة.", "error");
+        const visibleErrors = validationErrors.slice(0, 4);
+        const remainingErrors = validationErrors.length - visibleErrors.length;
+        const message = visibleErrors.join("؛ ")
+          + (remainingErrors > 0 ? `؛ وهناك ${remainingErrors} ملاحظات أخرى.` : "");
+        window.factoryUI.toast(message, "error");
       }
       return null;
     }
