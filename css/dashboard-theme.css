@@ -951,6 +951,20 @@ body[data-dashboard-role] select option {
   background: #111a23;
 }
 
+body[data-dashboard-role] .cutting-fabric-line {
+  border-color: var(--app-line);
+  color: var(--app-text);
+  background: #141e28;
+}
+
+body[data-dashboard-role] .cutting-fabric-line .field > span {
+  color: #d4dfe6;
+}
+
+body[data-dashboard-role] .cutting-fabric-line [data-fabric-line-stock] {
+  color: var(--app-muted);
+}
+
 body[data-dashboard-role] .field small,
 body[data-dashboard-role] .form-section-grid .field small,
 body[data-dashboard-role] .order-modal-card .form-section-grid .field small,
