@@ -5188,7 +5188,7 @@ function cuttingSubmissionFormMarkup(data) {
       ${cuttingColorPlyMarkup(null, "", 0, "new-cutting")}
       <p class="cutting-calculated-total">إجمالي الراقات: <strong data-cutting-plys>0</strong> · إجمالي قطع القصة: <strong data-cutting-total>0</strong> قطعة</p>
       <div class="cutting-breakdown" data-cutting-breakdown></div>
-      <label class="field"><span>صورة الموديل (اختياري)</span>${imagePickerMarkup("modelImage", "إضافة صورة")}<small>يمكن رفع صيغ الصور الشائعة حتى 25 ميجابايت.</small></label>
+      <label class="field"><span>صورة الموديل (اختياري)</span>${imagePickerMarkup("modelImage", "إضافة صورة")}<small>يمكن رفع صيغ الصور الشائعة حتى 25 ميجابايت.</small><div data-repeat-model-image></div></label>
       <label class="field"><span>ملاحظات فنية للفرشة والقص</span><textarea name="technicalNotes" rows="3"></textarea></label>
       <div class="form-actions"><button type="submit" class="button button-primary">${data.isAdmin ? "حفظ القصة" : "إرسال القصة للإدارة"}</button></div>
     </form>`;
