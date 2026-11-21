@@ -1473,10 +1473,11 @@ function parseSizeData(value) {
 }
 
 function orderedSizeEntries(sizeData) {
-  return sizeData.sizes.length
-    ? [...sizeData.sizes]
-    : Object.entries(sizeData.multiplicities)
-      .flatMap(([size, occurrences]) => Array(Math.max(Number(occurrences) || 0, 0)).fill(size));
+  if (sizeData.sizes.length) return [...sizeData.sizes];
+  const multiplicities = Object.entries(sizeData.multiplicities);
+  return multiplicities.length
+    ? multiplicities.flatMap(([size, occurrences]) => Array(Math.max(Number(occurrences) || 0, 0)).fill(size))
+    : Object.keys(sizeData.counts);
 }
 
 function readSizePickerOrder(root) {
