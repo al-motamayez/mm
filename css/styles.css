@@ -981,6 +981,13 @@ body.login-page .page-footer {
 .client-history-card { height: 100%; }
 .financial-debit { color: #8b3028; font-weight: 700; }
 .financial-credit { color: #17613f; font-weight: 700; }
+.client-statement-table-wrap { width: 100%; }
+.client-statement-table th,
+.client-statement-table td { white-space: nowrap; text-align: center; vertical-align: middle; }
+.client-statement-table td:first-child { min-width: 54px; }
+.client-statement-table td:first-child .model-image-preview,
+.client-statement-table td:first-child .print-model-thumbnail { width: 44px; height: 44px; object-fit: cover; border-radius: 8px; }
+.client-statement-table td:last-child .row-action { min-width: 72px; }
 .client-balance-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(125px, 1fr)); gap: 10px; margin: 17px 0 12px; }
 .client-balance-grid div { min-width: 0; padding: 10px; border-radius: 9px; background: #f5f8f5; }
 .client-balance-grid span, .client-balance-grid strong { display: block; }

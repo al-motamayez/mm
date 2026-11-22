@@ -6153,19 +6153,12 @@ begin
   end if;
   if current_order.archived_at is not null
      or current_order.workflow_archived_at is not null
-     or (
-       current_order.status = 'تم التسليم'
-       and current_order.delivered_pieces >= current_order.total_pieces
-     ) then
+     or current_order.status in ('تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق') then
     raise exception 'Closed or archived factory orders cannot receive new deliveries.';
   end if;
   if current_order.total_pieces <= 0 then
     raise exception 'Record the actual cut quantity before recording a delivery.';
   end if;
-  if current_order.delivered_pieces + requested_quantity > current_order.total_pieces then
-    raise exception 'The delivery quantity cannot exceed the remaining cut quantity.';
-  end if;
-
   insert into public.factory_deliveries (
     order_id, customer_id, quantity, price_per_piece, recipient_name, expected_delivery_date
   )
@@ -6235,13 +6228,9 @@ begin
   end if;
   if current_order.archived_at is not null
      or current_order.workflow_archived_at is not null
-     or (
-       current_order.status in ('تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق')
-       and current_order.delivered_pieces >= current_order.total_pieces
-     )
-     or current_order.total_pieces <= 0
-     or current_order.delivered_pieces + requested_quantity > current_order.total_pieces then
-    raise exception 'The order is closed, archived, uncut, or the delivery exceeds its remaining quantity.';
+     or current_order.status in ('تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق')
+     or current_order.total_pieces <= 0 then
+    raise exception 'The order is closed, archived, or uncut.';
   end if;
   if coalesce((
     select sum(delivery.quantity)
@@ -6261,37 +6250,6 @@ begin
   ) then
     raise exception 'An earlier delivery has no verified color/size allocation; review it before recording a detailed delivery.';
   end if;
-
-  for requested_cell in
-    select upper(color_entry.value ->> 'hex') as color_hex,
-           case size_entry.key when 'SX' then 'XS' else size_entry.key end as size_name,
-           sum((size_entry.value #>> '{}')::integer)::integer as quantity
-    from jsonb_array_elements(requested_color_size_data) as color_entry(value)
-    cross join lateral jsonb_each(color_entry.value -> 'sizes') as size_entry(key, value)
-    group by upper(color_entry.value ->> 'hex'),
-             case size_entry.key when 'SX' then 'XS' else size_entry.key end
-  loop
-    select original_cell.original_quantity
-      into original_cell_quantity
-    from public.factory_order_original_delivery_cells(requested_order_id) as original_cell
-    where original_cell.color_hex = requested_cell.color_hex
-      and original_cell.size_name = requested_cell.size_name;
-    if not found then
-      raise exception 'The allocation contains a color/size not present in the cut order.';
-    end if;
-
-    select coalesce(sum((size_entry.value #>> '{}')::numeric), 0)
-      into previously_delivered_quantity
-    from public.factory_deliveries as delivery
-    cross join lateral jsonb_array_elements(delivery.color_size_data) as color_entry(value)
-    cross join lateral jsonb_each(color_entry.value -> 'sizes') as size_entry(key, value)
-    where delivery.order_id = requested_order_id
-      and upper(color_entry.value ->> 'hex') = requested_cell.color_hex
-      and case size_entry.key when 'SX' then 'XS' else size_entry.key end = requested_cell.size_name;
-    if requested_cell.quantity > original_cell_quantity - previously_delivered_quantity then
-      raise exception 'The allocation exceeds the remaining cut quantity for a color/size.';
-    end if;
-  end loop;
 
   perform 1 from public.factory_clients where id = current_order.customer_id for update;
   insert into public.factory_deliveries (
@@ -6332,7 +6290,6 @@ declare
   current_order public.orders%rowtype;
   matched_customer_id uuid;
   final_delivered_quantity integer;
-  remaining_quantity integer;
   has_prior_deliveries boolean;
 begin
   if not public.is_active_factory_admin() then
@@ -6369,21 +6326,16 @@ begin
      or current_order.workflow_archived_at is not null then
     raise exception 'Closed or archived factory orders cannot be completed again.';
   end if;
-  if current_order.status in ('تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق')
-     and current_order.delivered_pieces >= current_order.total_pieces then
+  if current_order.status in ('تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق') then
     raise exception 'Closed factory orders cannot be completed again.';
   end if;
   if current_order.total_pieces <= 0 then
     raise exception 'Record the actual cut quantity before completing the handover.';
   end if;
-  remaining_quantity := greatest(current_order.total_pieces - current_order.delivered_pieces, 0);
   select current_order.delivered_pieces > 0 or exists (
     select 1 from public.factory_deliveries
     where order_id = current_order.id
   ) into has_prior_deliveries;
-  if requested_final_batch_qty > remaining_quantity then
-    raise exception 'The final delivery quantity cannot exceed the remaining order quantity.';
-  end if;
   if not has_prior_deliveries
      and requested_final_batch_qty < 1 then
     raise exception 'The first handover must record at least one delivered piece.';
@@ -6409,7 +6361,6 @@ begin
         when original_total_pieces = 0 then current_order.total_pieces
         else original_total_pieces
       end,
-      total_pieces = final_delivered_quantity,
       delivered_pieces = final_delivered_quantity,
       status = 'تم التسليم'
   where id = current_order.id;

@@ -1136,10 +1136,30 @@ function factoryOrderHasReachedDelivery(order) {
 }
 
 function factoryOrderLedgerAmounts(order) {
-  const orderBalance = addMoney(order.totalAmount || 0, order.expectedAmount || 0);
-  return factoryOrderIsReceivable(order)
-    ? { deliveredAmount: orderBalance, pendingAmount: 0 }
-    : { deliveredAmount: 0, pendingAmount: orderBalance };
+  const deliveredPieces = Math.max(0, Number(order.deliveredPieces || 0));
+  const cutPieces = Math.max(0, Number(order.quantity || 0));
+  const pricePerPiece = Math.max(0, Number(order.pricePerPiece || 0));
+  const operationalExpenses = deliveredPieces > 0
+    ? Math.max(0, Number(order.operationalExpenses || 0))
+    : 0;
+  const deliveredAmount = addMoney(
+    multiplyMoney(deliveredPieces, pricePerPiece),
+    operationalExpenses
+  );
+  if (factoryOrderIsReceivable(order)) {
+    return { deliveredAmount, pendingAmount: 0 };
+  }
+  const remainingPieces = Math.max(cutPieces - deliveredPieces, 0);
+  const pendingExpenses = deliveredPieces === 0
+    ? Math.max(0, Number(order.operationalExpenses || 0))
+    : 0;
+  return {
+    deliveredAmount: 0,
+    pendingAmount: addMoney(
+      multiplyMoney(remainingPieces, pricePerPiece),
+      pendingExpenses
+    )
+  };
 }
 
 function effectiveFactoryOrderStatus(order) {
@@ -3098,10 +3118,49 @@ function clientOrderLedgerPanel(summary) {
   const rows = summary.orders.map((order) => {
     const delivered = factoryOrderIsReceivable(order);
     const outstanding = addMoney(order.deliveredBalance, order.pendingBalance);
-    return `<tr><td>${escapeHtml(order.name || order.modelNumber || "طلب بدون اسم")}</td><td>${escapeHtml(order.factoryModelCode || "—")}</td><td>${escapeHtml(order.displayStatus || order.status || "—")}</td><td>${delivered ? "مستحق حسب حالة الطلب" : "بضاعة تحت التسليم"}</td><td>${money(addMoney(order.ledgerDeliveredAmount, order.ledgerPendingAmount))}</td><td>${money(order.ledgerPaidAmount)}</td><td>${money(outstanding)}</td></tr>`;
+    const closed = LOCKED_FACTORY_ORDER_STATUSES.includes(order.status);
+    const agreedPieces = Number(order.originalQuantity || 0);
+    const cutPieces = Number(order.quantity || 0);
+    const deliveredPieces = Number(order.deliveredPieces || 0);
+    const deliveredValue = addMoney(
+      multiplyMoney(deliveredPieces, order.pricePerPiece),
+      deliveredPieces > 0 ? Number(order.operationalExpenses || 0) : 0
+    );
+    const remainingValue = closed
+      ? 0
+      : addMoney(
+        multiplyMoney(Math.max(cutPieces - deliveredPieces, 0), order.pricePerPiece),
+        deliveredPieces === 0 ? Number(order.operationalExpenses || 0) : 0
+      );
+    const totalValue = addMoney(deliveredValue, remainingValue);
+    const classification = closed
+      ? "مغلق - مستحق فعلي"
+      : deliveredPieces > 0
+        ? "مستحق فعلي مسلّم"
+        : delivered
+          ? "جاهز للتسليم - لا تسليم فعلي"
+          : "بضاعة تحت التسليم";
+    const financialCredit = closed || deliveredPieces > 0;
+    const modelIndex = dashboardData.models.findIndex((item) => item.id === order.id);
+    const image = modelImageMarkup(order.modelImageUrl, `صورة ${order.name || "الموديل"}`, "print-model-thumbnail");
+    return `<tr>
+      <td>${image || "—"}</td>
+      <td><strong>${escapeHtml(order.factoryModelCode || order.clientModelCode || "—")}</strong></td>
+      <td>${escapeHtml(order.name || "طلب بدون اسم")}</td>
+      <td>${statusTag(order.displayStatus || order.status || "—")}</td>
+      <td><span class="${financialCredit ? "financial-credit" : "financial-debit"}">${escapeHtml(classification)}</span></td>
+      <td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(agreedPieces)} قطعة</td>
+      <td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(cutPieces)} قطعة</td>
+      <td>${new Intl.NumberFormat("ar-EG-u-nu-latn").format(deliveredPieces)} قطعة</td>
+      <td>${money(order.pricePerPiece)}</td>
+      <td>${money(deliveredValue)}</td>
+      <td>${money(remainingValue)}</td>
+      <td><strong>${money(totalValue)}</strong></td>
+      <td><button class="row-action" type="button" data-edit-kind="models" data-index="${modelIndex}">تعديل</button></td>
+    </tr>`;
   }).join("");
   return panel("ملخص رصيد كل طلب حسب حالته", rows
-    ? table(["الموديل","كود النظام","حالة الطلب","تصنيف الرصيد","قيمة الطلب","المدفوع المخصص","المتبقي"], rows)
+    ? table(["صورة الموديل","كود الموديل","اسم الموديل","حالة الطلب","تصنيف الرصيد","العدد المتفق عليه","عدد القص","العدد المسلّم فعلياً","سعر القطعة","قيمة ما تم تسليمه فعلياً","قيمة المتبقي / حق الموجود","الإجمالي","الإجراء"], rows, "client-statement-table")
     : '<div class="empty-state">لا توجد طلبات في الفترة المالية الحالية.</div>',
   "تُصنّف الطلبات بحالة «جاهز للتسليم» أو «تم التسليم» كمستحقات؛ وتظهر جميع الحالات الأخرى حصرياً ضمن بضاعة تحت التسليم.");
 }
@@ -3114,6 +3173,10 @@ function moneyCents(value) {
 
 function roundMoney(value) {
   return moneyCents(value) / 100;
+}
+
+function multiplyMoney(quantity, unitPrice) {
+  return roundMoney(Number(quantity || 0) * Number(unitPrice || 0));
 }
 
 function sumMoney(values) {
@@ -13003,7 +13066,7 @@ function bindActions(session) {
     deliveryModeFields.forEach((field) => { field.hidden = true; });
     deliveryAllocation.hidden = true;
     deliveryForm.elements.quantity.min = hasEarlierDeliveries ? "0" : "1";
-    deliveryForm.elements.quantity.max = hasEarlierDeliveries ? String(order.remainingPieces) : String(order.quantity);
+    deliveryForm.elements.quantity.max = "";
     deliveryForm.elements.quantity.readOnly = false;
     deliveryForm.elements.quantity.value = String(hasEarlierDeliveries ? order.remainingPieces : order.quantity);
     deliveryModalTitle.textContent = "تسوية وإغلاق الطلب";
@@ -13071,8 +13134,7 @@ function bindActions(session) {
     }
     if (finalize) {
       const hasEarlierDeliveries = Boolean(order.deliveryHistory?.length || order.deliveredPieces > 0);
-      if (quantity > order.remainingPieces
-        || (!hasEarlierDeliveries && quantity < 1)
+      if ((!hasEarlierDeliveries && quantity < 1)
         || order.deliveredPieces + quantity < 1) {
         window.factoryUI.toast("أدخل العدد الفعلي للتسليم النهائي ضمن الكمية المتبقية، ويجب أن يكون إجمالي المسلّم قطعة واحدة على الأقل.", "error");
         return;
