@@ -399,7 +399,7 @@ async function readDashboardData(session) {
     : Promise.resolve({ data: [], error: null });
   const deliveriesPromise = ["admin", "client"].includes(session.role)
     ? supabaseClient.from("factory_deliveries")
-      .select("id, order_id, customer_id, quantity, price_per_piece, amount, recipient_name, expected_delivery_date, delivered_at, legacy_import, color_size_data")
+      .select("id, order_id, customer_id, quantity, price_per_piece, amount, recipient_name, expected_delivery_date, delivered_at, legacy_import, color_size_data, component_type, tshirt_quantity, pants_quantity")
       .order("delivered_at", { ascending: false })
     : Promise.resolve({ data: [], error: null });
   const workerOrderDeliveriesPromise = session.role === "admin" || session.canSubmitProduction
@@ -624,14 +624,14 @@ async function readDashboardData(session) {
   } else if (["cutting", "sewing"].includes(session.role)) {
     let ordersQuery = supabaseClient
       .from("orders")
-      .select("id, customer_id, model_name, model_number, factory_model_code, client_model_code, sender_name, colors, color_names, color_size_distribution, production_type, work_stages, sizes, original_total_pieces, total_pieces, model_image_url, model_image_url_2, priority, archived_at, workflow_archived_at, status, created_at")
+      .select("id, customer_id, model_name, model_number, factory_model_code, client_model_code, model_type, cutting_mode, set_pricing_mode, tshirt_price, pants_price, component_quantities, delivered_components, sender_name, colors, color_names, color_size_distribution, production_type, work_stages, sizes, original_total_pieces, total_pieces, model_image_url, model_image_url_2, priority, archived_at, workflow_archived_at, status, created_at")
       .order("created_at", { ascending: false });
     ({ data: orders, error: ordersError } = await ordersQuery);
     if (ordersError?.code === "42703") {
       data.orderReadWarning = "تم تحميل بيانات الطلبات الأساسية فقط؛ سجل الموديلات والقصات والتكرار يتطلب تشغيل أحدث نسخة من supabase/schema.sql.";
       ordersQuery = supabaseClient
         .from("orders")
-        .select("id, customer_id, model_name, model_number, sender_name, colors, color_names, sizes, original_total_pieces, total_pieces, model_image_url, priority, status, created_at")
+        .select("id, customer_id, model_name, model_number, factory_model_code, client_model_code, model_type, cutting_mode, set_pricing_mode, tshirt_price, pants_price, component_quantities, delivered_components, sender_name, colors, color_names, sizes, original_total_pieces, total_pieces, model_image_url, priority, status, created_at")
         .order("created_at", { ascending: false });
       ({ data: orders, error: ordersError } = await ordersQuery);
     }
@@ -755,6 +755,17 @@ async function readDashboardData(session) {
       factoryModelCatalogId: order.factory_model_catalog_id || "",
       factoryModelCode: order.factory_model_code || "",
       clientModelCode: order.client_model_code || "",
+      modelType: order.model_type || "single_tshirt",
+      cuttingMode: order.cutting_mode || "shared",
+      setPricingMode: order.set_pricing_mode || "set",
+      tshirtPrice: Number(order.tshirt_price || 0),
+      pantsPrice: Number(order.pants_price || 0),
+      componentQuantities: order.component_quantities && typeof order.component_quantities === "object"
+        ? order.component_quantities
+        : { tshirt: 0, pants: 0 },
+      deliveredComponents: order.delivered_components && typeof order.delivered_components === "object"
+        ? order.delivered_components
+        : { tshirt: 0, pants: 0 },
       createdAt: order.created_at || "",
       name: order.model_name || order.model_number || "موديل بدون اسم",
       modelNumber: order.model_number || "",
@@ -4847,6 +4858,8 @@ function adminView(data, accounts) {
           <div class="field model-name-field"><label for="model-name">اسم الموديل</label><input id="model-name" name="name"></div>
           <div class="field"><label for="model-system-code">كود الموديل بالنظام</label><input id="model-system-code" name="factoryModelCode" readonly placeholder="يُنشأ تلقائياً بعد الحفظ"></div>
           <div class="field"><label for="model-client-code">كود/رقم الموديل للعميل</label><input id="model-client-code" name="clientModelCode" maxlength="120" autocomplete="off"></div>
+          <div class="field"><label for="model-type">نوع الموديل</label><select id="model-type" name="modelType"><option value="single_tshirt">تيشيرت فقط</option><option value="single_pants">بنطلون فقط</option><option value="set">طقم / ترنج (تيشيرت + بنطلون)</option></select></div>
+          <div class="field" data-set-cutting-mode-field hidden><label for="model-cutting-mode">آلية قص طقم الترنج</label><select id="model-cutting-mode" name="cuttingMode"><option value="shared">قص قصة واحدة وخامة واحدة للترنج</option><option value="separate">قصتين وخامتين منفصلتين: تيشيرت وبنطلون لنفس الموديل</option></select><small>يظهر ارتباط جزئي الترنج تحت كود الموديل نفسه.</small></div>
           <div class="field model-image-field"><span>صورة الموديل (اختياري - صورتان كحد أقصى)</span><small>يمكن رفع أو تبديل كل صورة أو حذفها. الحد الأقصى لكل صورة 25 ميجابايت.</small><div class="model-image-slots" data-model-image-slots>${[1, 2].map((slot) => `<section class="model-image-slot" data-model-image-slot="${slot}"><strong>الصورة ${slot}</strong><input type="file" name="modelImage${slot}" accept="image/*" hidden><div data-model-image-preview="${slot}"></div><div class="form-actions"><button class="row-action" type="button" data-model-image-replace="${slot}"><span aria-hidden="true">📷</span> ${slot === 1 ? "إضافة / تبديل الصورة" : "إضافة الصورة الثانية"}</button><button class="row-action order-delete-action" type="button" data-model-image-delete="${slot}" hidden>حذف الصورة</button></div></section>`).join("")}</div></div>
         </div></section>
         <section class="form-section" data-model-edit-section="production" hidden><h3>مراحل التشغيل <span>اختياري</span></h3><div class="form-section-grid">
@@ -4865,8 +4878,11 @@ function adminView(data, accounts) {
         <section class="form-section cutting-pricing-preview-section" data-model-edit-section="counts" hidden><h3>بيانات القص الفعلية</h3><div data-cutting-pricing-details class="cutting-pricing-details"><p class="muted">تظهر تفاصيل القص والخامة هنا عند تسعير موديل مسجل.</p></div></section>
         <section class="form-section" data-model-edit-section="finance" hidden><h3>التفاصيل المالية <span>اختياري</span></h3><div class="form-section-grid">
           <div class="field model-quantity-field"><label for="model-quantity">إجمالي عدد القطع</label><input id="model-quantity" name="quantity" type="number" min="0" step="1" placeholder="أدخل العدد أو اتركه حتى انتهاء القص"><small data-quantity-lock-note hidden>تم تثبيت الأعداد بعد بدء مراحل الإنتاج ولا يمكن تعديلها.</small><small data-quantity-entry-note>يمكن إدخال العدد الآن أو تأجيله حتى تسجيل إجمالي القص.</small></div>
+          <div class="field" data-set-component-quantities hidden><label>أعداد قص أجزاء الترنج</label><div class="form-section-grid"><label class="field"><span>عدد التيشيرتات المقصوصة</span><input name="cutTshirtQuantity" type="number" min="0" step="1" value="0"></label><label class="field"><span>عدد البنطلونات المقصوصة</span><input name="cutPantsQuantity" type="number" min="0" step="1" value="0"></label></div><small>يمكن اختلاف العددين مؤقتاً؛ يستخدمان للتسليم والسعر المستقل بدقة.</small></div>
           <div class="field" data-original-quantity-field hidden><label for="model-original-quantity">العدد المطلوب الأصلي</label><input id="model-original-quantity" name="originalQuantity" type="number" min="0" step="1"></div>
           <div class="field"><label for="model-pricing-mode">طريقة التسعير</label><select id="model-pricing-mode" name="pricingMode"><option value="total">سعر إجمالي للقطعة</option><option value="stages">تسعير كل قسم للقطعة</option></select></div>
+          <div class="field" data-set-pricing-field hidden><label for="model-set-pricing-mode">طريقة تسعير الترنج</label><select id="model-set-pricing-mode" name="setPricingMode"><option value="set">سعر موحد للترنج الكامل</option><option value="components">سعر التيشيرت وسعر البنطلون منفصلين</option></select></div>
+          <div class="field" data-set-component-prices hidden><label>أسعار قطع الترنج</label><div class="form-section-grid"><label class="field"><span>سعر التيشيرت</span><input name="tshirtPrice" type="number" min="0" step="0.01" value="0"></label><label class="field"><span>سعر البنطلون</span><input name="pantsPrice" type="number" min="0" step="0.01" value="0"></label><label class="field"><span>سعر الترنج الكامل المحسوب</span><output name="setPricePreview" class="calculated-value">0 ج.م</output></label></div></div>
           <div class="field stage-prices-field" data-stage-prices-field hidden><label>سعر القطعة لكل قسم (ج.م)</label><div class="stage-prices-list" data-stage-prices-list></div><small>سعر القطعة الإجمالي يساوي مجموع أسعار الأقسام المختارة.</small></div>
           <input type="hidden" name="stagePrices" value="{}">
           <div class="field"><label for="model-price">سعر القطعة الإجمالي (ج.م)</label><input id="model-price" name="pricePerPiece" type="number" min="0" max="9999999999.99" step="0.01" value="0"><small id="model-price-history-note" hidden>تعديل السعر يعيد احتساب قيمة التسليمات المسجلة لهذا الموديل ورصيد العميل.</small></div>
@@ -4878,7 +4894,7 @@ function adminView(data, accounts) {
         </div></section>
         <div class="form-actions"><button class="button button-primary" type="submit">حفظ الطلبية</button><button class="row-action" type="button" data-cancel-edit hidden>إلغاء التعديل</button><button class="row-action order-delete-action" type="button" data-delete-order-from-editor hidden>حذف الموديل</button><button class="row-action" type="button" data-close-order>إغلاق</button></div>
       </form><div data-order-cutting-editor hidden></div></section></div>
-      <div class="modal-backdrop" id="delivery-modal" hidden><section class="modal-card delivery-modal-card" role="dialog" aria-modal="true" aria-labelledby="delivery-modal-title"><button class="modal-close" type="button" data-close-delivery aria-label="إغلاق">×</button><h2 id="delivery-modal-title">تسجيل تسليم جديد</h2><p id="delivery-modal-description">أدخل كمية هذه الدفعة واسم مستلمها؛ ستُضاف إلى إجمالي ما تم تسليمه حتى الآن.</p><form id="delivery-form" class="modal-form"><input type="hidden" name="orderId"><input type="hidden" name="finalize" value=""><label for="delivery-order-select" data-delivery-order-field hidden>الطلبية الجاهزة</label><select id="delivery-order-select" name="orderSelector" data-delivery-order-field hidden required></select><label for="delivery-mode" data-delivery-mode-field hidden>طريقة إدخال التسليم</label><select id="delivery-mode" name="deliveryMode" data-delivery-mode-field hidden><option value="total">إدخال الإجمالي فقط</option><option value="detailed">حسب اللون والمقاس</option></select><div id="delivery-allocation" data-delivery-allocation hidden></div><label for="delivery-quantity" id="delivery-quantity-label">كمية التسليم</label><input id="delivery-quantity" name="quantity" type="number" min="1" step="1" required><label for="delivery-recipient">اسم المستلم</label><input id="delivery-recipient" name="recipientName" required><div class="form-actions"><button class="button button-primary" type="submit">تسجيل التسليم</button><button class="row-action" type="button" data-close-delivery>إلغاء</button></div></form></section></div>
+      <div class="modal-backdrop" id="delivery-modal" hidden><section class="modal-card delivery-modal-card" role="dialog" aria-modal="true" aria-labelledby="delivery-modal-title"><button class="modal-close" type="button" data-close-delivery aria-label="إغلاق">×</button><h2 id="delivery-modal-title">تسجيل تسليم جديد</h2><p id="delivery-modal-description">أدخل كمية هذه الدفعة واسم مستلمها؛ ستُضاف إلى إجمالي ما تم تسليمه حتى الآن.</p><form id="delivery-form" class="modal-form"><input type="hidden" name="orderId"><input type="hidden" name="finalize" value=""><label for="delivery-order-select" data-delivery-order-field hidden>الطلبية الجاهزة</label><select id="delivery-order-select" name="orderSelector" data-delivery-order-field hidden required></select><div data-set-delivery-fields hidden><label for="delivery-component-type">نوع التسليم للترنج</label><select id="delivery-component-type" name="componentType"><option value="set">ترنج كامل (تيشيرت + بنطلون)</option><option value="tshirt">تيشيرت فقط</option><option value="pants">بنطلون فقط</option></select><div class="form-section-grid"><label class="field" data-tshirt-delivery-field><span>عدد التيشيرتات المسلّمة</span><input name="tshirtQuantity" type="number" min="0" step="1" value="0"></label><label class="field" data-pants-delivery-field><span>عدد البنطلونات المسلّمة</span><input name="pantsQuantity" type="number" min="0" step="1" value="0"></label></div></div><label for="delivery-mode" data-delivery-mode-field hidden>طريقة إدخال التسليم</label><select id="delivery-mode" name="deliveryMode" data-delivery-mode-field hidden><option value="total">إدخال الإجمالي فقط</option><option value="detailed">حسب اللون والمقاس</option></select><div id="delivery-allocation" data-delivery-allocation hidden></div><label for="delivery-quantity" id="delivery-quantity-label">كمية التسليم</label><input id="delivery-quantity" name="quantity" type="number" min="1" step="1" required><label for="delivery-recipient">اسم المستلم</label><input id="delivery-recipient" name="recipientName" required><div class="form-actions"><button class="button button-primary" type="submit">تسجيل التسليم</button><button class="row-action" type="button" data-close-delivery>إلغاء</button></div></form></section></div>
     </section>
     ${factoryRegistersView(data, true, "cutting", false, true, true)}
     ${clientModelRequestsAdminView(data)}
@@ -5344,6 +5360,8 @@ function cuttingSubmissionFormMarkup(data) {
         <label class="field model-name-field"><span>اسم الموديل</span><input name="modelName" autocomplete="off"></label>
         <p class="workforce-rate-preview wide" data-cutting-model-code>كود الموديل بالنظام: يُنشأ عند اعتماد الموديل.</p>
         <label class="field model-number-field"><span>كود/رقم الموديل للعميل</span><input name="modelNumber" autocomplete="off"></label>
+        <label class="field"><span>جزء موديل الترنج</span><select name="setComponent"><option value="whole">قصّة مشتركة / الترنج كامل معاً</option><option value="tshirt">تيشيرت منفصل</option><option value="pants">بنطلون منفصل</option></select><small>تُربط القصتين بعلامة الجزء وبنفس كود الموديل عند الاعتماد.</small></label>
+        <label class="field"><input type="checkbox" name="separateSetGroup"><span>ربط قصة البنطلون أو التيشيرت تحت مجموعة ترنج واحدة</span></label>
         <label class="field"><span>مصدر القماش</span><select name="fabricType" data-cutting-fabric-type required>${cuttingFabricTypeOptions(data.fabrics, "")}</select><small>اختر خامة من المخزن أو خامة خارجية غير مسجلة.</small></label>
         <div class="field wide" data-cutting-fabric-lines></div>
         <button class="row-action wide" type="button" data-add-cutting-fabric-line>＋ إضافة لون / توب</button>
@@ -9149,6 +9167,21 @@ async function persistFactoryOrder(order, changes = {}) {
     throw new Error("دالة حفظ الطلبات المحدّثة غير موجودة. شغّل supabase/schema.sql كاملًا في SQL Editor.");
   }
   if (error) throw error;
+  if (data) {
+    const { error: setMetadataError } = await supabaseClient
+      .from("orders")
+      .update({
+        model_type: updated.modelType || "single_tshirt",
+        cutting_mode: updated.cuttingMode || "shared",
+        set_pricing_mode: updated.setPricingMode || "set",
+        tshirt_price: Number(updated.tshirtPrice || 0),
+        pants_price: Number(updated.pantsPrice || 0),
+        component_quantities: updated.componentQuantities || { tshirt: 0, pants: 0 },
+        delivered_components: updated.deliveredComponents || { tshirt: 0, pants: 0 }
+      })
+      .eq("id", data);
+    if (setMetadataError) throw setMetadataError;
+  }
   return data;
 }
 
@@ -10125,6 +10158,8 @@ function bindCuttingActions(session) {
           requested_source_order_id: sourceModel?.id || null,
           requested_cutting_request_id: submitForm.elements.cuttingRequestId.value || null,
           requested_catalog_model_id: catalogModel?.id || null,
+          requested_set_component: submitForm.elements.setComponent?.value || "whole",
+          requested_separate_set_group: submitForm.elements.separateSetGroup?.checked === true,
           requested_fabric_lines: completeCuttingData.fabricLines.map((line) => ({
             fabric_id: line.fabricId,
             name: line.name,
@@ -12552,6 +12587,24 @@ function bindActions(session) {
   const removeWorkflowStatusOptions = () => {
     orderForm.elements.status.querySelectorAll("[data-workflow-status-option]").forEach((option) => option.remove());
   };
+  const syncSetModelFields = () => {
+    const isSet = orderForm.elements.modelType.value === "set";
+    orderForm.querySelector("[data-set-cutting-mode-field]").hidden = !isSet;
+    orderForm.querySelector("[data-set-component-quantities]").hidden = !isSet;
+    orderForm.querySelector("[data-set-pricing-field]").hidden = !isSet;
+    const componentPricing = isSet && orderForm.elements.setPricingMode.value === "components";
+    orderForm.querySelector("[data-set-component-prices]").hidden = !componentPricing;
+    if (componentPricing) {
+      const tshirtPrice = Number(orderForm.elements.tshirtPrice.value || 0);
+      const pantsPrice = Number(orderForm.elements.pantsPrice.value || 0);
+      orderForm.elements.setPricePreview.value = money(tshirtPrice + pantsPrice);
+    }
+  };
+  orderForm.elements.modelType.addEventListener("change", syncSetModelFields);
+  orderForm.elements.setPricingMode.addEventListener("change", syncSetModelFields);
+  ["tshirtPrice", "pantsPrice"].forEach((name) => {
+    orderForm.elements[name].addEventListener("input", syncSetModelFields);
+  });
   const closeOrderModal = () => {
     orderModal.hidden = true;
     setOrderQuantityEditingLocked(false);
@@ -12605,9 +12658,12 @@ function bindActions(session) {
     orderForm.elements.status.disabled = closedOrder || workflowManagedOrder;
     orderForm.querySelector("[data-workflow-status-hint]").hidden = !workflowManagedOrder;
     orderForm.elements.operationalExpenses.readOnly = true;
-    for (const field of ["customerId", "name", "clientModelCode", "pricePerPiece", "paidAmount", "operationalExpenses", "status", "priority", "productionType", "pricingMode", "expectedDeliveryDate"]) {
+    for (const field of ["customerId", "name", "clientModelCode", "modelType", "cuttingMode", "setPricingMode", "tshirtPrice", "pantsPrice", "cutTshirtQuantity", "cutPantsQuantity", "pricePerPiece", "paidAmount", "operationalExpenses", "status", "priority", "productionType", "pricingMode", "expectedDeliveryDate"]) {
       orderForm.elements[field].value = currentOrder[field] ?? "";
     }
+    orderForm.elements.cutTshirtQuantity.value = String(currentOrder.componentQuantities?.tshirt || 0);
+    orderForm.elements.cutPantsQuantity.value = String(currentOrder.componentQuantities?.pants || 0);
+    syncSetModelFields();
     if (currentOrder.productionType === "full_cutting"
         && currentOrder.workStages.length === 1
         && currentOrder.workStages[0] === "cutting") {
@@ -12971,6 +13027,34 @@ function bindActions(session) {
   const deliveryMode = deliveryForm.elements.deliveryMode;
   const deliveryModeFields = deliveryForm.querySelectorAll("[data-delivery-mode-field]");
   const deliveryAllocation = deliveryForm.querySelector("[data-delivery-allocation]");
+  const setDeliveryFields = deliveryForm.querySelector("[data-set-delivery-fields]");
+  const tshirtDeliveryField = deliveryForm.querySelector("[data-tshirt-delivery-field]");
+  const pantsDeliveryField = deliveryForm.querySelector("[data-pants-delivery-field]");
+  const syncSetDeliveryFields = (order) => {
+    const isSet = order?.modelType === "set";
+    setDeliveryFields.hidden = !isSet;
+    if (!isSet) return;
+    const componentType = deliveryForm.elements.componentType.value;
+    tshirtDeliveryField.hidden = componentType === "pants";
+    pantsDeliveryField.hidden = componentType === "tshirt";
+    deliveryForm.elements.quantity.readOnly = true;
+  };
+  deliveryForm.elements.componentType?.addEventListener("change", () => {
+    const order = dashboardData.models.find((item) => item.id === deliveryForm.elements.orderId.value);
+    syncSetDeliveryFields(order);
+  });
+  ["tshirtQuantity", "pantsQuantity"].forEach((name) => {
+    deliveryForm.elements[name]?.addEventListener("input", () => {
+      const tshirt = Number(deliveryForm.elements.tshirtQuantity.value || 0);
+      const pants = Number(deliveryForm.elements.pantsQuantity.value || 0);
+      const componentType = deliveryForm.elements.componentType.value;
+      deliveryForm.elements.quantity.value = String(componentType === "set"
+        ? Math.min(tshirt, pants)
+        : componentType === "tshirt"
+          ? tshirt
+          : pants);
+    });
+  });
   let deliverySubmissionPending = false;
   const updateDeliveryAllocationTotal = () => {
     const inputs = [...deliveryAllocation.querySelectorAll("[data-admin-delivery-count]")];
@@ -13024,6 +13108,7 @@ function bindActions(session) {
     deliveryForm.elements.quantity.min = "1";
     deliveryForm.elements.quantity.max = String(Math.max(0, Number(order.remainingPieces ?? order.quantity)));
     deliveryForm.elements.quantity.value = "";
+    syncSetDeliveryFields(order);
     configureDeliveryMode(order);
   };
   deliveryMode.addEventListener("change", () => {
@@ -13061,6 +13146,7 @@ function bindActions(session) {
     const hasEarlierDeliveries = Boolean(order.deliveryHistory?.length || order.deliveredPieces > 0);
     deliveryForm.elements.orderId.value = order.id;
     deliveryForm.elements.finalize.value = "true";
+    syncSetDeliveryFields(order);
     deliveryOrderFields.forEach((field) => { field.hidden = true; });
     deliveryOrderSelect.required = false;
     deliveryModeFields.forEach((field) => { field.hidden = true; });
@@ -13199,7 +13285,16 @@ function bindActions(session) {
         return;
       }
 
-      const { error } = finalize
+      const isSetDelivery = currentOrder.modelType === "set";
+      const { error } = isSetDelivery
+        ? await supabaseClient.rpc("record_factory_component_delivery", {
+          requested_order_id: order.id,
+          requested_component_type: deliveryForm.elements.componentType.value,
+          requested_tshirt_quantity: Number(deliveryForm.elements.tshirtQuantity.value || 0),
+          requested_pants_quantity: Number(deliveryForm.elements.pantsQuantity.value || 0),
+          requested_recipient_name: recipientName
+        })
+        : finalize
         ? await supabaseClient.rpc("complete_factory_handover", {
           requested_order_id: order.id,
           requested_final_batch_qty: quantity,
@@ -13384,7 +13479,13 @@ function bindActions(session) {
       || canonicalFactoryOrderStatus(requestedStatus) === existingOrder.status)
       ? currentStoredStatus || requestedStatus
       : requestedStatus;
-    const pricePerPiece = Number(formData.get("pricePerPiece"));
+    const modelType = String(formData.get("modelType") || "single_tshirt");
+    const setPricingMode = String(formData.get("setPricingMode") || "set");
+    const tshirtPrice = Number(formData.get("tshirtPrice") || 0);
+    const pantsPrice = Number(formData.get("pantsPrice") || 0);
+    const pricePerPiece = modelType === "set" && setPricingMode === "components"
+      ? tshirtPrice + pantsPrice
+      : Number(formData.get("pricePerPiece"));
     const paidAmount = Number(formData.get("paidAmount"));
     const operationalExpenses = Number(formData.get("operationalExpenses") || 0);
     const modelName = String(formData.get("name")).trim();
@@ -13470,6 +13571,15 @@ function bindActions(session) {
         name: modelName,
         modelNumber: existingOrder?.modelNumber || "",
         clientModelCode: String(formData.get("clientModelCode") || "").trim(),
+        modelType: String(formData.get("modelType") || "single_tshirt"),
+        cuttingMode: String(formData.get("cuttingMode") || "shared"),
+        setPricingMode: String(formData.get("setPricingMode") || "set"),
+        tshirtPrice: Number(formData.get("tshirtPrice") || 0),
+        pantsPrice: Number(formData.get("pantsPrice") || 0),
+        componentQuantities: {
+          tshirt: Number(formData.get("cutTshirtQuantity") || 0),
+          pants: Number(formData.get("cutPantsQuantity") || 0)
+        },
         quantity,
         originalQuantity: requestedOriginalQuantity,
         deliveredPieces,

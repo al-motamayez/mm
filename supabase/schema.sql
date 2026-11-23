@@ -816,6 +816,16 @@ alter table public.orders
   add column if not exists factory_model_catalog_id uuid references public.factory_model_catalog (id) on delete set null,
   add column if not exists parent_order_id uuid references public.orders (id) on delete set null,
   add column if not exists client_model_code text not null default '',
+  add column if not exists model_type text not null default 'single_tshirt'
+    check (model_type in ('single_tshirt', 'single_pants', 'set')),
+  add column if not exists cutting_mode text not null default 'shared'
+    check (cutting_mode in ('shared', 'separate')),
+  add column if not exists set_pricing_mode text not null default 'set'
+    check (set_pricing_mode in ('set', 'components')),
+  add column if not exists tshirt_price numeric(12, 2) not null default 0,
+  add column if not exists pants_price numeric(12, 2) not null default 0,
+  add column if not exists component_quantities jsonb not null default '{"tshirt":0,"pants":0}'::jsonb,
+  add column if not exists delivered_components jsonb not null default '{"tshirt":0,"pants":0}'::jsonb,
   add column if not exists partial_delivery_enabled boolean not null default false,
   add column if not exists workflow_archived_at timestamptz,
   add column if not exists sender_name text,
@@ -1386,6 +1396,13 @@ returns table (
   model_serial bigint,
   factory_model_code text,
   client_model_code text,
+  model_type text,
+  cutting_mode text,
+  set_pricing_mode text,
+  tshirt_price numeric,
+  pants_price numeric,
+  component_quantities jsonb,
+  delivered_components jsonb,
   production_type text,
   work_stages text[],
   sender_name text,
@@ -1428,6 +1445,13 @@ begin
            factory_order.model_serial,
            factory_order.factory_model_code,
            factory_order.client_model_code,
+           factory_order.model_type,
+           factory_order.cutting_mode,
+           factory_order.set_pricing_mode,
+           factory_order.tshirt_price,
+           factory_order.pants_price,
+           factory_order.component_quantities,
+           factory_order.delivered_components,
            factory_order.production_type,
            factory_order.work_stages,
            factory_order.sender_name,
@@ -3254,7 +3278,11 @@ create table if not exists public.factory_deliveries (
 alter table public.factory_deliveries
   add column if not exists recipient_name text not null default '',
   add column if not exists expected_delivery_date date,
-  add column if not exists color_size_data jsonb not null default '[]'::jsonb;
+  add column if not exists color_size_data jsonb not null default '[]'::jsonb,
+  add column if not exists component_type text not null default 'whole'
+    check (component_type in ('whole', 'set', 'tshirt', 'pants')),
+  add column if not exists tshirt_quantity integer not null default 0,
+  add column if not exists pants_quantity integer not null default 0;
 
 alter table public.users
   add column if not exists job_title text not null default 'عامل إنتاج',
@@ -3955,6 +3983,111 @@ begin
 end;
 $$;
 
+create or replace function public.record_factory_component_delivery(
+  requested_order_id uuid,
+  requested_component_type text,
+  requested_tshirt_quantity integer,
+  requested_pants_quantity integer,
+  requested_recipient_name text
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  current_order public.orders%rowtype;
+  component_type text;
+  tshirt_quantity integer := greatest(coalesce(requested_tshirt_quantity, 0), 0);
+  pants_quantity integer := greatest(coalesce(requested_pants_quantity, 0), 0);
+  delivery_quantity integer;
+  delivered_components jsonb;
+  saved_delivery_id uuid;
+begin
+  if not public.is_active_factory_admin() then
+    raise exception 'Only active admins can record component deliveries.';
+  end if;
+  component_type := case
+    when requested_component_type in ('whole', 'set') then 'set'
+    when requested_component_type = 'tshirt' then 'tshirt'
+    when requested_component_type = 'pants' then 'pants'
+    else ''
+  end;
+  if component_type = '' then
+    raise exception 'Choose a valid delivery component: full set, T-shirt, or pants.';
+  end if;
+  if component_type = 'set' then
+    if tshirt_quantity <= 0 or pants_quantity <= 0 then
+      raise exception 'A complete set requires both T-shirt and pants quantities.';
+    end if;
+    tshirt_quantity := least(tshirt_quantity, pants_quantity);
+    pants_quantity := tshirt_quantity;
+  elsif component_type = 'tshirt' then
+    pants_quantity := 0;
+    if tshirt_quantity <= 0 then raise exception 'Enter a positive T-shirt quantity.'; end if;
+  elsif component_type = 'pants' then
+    tshirt_quantity := 0;
+    if pants_quantity <= 0 then raise exception 'Enter a positive pants quantity.'; end if;
+  end if;
+  if length(trim(coalesce(requested_recipient_name, ''))) = 0 then
+    raise exception 'A recipient name is required.';
+  end if;
+
+  select *
+    into current_order
+  from public.orders
+  where id = requested_order_id
+  for update;
+  if not found or current_order.archived_at is not null
+     or current_order.workflow_archived_at is not null
+     or current_order.status in ('تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق') then
+    raise exception 'The order is unavailable for component delivery.';
+  end if;
+
+  delivered_components := coalesce(current_order.delivered_components, '{"tshirt":0,"pants":0}'::jsonb);
+  delivered_components := jsonb_set(
+    jsonb_set(delivered_components, '{tshirt}',
+      to_jsonb(coalesce((delivered_components ->> 'tshirt')::integer, 0) + tshirt_quantity)),
+    '{pants}',
+    to_jsonb(coalesce((delivered_components ->> 'pants')::integer, 0) + pants_quantity)
+  );
+
+  delivery_quantity := greatest(tshirt_quantity, pants_quantity);
+  insert into public.factory_deliveries (
+    order_id, customer_id, quantity, price_per_piece, recipient_name,
+    expected_delivery_date, component_type, tshirt_quantity, pants_quantity
+  )
+  values (
+    current_order.id, current_order.customer_id, delivery_quantity,
+    current_order.price_per_piece, trim(requested_recipient_name),
+    current_order.expected_delivery_date, component_type, tshirt_quantity, pants_quantity
+  )
+  returning id into saved_delivery_id;
+
+  update public.orders
+  set delivered_components = delivered_components,
+      delivered_pieces = greatest(
+        delivered_pieces,
+        coalesce((delivered_components ->> 'tshirt')::integer, 0),
+        coalesce((delivered_components ->> 'pants')::integer, 0)
+      )
+  where id = current_order.id;
+
+  update public.production_stages
+  set completed_quantity = greatest(completed_quantity, (
+    select greatest(
+      coalesce((delivered_components ->> 'tshirt')::integer, 0),
+      coalesce((delivered_components ->> 'pants')::integer, 0)
+    )
+  )),
+  updated_at = now()
+  where order_id = current_order.id
+    and stage_name = 'delivery';
+
+  return saved_delivery_id;
+end;
+$$;
+
 create or replace function public.reject_factory_worker_order_delivery(requested_submission_id uuid)
 returns void
 language plpgsql
@@ -4063,6 +4196,9 @@ alter table public.factory_cutting_stories
   add column if not exists approved_action text,
   add column if not exists approved_by uuid references auth.users (id) on delete set null,
   add column if not exists approved_at timestamptz,
+  add column if not exists set_component text not null default 'whole',
+  add column if not exists set_group_id uuid,
+  add column if not exists set_order_id uuid references public.orders (id) on delete set null,
   add column if not exists rejected_by uuid references auth.users (id) on delete set null,
   add column if not exists rejected_at timestamptz;
 alter table public.factory_cutting_stories
@@ -6584,6 +6720,7 @@ drop function if exists public.submit_factory_cutting(uuid, uuid, text, text, js
 drop function if exists public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, text, integer, text, uuid, numeric, text, uuid, uuid);
 drop function if exists public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, text, integer, text, uuid, numeric, text, uuid, uuid, uuid);
 drop function if exists public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, text, integer, text, uuid, numeric, text, uuid, uuid, uuid, jsonb);
+drop function if exists public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, text, integer, text, uuid, numeric, text, uuid, uuid, uuid, jsonb, text, boolean);
 drop function if exists public.read_factory_cutting_clients();
 create function public.read_factory_cutting_clients()
 returns table (id uuid, name text, brand_name text)
@@ -6622,7 +6759,9 @@ create function public.submit_factory_cutting(
   requested_source_order_id uuid,
   requested_cutting_request_id uuid,
   requested_catalog_model_id uuid,
-  requested_fabric_lines jsonb
+  requested_fabric_lines jsonb,
+  requested_set_component text default 'whole',
+  requested_separate_set_group boolean default false
 )
 returns integer
 language plpgsql
@@ -9496,6 +9635,8 @@ revoke all on function public.record_factory_delivery(uuid, integer, text) from 
 grant execute on function public.record_factory_delivery(uuid, integer, text) to authenticated;
 revoke all on function public.record_factory_delivery_with_distribution(uuid, integer, text, jsonb) from public, anon, authenticated;
 grant execute on function public.record_factory_delivery_with_distribution(uuid, integer, text, jsonb) to authenticated;
+revoke all on function public.record_factory_component_delivery(uuid, text, integer, integer, text) from public, anon, authenticated;
+grant execute on function public.record_factory_component_delivery(uuid, text, integer, integer, text) to authenticated;
 revoke all on function public.complete_factory_handover(uuid, integer, text) from public, anon, authenticated;
 grant execute on function public.complete_factory_handover(uuid, integer, text) to authenticated;
 revoke all on function public.admin_update_factory_delivery_quantity(uuid, uuid, integer) from public, anon, authenticated;
@@ -9519,8 +9660,8 @@ revoke all on function public.admin_delete_factory_cutting_request(uuid) from pu
 grant execute on function public.admin_delete_factory_cutting_request(uuid) to authenticated;
 revoke all on function public.admin_archive_factory_order(uuid) from public, anon, authenticated;
 grant execute on function public.admin_archive_factory_order(uuid) to authenticated;
-revoke all on function public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, text, integer, text, uuid, numeric, text, uuid, uuid, uuid, jsonb) from public, anon, authenticated;
-grant execute on function public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, text, integer, text, uuid, numeric, text, uuid, uuid, uuid, jsonb) to authenticated;
+revoke all on function public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, text, integer, text, uuid, numeric, text, uuid, uuid, uuid, jsonb, text, boolean) from public, anon, authenticated;
+grant execute on function public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, text, integer, text, uuid, numeric, text, uuid, uuid, uuid, jsonb, text, boolean) to authenticated;
 revoke all on function public.admin_approve_factory_cutting_story(uuid, text) from public, anon, authenticated;
 grant execute on function public.admin_approve_factory_cutting_story(uuid, text) to authenticated;
 revoke all on function public.admin_reject_factory_cutting_story(uuid) from public, anon, authenticated;
