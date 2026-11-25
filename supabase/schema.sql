@@ -9354,10 +9354,14 @@ begin
   from public.orders
   where id = requested_order_id
   for update;
-  if not found
-     or current_order.archived_at is not null
-     or current_order.status in ('تم التسليم') then
-    raise exception 'The active factory order was not found.';
+  if not found then
+    raise exception 'The factory order was not found.';
+  end if;
+  if current_order.archived_at is not null then
+    raise exception 'The factory order is archived.';
+  end if;
+  if current_order.status in ('تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق') then
+    raise exception 'The factory order is already delivered.';
   end if;
   if requested_action = 'make_available' and public.is_active_factory_admin() then
     if not coalesce('sewing' = any(current_order.work_stages), false) then

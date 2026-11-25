@@ -265,13 +265,14 @@ function dashboardErrorMessage(error) {
 }
 
 function logSupabaseRpcError(rpcName, error) {
-  console.error(`Supabase RPC ${rpcName} failed`, {
+  const details = {
     code: error?.code || "",
     message: error?.message || String(error || "Unknown error"),
     details: error?.details || "",
     hint: error?.hint || "",
     status: error?.status || ""
-  });
+  };
+  console.error(`Supabase RPC ${rpcName} failed: ${JSON.stringify(details)}`);
 }
 
 async function readFlexibleRecords(collection) {
@@ -631,7 +632,7 @@ async function readDashboardData(session) {
       data.orderReadWarning = "تم تحميل بيانات الطلبات الأساسية فقط؛ سجل الموديلات والقصات والتكرار يتطلب تشغيل أحدث نسخة من supabase/schema.sql.";
       ordersQuery = supabaseClient
         .from("orders")
-        .select("id, customer_id, model_name, model_number, factory_model_code, client_model_code, model_type, cutting_mode, set_pricing_mode, tshirt_price, pants_price, component_quantities, delivered_components, sender_name, colors, color_names, sizes, original_total_pieces, total_pieces, model_image_url, priority, status, created_at")
+        .select("id, customer_id, model_name, model_number, factory_model_code, client_model_code, sender_name, colors, color_names, sizes, original_total_pieces, total_pieces, model_image_url, priority, archived_at, workflow_archived_at, status, created_at")
         .order("created_at", { ascending: false });
       ({ data: orders, error: ordersError } = await ordersQuery);
     }
@@ -898,6 +899,7 @@ async function readDashboardData(session) {
       return {
         id: stage.id,
         order: stage.order_id,
+        archivedAt: order?.archived_at || null,
         workflowArchivedAt: order?.workflow_archived_at || null,
         line: stage.line_name || "—",
         model: order?.model_name || order?.model_number || "موديل غير محدد",
@@ -5486,9 +5488,15 @@ function sewingOrderRows(orders, actionLabel = "", action = "", compact = false)
     : '<div class="empty-state">لا توجد قصّات في هذه القائمة.</div>';
 }
 
+function isActiveSewingOrder(item) {
+  return !item.archivedAt
+    && !item.workflowArchivedAt
+    && !LOCKED_FACTORY_ORDER_STATUSES.includes(canonicalFactoryOrderStatus(item.orderStatus));
+}
+
 function sewingView(data) {
-  const available = data.sewing.filter((item) => !item.workflowArchivedAt && item.stageStatus === "متاح للخياطة");
-  const inProgress = data.sewing.filter((item) => !item.workflowArchivedAt && item.stageStatus === "قيد الخياطة");
+  const available = data.sewing.filter((item) => isActiveSewingOrder(item) && item.stageStatus === "متاح للخياطة");
+  const inProgress = data.sewing.filter((item) => isActiveSewingOrder(item) && item.stageStatus === "قيد الخياطة");
   const completed = data.sewing.filter((item) => !item.workflowArchivedAt && item.stageStatus === "مكتمل");
   const activeOrders = data.models.filter((order) => !order.archivedAt && !order.workflowArchivedAt);
   const pipelineGroups = factoryOrderPipelineGroups(activeOrders)
@@ -5544,8 +5552,8 @@ function sewingView(data) {
 }
 
 function adminSewingView(data) {
-  const available = data.sewing.filter((item) => !item.workflowArchivedAt && item.stageStatus === "متاح للخياطة");
-  const inProgress = data.sewing.filter((item) => !item.workflowArchivedAt && item.stageStatus === "قيد الخياطة");
+  const available = data.sewing.filter((item) => isActiveSewingOrder(item) && item.stageStatus === "متاح للخياطة");
+  const inProgress = data.sewing.filter((item) => isActiveSewingOrder(item) && item.stageStatus === "قيد الخياطة");
   const completed = data.sewing.filter((item) => !item.workflowArchivedAt && item.stageStatus === "مكتمل");
   const pipelineGroups = factoryOrderPipelineGroups(data.models.filter((order) => !order.archivedAt && !order.workflowArchivedAt))
     .filter((group) => group.key !== "before_cutting" && (group.key !== "unclassified" || group.orders.length));
@@ -11157,6 +11165,7 @@ function bindSewingStageActions(session) {
         ? "تم استلام القصّة وبدء الخياطة الفعلية."
         : "اكتملت الخياطة وتم تحويل القصّة للمرحلة التالية.");
     } catch (error) {
+      logSupabaseRpcError("transition_factory_sewing_stage", error);
       reportDashboardFailure(session, "تعذر تحديث مرحلة الخياطة", error);
     } finally {
       if (button.isConnected) button.disabled = false;
