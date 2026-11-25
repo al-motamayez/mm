@@ -431,7 +431,7 @@ async function readDashboardData(session) {
       .select("id, client_id, user_id, model_name, model_number, quantity, notes, image_path, status, merged_into_order_id, merged_into_catalog_model_id, merged_at, created_at")
       .order("created_at", { ascending: false })
     : Promise.resolve({ data: [], error: null });
-  const cuttingStoriesPromise = session.role === "admin"
+  const cuttingStoriesPromise = ["admin", "cutting"].includes(session.role)
     ? supabaseClient.from("factory_cutting_stories")
     .select("id, customer_id, customer_name, submitted_by_name, model_name, model_number, source_order_id, catalog_model_id, cutting_request_id, factory_model_code, size_data, color_ply_data, total_pieces, ply_count, fabric, fabric_details, fabric_id, fabric_quantity, bolt_count, fabric_unit, fabric_lines, technical_notes, model_image_url, set_component, set_group_id, set_order_id, component_cutting_data, status, approved_order_id, approved_action, archived_at, created_at, approved_at")
       .order("created_at", { ascending: false })
@@ -1466,6 +1466,16 @@ function sewingHistoryDetailsMarkup(item) {
 }
 
 function cuttingStoryDetailsMarkup(story) {
+  const componentData = story.component_cutting_data || {};
+  const componentQuantities = {
+    tshirt: Number(componentData.tshirt?.total_pieces || 0),
+    pants: Number(componentData.pants?.total_pieces || 0)
+  };
+  const hasSeparateComponentDetails = componentQuantities.tshirt > 0 || componentQuantities.pants > 0;
+  const separateComponentSummary = separateSetCuttingDetailsMarkup({
+    componentQuantities,
+    componentCuttingData: componentData
+  });
   const colors = parseColorPlyData(story.color_ply_data);
   const sizeData = parseSizeData(story.size_data);
   const sizes = orderedSizeEntries(sizeData);
@@ -1487,7 +1497,11 @@ function cuttingStoryDetailsMarkup(story) {
     {
       id: "cutting",
       label: "القص والألوان والمقاسات",
-      content: `${breakdown.length ? `<section class="cutting-details-section"><h3 class="modal-subheading">المقاسات والأعداد بالترتيب، مع إظهار التكرار</h3>${table(["اللون","المقاس","عدد الراقات","قطع المقاس واللون"], breakdown)}</section>` : '<p class="empty-state">لا توجد تفاصيل مقاسات مسجلة.</p>'}${story.technical_notes ? `<p class="cutting-details-notes"><strong>ملاحظات فنية:</strong> ${escapeHtml(story.technical_notes)}</p>` : ""}`
+      content: `${hasSeparateComponentDetails
+        ? separateComponentSummary
+        : breakdown.length
+          ? `<section class="cutting-details-section"><h3 class="modal-subheading">المقاسات والأعداد بالترتيب، مع إظهار التكرار</h3>${table(["اللون","المقاس","عدد الراقات","قطع المقاس واللون"], breakdown)}</section>`
+          : '<p class="empty-state">لا توجد تفاصيل مقاسات مسجلة.</p>'}${story.technical_notes ? `<p class="cutting-details-notes"><strong>ملاحظات فنية:</strong> ${escapeHtml(story.technical_notes)}</p>` : ""}`
     },
     {
       id: "fabrics",
@@ -5119,8 +5133,63 @@ function cuttingView(data) {
       </div>`;
     }).join("")}</div>`
     : '<div class="empty-state">لا توجد أطقم تنتظر استكمال قص الجزء الثاني.</div>';
+  const pendingSetContinuations = (data.cuttingStories || [])
+    .map((story) => {
+      const sourceOrder = data.models.find((order) => order.id === story.source_order_id);
+      const componentData = story.component_cutting_data || {};
+      const quantities = {
+        tshirt: Number(componentData.tshirt?.total_pieces || 0),
+        pants: Number(componentData.pants?.total_pieces || 0)
+      };
+      return { story, sourceOrder, componentData, quantities };
+    })
+    .filter(({ story, sourceOrder, quantities }) =>
+      story.status === "pending"
+      && !story.archived_at
+      && sourceOrder?.modelType === "set"
+      && sourceOrder.cuttingMode === "separate"
+      && (quantities.tshirt > 0) !== (quantities.pants > 0)
+    );
+  const pendingSetContinuationMarkup = pendingSetContinuations.length
+    ? `<div class="cutting-order-grid">${pendingSetContinuations.map(({ story, sourceOrder, componentData, quantities }) => {
+      const missingComponent = quantities.tshirt > 0 ? "pants" : "tshirt";
+      const missingLabel = componentLabel(missingComponent);
+      const pendingOrder = {
+        componentQuantities: quantities,
+        componentCuttingData: componentData
+      };
+      const storyId = story.id;
+      const partFormId = `pending-set-cutting-${storyId}`;
+      const modelName = story.model_name || sourceOrder.name || "موديل بدون اسم";
+      return `<article class="order-card cutting-order-card production-compact-card">
+        <header class="production-compact-heading">${modelImageMarkup(story.model_image_url || sourceOrder.modelImageUrls || sourceOrder.modelImageUrl)}<h3>${escapeHtml(modelName)} · ${missingLabel} مطلوب</h3>${statusTag("بانتظار اعتماد الإدارة")}</header>
+        <strong class="production-compact-total">القصة نفسها · استكمال قبل الاعتماد</strong>
+        ${componentSummary(pendingOrder)}
+        <div class="form-actions"><button class="button button-primary" type="button" data-open-pending-set-cutting="${escapeHtml(storyId)}">استكمال قص ${missingLabel}</button></div>
+      </article>
+      <div class="modal-backdrop cutting-editor-modal" data-pending-set-cutting-modal="${escapeHtml(storyId)}" hidden>
+        <section class="modal-card production-editor-modal-card" role="dialog" aria-modal="true" aria-label="استكمال قصة الترنج المعلقة">
+          <button class="modal-close" type="button" data-close-pending-set-cutting="${escapeHtml(storyId)}" aria-label="إغلاق">×</button>
+          <h2>استكمال القصة نفسها · ${escapeHtml(modelName)} · ${missingLabel}</h2>
+          <p>سيُضاف الجزء إلى قصة الترنج المرسلة سابقاً، ولن تُنشأ قصة أو موديل منفصل.</p>
+          <form class="pending-set-component-cutting-form" data-pending-set-story-id="${escapeHtml(storyId)}" data-set-component="${missingComponent}" data-customer-id="${escapeHtml(story.customer_id || "")}" data-multi-fabric="true">
+            <div class="form-section-grid cutting-bed-inputs">${cuttingBedFabricLinesMarkup(data.fabrics, story.customer_id || "")}</div>
+            <label class="field"><span>المورد / تفاصيل خامة ${missingLabel}</span><input name="fabricDetails" maxlength="240"></label>
+            ${sizePickerMarkup("", partFormId, false, true)}
+            ${cuttingColorPlyMarkup(null, "", 0, partFormId)}
+            <p class="cutting-calculated-total">إجمالي راقات الجزء: <strong data-cutting-plys>0</strong> · إجمالي قطع الجزء: <strong data-cutting-total>0</strong></p>
+            <div class="cutting-breakdown" data-cutting-breakdown></div>
+            <label class="field"><span>مسؤول قص ${missingLabel}</span><input name="cutterName" maxlength="120"></label>
+            <label class="field"><span>ملاحظات فنية</span><textarea name="technicalNotes" rows="3" maxlength="2000"></textarea></label>
+            <div class="form-actions"><button type="submit" class="button button-primary">حفظ الجزء في القصة نفسها</button></div>
+          </form>
+        </section>
+      </div>`;
+    }).join("")}</div>`
+    : '<div class="empty-state">لا توجد قصص ترنج معلقة تحتاج إلى إضافة الجزء المكمل.</div>';
   return `${panel("طلبات الإدارة", cards, "أوامر العمل المحولة من الإدارة")}
-    ${panel("استكمال قص أجزاء الترنج", componentContinuationMarkup, "يُحفظ كل جزء بخامته وألوانه ومقاساته، ويظل إجمالي الترنج محسوباً كعدد أطقم.")}`;
+    ${panel("استكمال قص أجزاء الترنج", componentContinuationMarkup, "يُحفظ كل جزء بخامته وألوانه ومقاساته، ويظل إجمالي الترنج محسوباً كعدد أطقم.")}
+    ${panel("استكمال قصة ترنج مرسلة قبل اعتماد الإدارة", pendingSetContinuationMarkup, "أضف الجزء المكمل إلى نفس القصة المعلقة؛ ستراجع الإدارة قصة واحدة ببيانات الجزأين.")}`;
 }
 
 function cuttingDashboardView(data) {
@@ -9831,6 +9900,17 @@ function bindCuttingActions(session) {
   document.querySelectorAll("[data-set-cutting-modal]").forEach((modal) => modal.addEventListener("click", (event) => {
     if (event.target === modal) modal.hidden = true;
   }));
+  document.querySelectorAll("[data-open-pending-set-cutting]").forEach((button) => button.addEventListener("click", () => {
+    const modal = document.querySelector(`[data-pending-set-cutting-modal="${CSS.escape(button.dataset.openPendingSetCutting)}"]`);
+    if (modal) modal.hidden = false;
+  }));
+  document.querySelectorAll("[data-close-pending-set-cutting]").forEach((button) => button.addEventListener("click", () => {
+    const modal = button.closest("[data-pending-set-cutting-modal]");
+    if (modal) modal.hidden = true;
+  }));
+  document.querySelectorAll("[data-pending-set-cutting-modal]").forEach((modal) => modal.addEventListener("click", (event) => {
+    if (event.target === modal) modal.hidden = true;
+  }));
   document.querySelectorAll(".set-component-cutting-form").forEach((form) => {
     if (form.dataset.bound === "true") return;
     form.dataset.bound = "true";
@@ -9870,6 +9950,49 @@ function bindCuttingActions(session) {
       } catch (error) {
         logSupabaseRpcError("submit_factory_set_component_cutting", error);
         reportDashboardFailure(session, "تعذر استكمال قص الجزء الثاني للترنج", error);
+        button.disabled = false;
+      }
+    });
+  });
+  document.querySelectorAll(".pending-set-component-cutting-form").forEach((form) => {
+    if (form.dataset.bound === "true") return;
+    form.dataset.bound = "true";
+    bindCuttingBedFabricPicker(form);
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const cuttingData = readCuttingInputs(form, true);
+      if (!cuttingData) return;
+      const button = form.querySelector('[type="submit"]');
+      button.disabled = true;
+      try {
+        const { data: matchedQuantity, error } = await supabaseClient.rpc("submit_factory_pending_set_component_cutting", {
+          requested_story_id: form.dataset.pendingSetStoryId,
+          requested_component: form.dataset.setComponent,
+          requested_size_data: cuttingData.sizeData,
+          requested_color_ply_data: cuttingData.colorPlyData,
+          requested_fabric_lines: cuttingData.fabricLines.map((line) => ({
+            fabric_id: line.fabricId,
+            name: line.name,
+            fabric_type: line.fabricType,
+            color_name: line.colorName,
+            color_hex: line.colorHex || null,
+            quantity: line.quantity,
+            unit: line.unit,
+            source: line.source
+          })),
+          requested_fabric_details: cuttingData.fabricDetails,
+          requested_technical_notes: cuttingData.technicalNotes,
+          requested_cutter_name: String(form.elements.cutterName.value || "").trim()
+        });
+        if (error?.code === "PGRST202") {
+          throw new Error("إجراء استكمال قصة الترنج المعلقة غير موجود. شغّل supabase/schema.sql المحدّث في SQL Editor.");
+        }
+        if (error) throw error;
+        await refreshDashboard(session);
+        window.factoryUI.toast(`تم حفظ الجزء المكمل في القصة نفسها، وإجمالي الترنج ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(matchedQuantity)} طقم. أصبحت القصة جاهزة لمراجعة الإدارة.`);
+      } catch (error) {
+        logSupabaseRpcError("submit_factory_pending_set_component_cutting", error);
+        reportDashboardFailure(session, "تعذر إضافة الجزء المكمل إلى قصة الترنج المعلقة", error);
         button.disabled = false;
       }
     });
