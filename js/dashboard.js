@@ -731,16 +731,9 @@ async function readDashboardData(session) {
       .reduce((maximum, stage) => Math.max(maximum, Number(stage.completed_quantity || 0)), 0);
     const originalQuantity = Number(order.original_total_pieces ?? order.total_pieces ?? 0);
     const deliveredPieces = Number(order.delivered_pieces || 0);
-    const recordedDeliveryPieces = data.deliveries
-      .filter((delivery) => delivery.order_id === order.id)
-      .reduce((total, delivery) => total + Number(delivery.quantity || 0), 0);
-    const deliveredQuantityComplete = Number(order.total_pieces || 0) > 0
-      && Math.max(deliveredPieces, recordedDeliveryPieces) >= Number(order.total_pieces);
     const storedStatus = factoryOrderDeliveredStatus(order.delivery_status)
       || factoryOrderDeliveredStatus(order.status)
-      ? deliveredQuantityComplete || Number(order.total_pieces || 0) <= 0
-        ? "تم التسليم"
-        : "جاهز للتسليم"
+      ? "تم التسليم"
       : order.status || "";
     const sewingStageStatus = sewingStage?.status || "";
     const effectiveStatus = effectiveFactoryOrderStatus({
@@ -807,8 +800,10 @@ async function readDashboardData(session) {
       quantityDifference: deliveredPieces - originalQuantity,
       pricePerPiece: Number(order.price_per_piece || 0),
       totalAmount: Number(order.total_amount || 0),
-      expectedAmount: Number(order.expected_total_amount
-        ?? Math.max(Number(order.total_pieces || 0) - deliveredPieces, 0) * Number(order.price_per_piece || 0)),
+      expectedAmount: factoryOrderDeliveredStatus(storedStatus)
+        ? 0
+        : Number(order.expected_total_amount
+          ?? Math.max(Number(order.total_pieces || 0) - deliveredPieces, 0) * Number(order.price_per_piece || 0)),
       operationalExpenses: Number(order.operational_expenses || 0),
       expenseEntries: data.orderExpenses.filter((expense) => expense.order_id === order.id),
       paidAmount: Number(order.paid_amount || 0),
@@ -1191,6 +1186,11 @@ function factoryOrderLedgerAmounts(order) {
 }
 
 function effectiveFactoryOrderStatus(order) {
+  const storedStatus = canonicalFactoryOrderStatus(order.storedStatus || order.status);
+  if (LOCKED_FACTORY_ORDER_STATUSES.includes(storedStatus)) {
+    return { status: "تم التسليم", label: "تم التسليم / مغلق" };
+  }
+
   const sewingStageStatus = order.sewingStageStatus || "";
   if (["متاح للخياطة", "في انتظار الخياطة"].includes(sewingStageStatus)) {
     return { status: "في انتظار الخياطة", label: "في انتظار الخياطة" };
@@ -1199,7 +1199,6 @@ function effectiveFactoryOrderStatus(order) {
     return { status: "جاري الخياطة", label: "قيد الخياطة" };
   }
 
-  const storedStatus = canonicalFactoryOrderStatus(order.storedStatus || order.status);
   if (sewingStageStatus === "مكتمل"
       && ["تم القص", "في انتظار الخياطة", "جاري الخياطة", "تمت الخياطة"].includes(storedStatus)) {
     return { status: "تمت الخياطة", label: "ما بعد الخياطة" };
@@ -1222,12 +1221,15 @@ function factoryOrderStatusSequence(order) {
 }
 
 function factoryOrderPipelineCategory(order) {
+  const storedStatus = canonicalFactoryOrderStatus(order.storedStatus || order.status);
+  if (LOCKED_FACTORY_ORDER_STATUSES.includes(storedStatus)) return "delivered";
+
   const sewingStageStatus = order.sewingStageStatus || "";
   if (["متاح للخياطة", "في انتظار الخياطة"].includes(sewingStageStatus)) return "waiting_sewing";
   if (["قيد الخياطة", "قيد التنفيذ"].includes(sewingStageStatus)) return "sewing";
   if (sewingStageStatus === "مكتمل") return "post_sewing";
 
-  const status = canonicalFactoryOrderStatus(order.storedStatus || order.status);
+  const status = storedStatus;
   const additionalStatuses = (order.workStages || [])
     .filter((stage) => stage !== "cutting" && stage !== "sewing")
     .flatMap(workStageStatusLabels);

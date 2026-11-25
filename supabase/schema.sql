@@ -1058,8 +1058,11 @@ alter table public.orders
     ) stored,
   add column expected_total_amount numeric(14, 2)
     generated always as (
-      greatest(total_pieces - delivered_pieces, 0) * price_per_piece
-      + case when delivered_pieces = 0 then operational_expenses else 0 end
+      case
+        when status in ('تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق') then 0
+        else greatest(total_pieces - delivered_pieces, 0) * price_per_piece
+          + case when delivered_pieces = 0 then operational_expenses else 0 end
+      end
     ) stored,
   add column remaining_amount numeric(14, 2)
     generated always as (
@@ -8826,9 +8829,9 @@ begin
     from public.orders as factory_order
     where factory_order.customer_id = matched_client.id
       and factory_order.archived_at is null
+      and factory_order.status not in ('تم التسليم', 'تم التسليم بالكامل', 'تم التسليم والإغلاق')
       and (
-        factory_order.status <> 'تم التسليم'
-        or factory_order.total_pieces <= 0
+        factory_order.total_pieces <= 0
         or coalesce((
           select sum(delivery.quantity)::integer
           from public.factory_deliveries as delivery
