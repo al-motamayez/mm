@@ -826,6 +826,8 @@ alter table public.orders
   add column if not exists pants_price numeric(12, 2) not null default 0,
   add column if not exists component_quantities jsonb not null default '{"tshirt":0,"pants":0}'::jsonb,
   add column if not exists delivered_components jsonb not null default '{"tshirt":0,"pants":0}'::jsonb,
+  add column if not exists component_cutting_data jsonb not null default '{}'::jsonb
+    check (jsonb_typeof(component_cutting_data) = 'object'),
   add column if not exists partial_delivery_enabled boolean not null default false,
   add column if not exists workflow_archived_at timestamptz,
   add column if not exists sender_name text,
@@ -4199,6 +4201,8 @@ alter table public.factory_cutting_stories
   add column if not exists set_component text not null default 'whole',
   add column if not exists set_group_id uuid,
   add column if not exists set_order_id uuid references public.orders (id) on delete set null,
+  add column if not exists component_cutting_data jsonb not null default '{}'::jsonb
+    check (jsonb_typeof(component_cutting_data) = 'object'),
   add column if not exists rejected_by uuid references auth.users (id) on delete set null,
   add column if not exists rejected_at timestamptz;
 alter table public.factory_cutting_stories
@@ -6788,6 +6792,7 @@ declare
   combined_fabric_label text;
   line_quantity numeric(14, 3);
   saved_fabric_lines jsonb;
+  component_cutting_data jsonb := '{}'::jsonb;
 begin
   if not (
     public.is_active_factory_admin()
@@ -6908,6 +6913,15 @@ begin
       raise exception 'The source model could not be found for the selected client.';
     end if;
   end if;
+  if requested_set_component not in ('whole', 'tshirt', 'pants') then
+    raise exception 'Choose a valid garment component for this cutting story.';
+  end if;
+  if requested_set_component <> 'whole'
+     and (source_model.id is null
+       or source_model.model_type <> 'set'
+       or source_model.cutting_mode <> 'separate') then
+    raise exception 'Separate component cutting is only available for separate-cut set models.';
+  end if;
   if requested_catalog_model_id is not null then
     select * into catalog_model
     from public.factory_model_catalog
@@ -6968,11 +6982,31 @@ begin
     raise exception 'A complete cutting story requires at least one size, one color, and a positive ply count.';
   end if;
 
+  if requested_set_component in ('tshirt', 'pants') then
+    component_cutting_data := jsonb_build_object(
+      requested_set_component,
+      jsonb_build_object(
+        'size_data', normalized_sizes,
+        'color_ply_data', requested_color_ply_data,
+        'total_pieces', cut_total,
+        'ply_count', total_plys,
+        'fabric', combined_fabric_label,
+        'fabric_details', trim(coalesce(requested_fabric_details, '')),
+        'fabric_id', first_fabric_id,
+        'fabric_quantity', first_fabric_quantity,
+        'fabric_unit', fabric_unit,
+        'fabric_lines', coalesce(saved_fabric_lines, requested_fabric_lines),
+        'cutter_name', submitted_by_name,
+        'technical_notes', trim(coalesce(requested_technical_notes, ''))
+      )
+    );
+  end if;
+
   insert into public.factory_cutting_stories (
     id, customer_id, customer_name, submitted_by, submitted_by_name,
     model_name, model_number, source_order_id, catalog_model_id, factory_model_code, size_data, color_ply_data, total_pieces, ply_count,
     fabric, fabric_details, fabric_id, fabric_quantity, bolt_count, fabric_unit, fabric_lines, cutting_request_id,
-    technical_notes, model_image_url
+    technical_notes, model_image_url, set_component, set_group_id, component_cutting_data
   )
   values (
     requested_order_id, matched_customer.id, matched_customer.name, auth.uid(), submitted_by_name,
@@ -6991,7 +7025,10 @@ begin
     trim(coalesce(requested_technical_notes, '')),
     coalesce(nullif(trim(coalesce(requested_model_image_url, '')), ''),
       case when requested_catalog_model_id is not null then catalog_model.model_image_url end,
-      case when requested_source_order_id is not null then source_model.model_image_url end, '')
+      case when requested_source_order_id is not null then source_model.model_image_url end, ''),
+    requested_set_component,
+    coalesce(source_model.parent_order_id, source_model.id, requested_catalog_model_id, requested_order_id),
+    component_cutting_data
   );
   if requested_cutting_request_id is not null then
     update public.factory_cutting_requests
@@ -7016,6 +7053,276 @@ begin
 end;
 $$;
 
+create or replace function public.submit_factory_set_component_cutting(
+  requested_order_id uuid,
+  requested_component text,
+  requested_size_data jsonb,
+  requested_color_ply_data jsonb,
+  requested_fabric_lines jsonb,
+  requested_fabric_details text,
+  requested_technical_notes text,
+  requested_cutter_name text
+)
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  current_order public.orders%rowtype;
+  cutting_stage public.production_stages%rowtype;
+  selected_fabric public.factory_fabrics%rowtype;
+  calculated_sizes jsonb;
+  normalized_colors text;
+  component_total integer;
+  total_plys integer;
+  current_components jsonb;
+  component_data jsonb;
+  first_component text;
+  has_tshirt_data boolean;
+  has_pants_data boolean;
+  tshirt_quantity integer;
+  pants_quantity integer;
+  matched_quantity integer;
+  line jsonb;
+  line_quantity numeric(14, 3);
+  stock_fabric_id uuid;
+  stock_quantity numeric(14, 3);
+  reserved_quantity numeric(14, 3);
+  fabric_label text := '';
+begin
+  if not (
+    public.is_active_factory_admin()
+    or public.has_active_factory_role(array['cutting'])
+  ) then
+    raise exception 'Only active admins or cutting supervisors can continue set cutting.';
+  end if;
+  if requested_order_id is null
+     or requested_component is null
+     or requested_component not in ('tshirt', 'pants')
+     or requested_size_data is null
+     or coalesce(jsonb_typeof(requested_size_data), '') <> 'object'
+     or requested_color_ply_data is null
+     or coalesce(jsonb_typeof(requested_color_ply_data), '') <> 'object'
+     or coalesce(jsonb_typeof(requested_color_ply_data -> 'colors'), '') <> 'array'
+     or coalesce(jsonb_typeof(requested_color_ply_data -> 'sizes'), '') <> 'array'
+     or coalesce(jsonb_typeof(requested_fabric_lines), '') <> 'array'
+     or jsonb_array_length(coalesce(requested_fabric_lines, '[]'::jsonb)) not between 1 and 100
+     or length(coalesce(requested_fabric_details, '')) > 240
+     or length(coalesce(requested_technical_notes, '')) > 2000
+     or length(coalesce(requested_cutter_name, '')) > 120 then
+    raise exception 'A valid set component, size distribution, and fabric details are required.';
+  end if;
+
+  select *
+    into current_order
+  from public.orders
+  where id = requested_order_id
+  for update;
+  if not found or current_order.archived_at is not null
+     or current_order.workflow_archived_at is not null then
+    raise exception 'The active set order was not found.';
+  end if;
+  if current_order.model_type <> 'set' or current_order.cutting_mode <> 'separate' then
+    raise exception 'Only separately cut set models can continue with another component.';
+  end if;
+  if current_order.status not in ('تم القص', 'قيد الانتظار', 'قيد الفرش', 'تم الفرش', 'جاهز للقص') then
+    raise exception 'The set has already moved beyond cutting and cannot be changed.';
+  end if;
+
+  component_data := coalesce(current_order.component_cutting_data, '{}'::jsonb);
+  current_components := coalesce(current_order.component_quantities, '{"tshirt":0,"pants":0}'::jsonb);
+  has_tshirt_data := component_data ? 'tshirt';
+  has_pants_data := component_data ? 'pants';
+  if has_tshirt_data or has_pants_data then
+    tshirt_quantity := case when has_tshirt_data
+      then greatest(coalesce((component_data -> 'tshirt' ->> 'total_pieces')::integer, 0), 0) else 0 end;
+    pants_quantity := case when has_pants_data
+      then greatest(coalesce((component_data -> 'pants' ->> 'total_pieces')::integer, 0), 0) else 0 end;
+  else
+    tshirt_quantity := greatest(coalesce((current_components ->> 'tshirt')::integer, 0), 0);
+    pants_quantity := greatest(coalesce((current_components ->> 'pants')::integer, 0), 0);
+  end if;
+  if (tshirt_quantity > 0) = (pants_quantity > 0) then
+    raise exception 'Exactly one component must be cut before its matching component can be added.';
+  end if;
+  first_component := case when tshirt_quantity > 0 then 'tshirt' else 'pants' end;
+  if requested_component = first_component then
+    raise exception 'This component is already recorded; choose the missing component.';
+  end if;
+
+  select *
+    into cutting_stage
+  from public.production_stages
+  where order_id = requested_order_id
+    and stage_name = 'cutting'
+  for update;
+  if not found then
+    raise exception 'The cutting stage for this set could not be found.';
+  end if;
+
+  select breakdown.normalized_sizes, breakdown.normalized_colors,
+         breakdown.total_pieces, breakdown.total_plys
+    into calculated_sizes, normalized_colors, component_total, total_plys
+  from public.calculate_factory_cutting_breakdown(requested_size_data, requested_color_ply_data) as breakdown;
+  if component_total < 1 or total_plys < 1 then
+    raise exception 'The component requires at least one size, one color, and a positive ply count.';
+  end if;
+
+  for line in
+    select value from jsonb_array_elements(requested_fabric_lines)
+  loop
+    if trim(coalesce(line ->> 'quantity', '')) !~ '^[0-9]+(\.[0-9]{1,3})?$'
+       or coalesce(line ->> 'unit', '') not in ('متر', 'توب')
+       or length(trim(coalesce(line ->> 'name', ''))) not between 1 and 120
+       or length(trim(coalesce(line ->> 'fabric_type', ''))) > 120
+       or length(trim(coalesce(line ->> 'color_name', ''))) > 64 then
+      raise exception 'Each component fabric line requires a valid name, color, unit, and quantity.';
+    end if;
+    line_quantity := (line ->> 'quantity')::numeric;
+    if line_quantity <= 0 or (line ->> 'unit' = 'توب' and line_quantity <> trunc(line_quantity)) then
+      raise exception 'Component fabric quantities must be positive and tobs must be whole numbers.';
+    end if;
+    fabric_label := concat_ws(
+      '، ', nullif(fabric_label, ''),
+      format('%s (%s)', trim(line ->> 'name'), coalesce(nullif(trim(line ->> 'color_name'), ''), 'غير محدد'))
+    );
+    if nullif(trim(coalesce(line ->> 'fabric_id', '')), '') is null then
+      if length(trim(coalesce(line ->> 'source', ''))) not between 1 and 120
+         or length(trim(coalesce(line ->> 'color_name', ''))) = 0 then
+        raise exception 'External fabric lines require a source and color name.';
+      end if;
+    else
+      select * into selected_fabric
+      from public.factory_fabrics
+      where id = (line ->> 'fabric_id')::uuid
+      for update;
+      if not found
+         or selected_fabric.stock_scope <> 'incoming'
+         or selected_fabric.customer_id is distinct from current_order.customer_id
+         or selected_fabric.name is distinct from trim(line ->> 'name')
+         or selected_fabric.fabric_type is distinct from trim(coalesce(line ->> 'fabric_type', ''))
+         or selected_fabric.color_name is distinct from trim(coalesce(line ->> 'color_name', ''))
+         or selected_fabric.unit is distinct from line ->> 'unit' then
+        raise exception 'Selected component fabric does not match available stock assigned to this client.';
+      end if;
+    end if;
+  end loop;
+
+  for stock_fabric_id in
+    select distinct (line.value ->> 'fabric_id')::uuid
+    from jsonb_array_elements(requested_fabric_lines) as line(value)
+    where nullif(trim(coalesce(line.value ->> 'fabric_id', '')), '') is not null
+    order by (line.value ->> 'fabric_id')::uuid
+  loop
+    select * into selected_fabric
+    from public.factory_fabrics
+    where id = stock_fabric_id
+    for update;
+    select coalesce(sum((line.value ->> 'quantity')::numeric), 0)
+      into stock_quantity
+    from jsonb_array_elements(requested_fabric_lines) as line(value)
+    where (line.value ->> 'fabric_id')::uuid = stock_fabric_id;
+    select coalesce(sum(quantity), 0)
+      into reserved_quantity
+    from public.factory_cutting_request_reservations
+    where fabric_id = stock_fabric_id;
+    if selected_fabric.quantity_available - reserved_quantity < stock_quantity then
+      raise exception 'Not enough unreserved fabric remains for this set component.';
+    end if;
+    update public.factory_fabrics
+    set quantity_available = quantity_available - stock_quantity,
+        updated_at = now()
+    where id = stock_fabric_id;
+    insert into public.factory_fabric_transactions (
+      fabric_id, order_id, transaction_type, quantity, notes, actor_id
+    ) values (
+      stock_fabric_id, requested_order_id, 'withdrawal', stock_quantity,
+      case requested_component when 'tshirt' then 'سحب خامة لاستكمال قص التيشيرت' else 'سحب خامة لاستكمال قص البنطلون' end,
+      auth.uid()
+    );
+  end loop;
+
+  if component_data -> first_component is null then
+    component_data := jsonb_set(component_data, array[first_component], jsonb_build_object(
+      'size_data', to_jsonb(current_order.sizes),
+      'color_ply_data', cutting_stage.color_ply_data,
+      'total_pieces', case when first_component = 'tshirt' then tshirt_quantity else pants_quantity end,
+      'ply_count', cutting_stage.layer_count,
+      'fabric', cutting_stage.fabric,
+      'fabric_details', cutting_stage.fabric_details,
+      'fabric_id', cutting_stage.fabric_id,
+      'fabric_quantity', cutting_stage.fabric_quantity,
+      'fabric_unit', coalesce(nullif(cutting_stage.external_fabric_unit, ''), 'متر'),
+      'fabric_lines', cutting_stage.fabric_lines,
+      'cutter_name', cutting_stage.cutter_name,
+      'technical_notes', cutting_stage.technical_notes
+    ));
+  end if;
+  component_data := jsonb_set(component_data, array[requested_component], jsonb_build_object(
+    'size_data', calculated_sizes,
+    'color_ply_data', requested_color_ply_data,
+    'total_pieces', component_total,
+    'ply_count', total_plys,
+    'fabric', fabric_label,
+    'fabric_details', trim(coalesce(requested_fabric_details, '')),
+    'fabric_id', null,
+    'fabric_quantity', 0,
+    'fabric_unit', null,
+    'fabric_lines', requested_fabric_lines,
+    'cutter_name', trim(coalesce(requested_cutter_name, '')),
+    'technical_notes', trim(coalesce(requested_technical_notes, ''))
+  ));
+
+  if requested_component = 'tshirt' then
+    tshirt_quantity := component_total;
+  else
+    pants_quantity := component_total;
+  end if;
+  matched_quantity := least(tshirt_quantity, pants_quantity);
+  current_components := jsonb_build_object('tshirt', tshirt_quantity, 'pants', pants_quantity);
+
+  update public.orders
+  set component_quantities = current_components,
+      component_cutting_data = component_data,
+      total_pieces = matched_quantity,
+      original_total_pieces = matched_quantity
+  where id = requested_order_id;
+
+  update public.production_stages
+  set target_quantity = matched_quantity,
+      completed_quantity = matched_quantity,
+      fabric = concat_ws(E'\n',
+        'تيشيرت: ' || coalesce(component_data -> 'tshirt' ->> 'fabric', '—'),
+        'بنطلون: ' || coalesce(component_data -> 'pants' ->> 'fabric', '—')),
+      fabric_details = concat_ws(E'\n',
+        'تيشيرت: ' || coalesce(component_data -> 'tshirt' ->> 'fabric_details', ''),
+        'بنطلون: ' || coalesce(component_data -> 'pants' ->> 'fabric_details', '')),
+      layer_count = total_plys + coalesce((component_data -> first_component ->> 'ply_count')::integer, 0),
+      technical_notes = concat_ws(E'\n',
+        nullif(component_data -> 'tshirt' ->> 'technical_notes', ''),
+        nullif(component_data -> 'pants' ->> 'technical_notes', '')),
+      status = 'مكتمل',
+      updated_at = now()
+  where order_id = requested_order_id
+    and stage_name = 'cutting';
+
+  update public.production_stages
+  set target_quantity = matched_quantity,
+      completed_quantity = least(completed_quantity, matched_quantity),
+      updated_at = now()
+  where order_id = requested_order_id
+    and stage_name <> 'cutting';
+
+  update public.factory_cutting_stories
+  set total_pieces = matched_quantity,
+      component_cutting_data = component_data
+  where approved_order_id = requested_order_id;
+
+  return matched_quantity;
+end;
+$$;
+
 create or replace function public.admin_approve_factory_cutting_story(
   requested_story_id uuid,
   requested_action text
@@ -7035,6 +7342,9 @@ declare
   new_order_id uuid := gen_random_uuid();
   resolved_fabric_name text;
   order_status text;
+  resolved_model_type text := 'single_tshirt';
+  resolved_cutting_mode text := 'shared';
+  resolved_component_quantities jsonb := '{"tshirt":0,"pants":0}'::jsonb;
   colors text;
   color_names jsonb;
   reservation record;
@@ -7082,6 +7392,8 @@ begin
     end if;
     resolved_parent_order_id := coalesce(source_model.parent_order_id, source_model.id);
     resolved_model_serial := source_model.model_serial;
+    resolved_model_type := source_model.model_type;
+    resolved_cutting_mode := source_model.cutting_mode;
   end if;
   if story.catalog_model_id is not null then
     select * into catalog_model
@@ -7094,6 +7406,25 @@ begin
     end if;
     if catalog_model.archived_at is not null then
       raise exception 'The registered catalog model has been archived and cannot be approved.';
+    end if;
+  end if;
+  if resolved_model_type = 'set' then
+    if resolved_cutting_mode = 'separate' then
+      if story.set_component not in ('tshirt', 'pants') then
+        raise exception 'Choose either the T-shirt or pants component for a separate-cut set.';
+      end if;
+      resolved_component_quantities := jsonb_build_object(
+        'tshirt', case when story.set_component = 'tshirt' then story.total_pieces else 0 end,
+        'pants', case when story.set_component = 'pants' then story.total_pieces else 0 end
+      );
+      if requested_action = 'send_to_sewing' then
+        raise exception 'Complete both separate set components before sending this model to sewing.';
+      end if;
+    else
+      resolved_component_quantities := jsonb_build_object(
+        'tshirt', story.total_pieces,
+        'pants', story.total_pieces
+      );
     end if;
   end if;
   select exists (
@@ -7132,7 +7463,8 @@ begin
   insert into public.orders (
     id, client_id, customer_id, model_name, model_number, model_serial, parent_order_id, factory_model_catalog_id, client_model_code, sender_name,
     colors, color_names, sizes, original_total_pieces, total_pieces,
-    status, model_image_url, work_stages
+    status, model_image_url, work_stages, model_type, cutting_mode,
+    component_quantities, component_cutting_data
   )
   values (
     new_order_id, customer.user_id, customer.id, story.model_name, '',
@@ -7141,7 +7473,9 @@ begin
     story.submitted_by_name, colors, color_names, story.size_data::text,
     story.total_pieces, story.total_pieces, order_status,
     nullif(trim(story.model_image_url), ''),
-    array['cutting', 'sewing', 'finishing']::text[]
+    array['cutting', 'sewing', 'finishing']::text[],
+    resolved_model_type, resolved_cutting_mode,
+    resolved_component_quantities, story.component_cutting_data
   );
 
   if has_reservations then
@@ -7307,6 +7641,7 @@ begin
   update public.factory_cutting_stories
   set status = case when requested_action = 'send_to_sewing' then 'sent_to_sewing' else 'added_to_models' end,
       approved_order_id = new_order_id,
+      set_order_id = new_order_id,
       approved_action = requested_action,
       approved_by = auth.uid(),
       approved_at = now()
@@ -9108,7 +9443,7 @@ create policy "Admins read factory order expenses"
   on public.factory_order_expenses for select to authenticated
   using (public.is_active_factory_admin());
 grant select on public.factory_order_expenses to authenticated;
-grant select (id, client_id, customer_id, model_name, model_number, factory_model_code, client_model_code, production_type, work_stages, colors, color_names, color_size_distribution, sizes, original_total_pieces, total_pieces, delivered_pieces, archived_at, workflow_archived_at, status, priority, created_at)
+grant select (id, client_id, customer_id, model_name, model_number, factory_model_code, client_model_code, model_type, cutting_mode, component_quantities, component_cutting_data, production_type, work_stages, colors, color_names, color_size_distribution, sizes, original_total_pieces, total_pieces, delivered_pieces, archived_at, workflow_archived_at, status, priority, created_at)
   on public.orders to authenticated;
 grant select (sender_name) on public.orders to authenticated;
 grant select (model_image_url, model_image_url_2) on public.orders to authenticated;
@@ -9395,6 +9730,14 @@ begin
   end if;
 
   if requested_action = 'make_available' then
+    if current_order.model_type = 'set'
+       and current_order.cutting_mode = 'separate'
+       and (
+         coalesce((current_order.component_quantities ->> 'tshirt')::integer, 0) <= 0
+         or coalesce((current_order.component_quantities ->> 'pants')::integer, 0) <= 0
+       ) then
+      raise exception 'Complete both T-shirt and pants cutting before making this set available for sewing.';
+    end if;
     select *
       into current_cutting_stage
     from public.production_stages
@@ -9443,7 +9786,7 @@ begin
     return;
   end if;
 
-  if current_sewing_stage.status <> 'قيد الخياطة' then
+  if current_sewing_stage.status not in ('قيد الخياطة', 'قيد التنفيذ', 'جاري الخياطة', 'في الخياطة') then
     raise exception 'Only a sewing order in progress can be completed.';
   end if;
 
@@ -9666,6 +10009,8 @@ revoke all on function public.admin_archive_factory_order(uuid) from public, ano
 grant execute on function public.admin_archive_factory_order(uuid) to authenticated;
 revoke all on function public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, text, integer, text, uuid, numeric, text, uuid, uuid, uuid, jsonb, text, boolean) from public, anon, authenticated;
 grant execute on function public.submit_factory_cutting(uuid, uuid, text, text, jsonb, jsonb, text, text, text, integer, text, uuid, numeric, text, uuid, uuid, uuid, jsonb, text, boolean) to authenticated;
+revoke all on function public.submit_factory_set_component_cutting(uuid, text, jsonb, jsonb, jsonb, text, text, text) from public, anon, authenticated;
+grant execute on function public.submit_factory_set_component_cutting(uuid, text, jsonb, jsonb, jsonb, text, text, text) to authenticated;
 revoke all on function public.admin_approve_factory_cutting_story(uuid, text) from public, anon, authenticated;
 grant execute on function public.admin_approve_factory_cutting_story(uuid, text) to authenticated;
 revoke all on function public.admin_reject_factory_cutting_story(uuid) from public, anon, authenticated;

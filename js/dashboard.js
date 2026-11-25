@@ -433,7 +433,7 @@ async function readDashboardData(session) {
     : Promise.resolve({ data: [], error: null });
   const cuttingStoriesPromise = session.role === "admin"
     ? supabaseClient.from("factory_cutting_stories")
-    .select("id, customer_id, customer_name, submitted_by_name, model_name, model_number, source_order_id, catalog_model_id, cutting_request_id, factory_model_code, size_data, color_ply_data, total_pieces, ply_count, fabric, fabric_details, fabric_id, fabric_quantity, bolt_count, fabric_unit, fabric_lines, technical_notes, model_image_url, status, approved_order_id, approved_action, archived_at, created_at, approved_at")
+    .select("id, customer_id, customer_name, submitted_by_name, model_name, model_number, source_order_id, catalog_model_id, cutting_request_id, factory_model_code, size_data, color_ply_data, total_pieces, ply_count, fabric, fabric_details, fabric_id, fabric_quantity, bolt_count, fabric_unit, fabric_lines, technical_notes, model_image_url, set_component, set_group_id, set_order_id, component_cutting_data, status, approved_order_id, approved_action, archived_at, created_at, approved_at")
       .order("created_at", { ascending: false })
     : Promise.resolve({ data: [], error: null });
   const cuttingRequestsPromise = ["admin", "cutting"].includes(session.role)
@@ -625,14 +625,14 @@ async function readDashboardData(session) {
   } else if (["cutting", "sewing"].includes(session.role)) {
     let ordersQuery = supabaseClient
       .from("orders")
-      .select("id, customer_id, model_name, model_number, factory_model_code, client_model_code, model_type, cutting_mode, set_pricing_mode, tshirt_price, pants_price, component_quantities, delivered_components, sender_name, colors, color_names, color_size_distribution, production_type, work_stages, sizes, original_total_pieces, total_pieces, model_image_url, model_image_url_2, priority, archived_at, workflow_archived_at, status, created_at")
+      .select("id, customer_id, model_name, model_number, factory_model_code, client_model_code, model_type, cutting_mode, set_pricing_mode, tshirt_price, pants_price, component_quantities, delivered_components, component_cutting_data, sender_name, colors, color_names, color_size_distribution, production_type, work_stages, sizes, original_total_pieces, total_pieces, model_image_url, model_image_url_2, priority, archived_at, workflow_archived_at, status, created_at")
       .order("created_at", { ascending: false });
     ({ data: orders, error: ordersError } = await ordersQuery);
     if (ordersError?.code === "42703") {
       data.orderReadWarning = "تم تحميل بيانات الطلبات الأساسية فقط؛ سجل الموديلات والقصات والتكرار يتطلب تشغيل أحدث نسخة من supabase/schema.sql.";
       ordersQuery = supabaseClient
         .from("orders")
-        .select("id, customer_id, model_name, model_number, factory_model_code, client_model_code, sender_name, colors, color_names, sizes, original_total_pieces, total_pieces, model_image_url, priority, archived_at, workflow_archived_at, status, created_at")
+        .select("id, customer_id, model_name, model_number, factory_model_code, client_model_code, model_type, cutting_mode, component_quantities, sender_name, colors, color_names, sizes, original_total_pieces, total_pieces, model_image_url, priority, archived_at, workflow_archived_at, status, created_at")
         .order("created_at", { ascending: false });
       ({ data: orders, error: ordersError } = await ordersQuery);
     }
@@ -698,7 +698,7 @@ async function readDashboardData(session) {
       stagesQuery = stagesQuery.in("order_id", orders.map((order) => order.id));
     }
     if (session.role === "cutting") {
-      stagesQuery = stagesQuery.in("stage_name", ["cutting", "قص", "تقطيع"]);
+      stagesQuery = stagesQuery.in("stage_name", ["cutting", "قص", "تقطيع", "sewing", "خياطة"]);
     } else if (session.role === "sewing") {
       stagesQuery = stagesQuery.in("stage_name", ["sewing", "خياطة", "cutting", "قص", "تقطيع"]);
     }
@@ -711,7 +711,7 @@ async function readDashboardData(session) {
         stagesQuery = stagesQuery.in("order_id", orders.map((order) => order.id));
       }
       if (session.role === "cutting") {
-        stagesQuery = stagesQuery.in("stage_name", ["cutting", "قص", "تقطيع"]);
+        stagesQuery = stagesQuery.in("stage_name", ["cutting", "قص", "تقطيع", "sewing", "خياطة"]);
       } else if (session.role === "sewing") {
         stagesQuery = stagesQuery.in("stage_name", ["sewing", "خياطة", "cutting", "قص", "تقطيع"]);
       }
@@ -764,6 +764,9 @@ async function readDashboardData(session) {
       componentQuantities: order.component_quantities && typeof order.component_quantities === "object"
         ? order.component_quantities
         : { tshirt: 0, pants: 0 },
+      componentCuttingData: order.component_cutting_data && typeof order.component_cutting_data === "object"
+        ? order.component_cutting_data
+        : {},
       deliveredComponents: order.delivered_components && typeof order.delivered_components === "object"
         ? order.delivered_components
         : { tshirt: 0, pants: 0 },
@@ -851,7 +854,15 @@ async function readDashboardData(session) {
       id: stage.id,
       order: stage.order_id,
       workflowArchivedAt: ordersById.get(stage.order_id)?.workflow_archived_at || null,
+      archivedAt: ordersById.get(stage.order_id)?.archived_at || null,
       customerId: ordersById.get(stage.order_id)?.customer_id || "",
+      modelType: ordersById.get(stage.order_id)?.model_type || "single_tshirt",
+      cuttingMode: ordersById.get(stage.order_id)?.cutting_mode || "shared",
+      componentQuantities: ordersById.get(stage.order_id)?.component_quantities || { tshirt: 0, pants: 0 },
+      componentCuttingData: ordersById.get(stage.order_id)?.component_cutting_data || {},
+      sewingStageStatus: stages.find((candidate) =>
+        candidate.order_id === stage.order_id && ["sewing", "خياطة"].includes(candidate.stage_name)
+      )?.status || "",
       client: clientsById.get(ordersById.get(stage.order_id)?.customer_id)?.name || "",
       model: ordersById.get(stage.order_id)?.model_name || ordersById.get(stage.order_id)?.model_number || "موديل غير محدد",
       modelNumber: ordersById.get(stage.order_id)?.model_number || "",
@@ -909,6 +920,10 @@ async function readDashboardData(session) {
         client: clientsById.get(order?.customer_id)?.name || "",
         modelImageUrl: order?.model_image_url || "",
         modelImageUrls: [order?.model_image_url || "", order?.model_image_url_2 || ""],
+        modelType: order?.model_type || "single_tshirt",
+        cuttingMode: order?.cutting_mode || "shared",
+        componentQuantities: order?.component_quantities || { tshirt: 0, pants: 0 },
+        componentCuttingData: order?.component_cutting_data || {},
         colors: order?.colors || "",
         colorNames: {
           ...Object.fromEntries(parseColorPlyData(cuttingStage?.color_ply_data).map((entry) => [entry.color, entry.name]).filter(([, name]) => name)),
@@ -1354,7 +1369,33 @@ function cuttingOrderDetailsMarkup(item) {
   return `<header class="production-details-heading">${modelImageMarkup(item.modelImageUrls || item.modelImageUrl)}<div><small>تفاصيل أمر القص</small><h2>${escapeHtml(item.model || item.name || "موديل بدون اسم")}</h2><p>كود الموديل بالنظام: ${escapeHtml(item.factoryModelCode || "—")} · كود/رقم الموديل للعميل: ${escapeHtml(item.clientModelCode || "—")} · العميل: ${escapeHtml(item.client || "—")}</p></div>${statusTag(item.displayStatus || item.orderStatus || item.status)}</header>${productionDetailsTabsMarkup(sections)}`;
 }
 
+function separateSetCuttingDetailsMarkup(item) {
+  const componentLabel = (component) => component === "tshirt" ? "التيشيرت" : "البنطلون";
+  const components = ["tshirt", "pants"].map((component) => {
+    const details = item.componentCuttingData?.[component];
+    const quantity = Number(item.componentQuantities?.[component] || 0);
+    if (!details || quantity <= 0) return "";
+    const colors = parseColorPlyData(details.color_ply_data)
+      .map((entry) => entry.color)
+      .join(", ");
+    const facts = [
+      ["الألوان", colorSummaryMarkup(colors, {}, details.color_ply_data)],
+      ["المقاسات", sizeBadgesMarkup(details.size_data)],
+      ["الخامة", `<strong>${escapeHtml(details.fabric || "—")}</strong>`],
+      ["تفاصيل الخامة", `<strong>${escapeHtml(details.fabric_details || "—")}</strong>`],
+      ["مسؤول القص", `<strong>${escapeHtml(details.cutter_name || "—")}</strong>`]
+    ];
+    return `<section class="cutting-component-summary"><h4>${componentLabel(component)} · ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(quantity)} قطعة</h4>
+      <div class="production-compact-facts">${facts.map(([label, value]) => `<div><span>${label}</span>${value}</div>`).join("")}</div>
+      ${cuttingFabricBreakdownMarkup(details.fabric_lines, details.fabric)}
+      ${details.technical_notes ? `<p class="cutting-details-notes"><strong>تعليمات القص:</strong> ${escapeHtml(details.technical_notes)}</p>` : ""}
+    </section>`;
+  }).filter(Boolean).join("");
+  return components || '<p class="empty-state">لا توجد تفاصيل قص مسجلة لأجزاء الترنج بعد.</p>';
+}
+
 function sewingOrderDetailsMarkup(item) {
+  const separateSetCutting = item.modelType === "set" && item.cuttingMode === "separate";
   const sections = [
     {
       id: "basic",
@@ -1364,7 +1405,9 @@ function sewingOrderDetailsMarkup(item) {
     {
       id: "cutting",
       label: "الألوان والمقاسات",
-      content: `<h3 class="modal-subheading">المقاسات والألوان</h3>${modelSizeColorCardsMarkup(item)}`
+      content: separateSetCutting
+        ? separateSetCuttingDetailsMarkup(item)
+        : `<h3 class="modal-subheading">المقاسات والألوان</h3>${modelSizeColorCardsMarkup(item)}`
     }
   ];
   if (Array.isArray(item.expenseEntries)) {
@@ -1386,6 +1429,10 @@ function sewingDetailsProjection(item) {
     originalQuantity: Number(item.originalQuantity ?? item.originalTotal ?? item.quantity ?? item.total ?? 0),
     produced: Number(item.produced ?? item.completedPieces ?? item.cut ?? 0),
     sizes: item.sizes || "",
+    modelType: item.modelType || "single_tshirt",
+    cuttingMode: item.cuttingMode || "shared",
+    componentQuantities: item.componentQuantities || { tshirt: 0, pants: 0 },
+    componentCuttingData: item.componentCuttingData || {},
     colors: item.colors || "",
     colorNames: item.colorNames || {},
     colorPlyData: item.colorPlyData || null,
@@ -1395,6 +1442,7 @@ function sewingDetailsProjection(item) {
 }
 
 function sewingHistoryDetailsMarkup(item) {
+  const separateSetCutting = item.modelType === "set" && item.cuttingMode === "separate";
   const sections = [
     {
       id: "basic",
@@ -1404,7 +1452,9 @@ function sewingHistoryDetailsMarkup(item) {
     {
       id: "cutting",
       label: "الألوان والمقاسات",
-      content: `<h3 class="modal-subheading">المقاسات والألوان</h3>${modelSizeColorCardsMarkup(item)}`
+      content: separateSetCutting
+        ? separateSetCuttingDetailsMarkup(item)
+        : `<h3 class="modal-subheading">المقاسات والألوان</h3>${modelSizeColorCardsMarkup(item)}`
     }
   ];
   if (Array.isArray(item.expenseEntries)) {
@@ -4970,6 +5020,8 @@ function adminView(data, accounts) {
 function cuttingView(data) {
   const priorityOrder = { عاجل: 0, مرتفع: 1, عادي: 2 };
   const readyStatus = "جاهز للقص";
+  const componentLabel = (component) => component === "tshirt" ? "التيشيرت" : "البنطلون";
+  const componentSummary = separateSetCuttingDetailsMarkup;
   const activeCutting = data.cutting
     .filter((item) => ["قيد الانتظار", "قيد الفرش", "تم الفرش", readyStatus].includes(canonicalFactoryOrderStatus(item.orderStatus)))
     .sort((left, right) => (priorityOrder[left.priority] ?? 3) - (priorityOrder[right.priority] ?? 3));
@@ -5021,7 +5073,52 @@ function cuttingView(data) {
       </section>
     </div>`;
   }).join("")}</div>` : '<div class="empty-state">لا توجد أوامر قص نشطة حاليًا.</div>';
-  return panel("طلبات الإدارة", cards, "أوامر العمل المحولة من الإدارة");
+  const componentContinuations = data.cutting
+    .filter((item) => {
+      const quantities = item.componentQuantities || {};
+      const tshirtQuantity = Number(quantities.tshirt || 0);
+      const pantsQuantity = Number(quantities.pants || 0);
+      return item.modelType === "set"
+        && item.cuttingMode === "separate"
+        && !item.archivedAt
+        && !item.workflowArchivedAt
+        && canonicalFactoryOrderStatus(item.orderStatus) === "تم القص"
+        && (tshirtQuantity > 0) !== (pantsQuantity > 0)
+        && !["متاح للخياطة", "قيد الخياطة", "قيد التنفيذ", "مكتمل"].includes(item.sewingStageStatus);
+    });
+  const componentContinuationMarkup = componentContinuations.length
+    ? `<div class="cutting-order-grid">${componentContinuations.map((item) => {
+      const missingComponent = Number(item.componentQuantities?.tshirt || 0) > 0 ? "pants" : "tshirt";
+      const missingLabel = componentLabel(missingComponent);
+      const partFormId = `set-cutting-${item.order}`;
+      return `<article class="order-card cutting-order-card production-compact-card">
+        <header class="production-compact-heading">${modelImageMarkup(item.modelImageUrls || item.modelImageUrl)}<h3>${escapeHtml(item.model)} · ${missingLabel} مطلوب</h3>${statusTag("استكمال قص الترنج")}</header>
+        <strong class="production-compact-total">إجمالي الترنج بعد الاستكمال: ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.total || 0)} طقم</strong>
+        ${componentSummary(item)}
+        <div class="form-actions"><button class="button button-primary" type="button" data-open-set-cutting="${escapeHtml(item.order)}">استكمال قص ${missingLabel}</button></div>
+      </article>
+      <div class="modal-backdrop cutting-editor-modal" data-set-cutting-modal="${escapeHtml(item.order)}" hidden>
+        <section class="modal-card production-editor-modal-card" role="dialog" aria-modal="true" aria-label="استكمال قص الترنج">
+          <button class="modal-close" type="button" data-close-set-cutting="${escapeHtml(item.order)}" aria-label="إغلاق">×</button>
+          <h2>استكمال قص ${missingLabel} · ${escapeHtml(item.model)}</h2>
+          <p>تُسجّل خامة وألوان ومقاسات هذا الجزء مستقلة، ويُحسب إجمالي الأطقم على أساس عدد الأزواج لا مجموع القطع.</p>
+          <form class="set-component-cutting-form" data-set-component-cutting="${escapeHtml(item.order)}" data-set-component="${missingComponent}" data-customer-id="${escapeHtml(item.customerId || "")}" data-multi-fabric="true">
+            <div class="form-section-grid cutting-bed-inputs">${cuttingBedFabricLinesMarkup(data.fabrics, item.customerId || "")}</div>
+            <label class="field"><span>المورد / تفاصيل خامة ${missingLabel}</span><input name="fabricDetails" maxlength="240"></label>
+            ${sizePickerMarkup("", partFormId, false, true)}
+            ${cuttingColorPlyMarkup(null, "", 0, partFormId)}
+            <p class="cutting-calculated-total">إجمالي راقات الجزء: <strong data-cutting-plys>0</strong> · إجمالي قطع الجزء: <strong data-cutting-total>0</strong></p>
+            <div class="cutting-breakdown" data-cutting-breakdown></div>
+            <label class="field"><span>مسؤول قص ${missingLabel}</span><input name="cutterName" maxlength="120"></label>
+            <label class="field"><span>ملاحظات فنية</span><textarea name="technicalNotes" rows="3" maxlength="2000"></textarea></label>
+            <div class="form-actions"><button type="submit" class="button button-primary">حفظ واستكمال قص ${missingLabel}</button></div>
+          </form>
+        </section>
+      </div>`;
+    }).join("")}</div>`
+    : '<div class="empty-state">لا توجد أطقم تنتظر استكمال قص الجزء الثاني.</div>';
+  return `${panel("طلبات الإدارة", cards, "أوامر العمل المحولة من الإدارة")}
+    ${panel("استكمال قص أجزاء الترنج", componentContinuationMarkup, "يُحفظ كل جزء بخامته وألوانه ومقاساته، ويظل إجمالي الترنج محسوباً كعدد أطقم.")}`;
 }
 
 function cuttingDashboardView(data) {
@@ -5346,9 +5443,11 @@ function cuttingSubmissionFormMarkup(data) {
   const brandOptions = data.clients.filter((client) => client.brand_name)
     .map((client) => `<option value="${escapeHtml(client.id)}">${escapeHtml(client.brand_name)}</option>`)
     .join("");
-  const repeatModelOptions = modelRegistryEntries(data).map(({ code, model, catalogModel, orders }) =>
-    `<option value="${catalogModel ? `catalog:${catalogModel.id}` : `order:${orders[0]?.id || ""}`}">${escapeHtml(model.name || "موديل بدون اسم")} · ${escapeHtml(code)}</option>`
-  ).join("");
+  const repeatModelOptions = modelRegistryEntries(data).map(({ code, model, catalogModel, orders }) => {
+    const sourceOrder = orders.find((order) => order.modelType === "set") || orders[0];
+    const source = sourceOrder ? `order:${sourceOrder.id}` : `catalog:${catalogModel?.id || ""}`;
+    return `<option value="${source}">${escapeHtml(model.name || "موديل بدون اسم")} · ${escapeHtml(code)}</option>`;
+  }).join("");
   return `<form class="cutting-submit-form modal-form" id="cutting-submit-form" data-multi-fabric="true">
     <section class="form-section"><h3>بيانات القصة <span>تُحفظ كسجل مستقل قبل إنشاء الموديل</span></h3><div class="form-section-grid">
         <input type="hidden" name="customerId">
@@ -5466,7 +5565,9 @@ function sewingOrderRows(orders, actionLabel = "", action = "", compact = false)
       return `<article class="sewing-order-card production-compact-card">
       <header class="production-compact-heading">${modelImageMarkup(item.modelImageUrls || item.modelImageUrl)}<div class="sewing-model-monitor-info"><h3>${escapeHtml(item.model)}</h3><p>كود الموديل: <strong>${escapeHtml(item.factoryModelCode || "—")}</strong></p></div>${statusTag(item.stageStatus === "مكتمل" && item.orderStatus ? item.orderStatus : item.status)}</header>
       ${compact ? "" : `<strong class="production-compact-total">${new Intl.NumberFormat("ar-EG-u-nu-latn").format(item.target)} قطعة</strong>
-      <div class="production-compact-facts"><div><span>الألوان</span>${colorSummaryMarkup(item.colors, item.colorNames, item.colorPlyData)}</div><div><span>المقاسات</span>${sizeBadgesMarkup(item.sizes)}</div></div>`}
+      ${item.modelType === "set" && item.cuttingMode === "separate"
+        ? separateSetCuttingDetailsMarkup(item)
+        : `<div class="production-compact-facts"><div><span>الألوان</span>${colorSummaryMarkup(item.colors, item.colorNames, item.colorPlyData)}</div><div><span>المقاسات</span>${sizeBadgesMarkup(item.sizes)}</div></div>`}`}
       <div class="production-record-date"><span>آخر تحديث:</span><time class="digital-date-time" datetime="${escapeHtml(item.updatedAt || "")}">${formatDigitalDateTime(item.updatedAt)}</time></div>
       <div class="form-actions">${compact ? "" : `${productionDetailsButton("sewing", sewingDetailsProjection(item))}${canEdit ? `<button class="button button-secondary" type="button" data-open-sewing-editor="${escapeHtml(item.order)}">تعديل</button>` : ""}`}${action ? `<button class="button button-primary" type="button" data-sewing-action="${action}" data-sewing-order="${escapeHtml(item.order)}">${actionLabel}</button>` : ""}</div>
     </article>
@@ -9717,6 +9818,60 @@ function bindCuttingActions(session) {
     }
     });
   });
+  document.querySelectorAll("[data-open-set-cutting]").forEach((button) => button.addEventListener("click", () => {
+    const modal = document.querySelector(`[data-set-cutting-modal="${CSS.escape(button.dataset.openSetCutting)}"]`);
+    if (modal) modal.hidden = false;
+  }));
+  document.querySelectorAll("[data-close-set-cutting]").forEach((button) => button.addEventListener("click", () => {
+    const modal = button.closest("[data-set-cutting-modal]");
+    if (modal) modal.hidden = true;
+  }));
+  document.querySelectorAll("[data-set-cutting-modal]").forEach((modal) => modal.addEventListener("click", (event) => {
+    if (event.target === modal) modal.hidden = true;
+  }));
+  document.querySelectorAll(".set-component-cutting-form").forEach((form) => {
+    if (form.dataset.bound === "true") return;
+    form.dataset.bound = "true";
+    bindCuttingBedFabricPicker(form);
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const cuttingData = readCuttingInputs(form, true);
+      if (!cuttingData) return;
+      const button = form.querySelector('[type="submit"]');
+      button.disabled = true;
+      try {
+        const { data: matchedQuantity, error } = await supabaseClient.rpc("submit_factory_set_component_cutting", {
+          requested_order_id: form.dataset.setComponentCutting,
+          requested_component: form.dataset.setComponent,
+          requested_size_data: cuttingData.sizeData,
+          requested_color_ply_data: cuttingData.colorPlyData,
+          requested_fabric_lines: cuttingData.fabricLines.map((line) => ({
+            fabric_id: line.fabricId,
+            name: line.name,
+            fabric_type: line.fabricType,
+            color_name: line.colorName,
+            color_hex: line.colorHex || null,
+            quantity: line.quantity,
+            unit: line.unit,
+            source: line.source
+          })),
+          requested_fabric_details: cuttingData.fabricDetails,
+          requested_technical_notes: cuttingData.technicalNotes,
+          requested_cutter_name: String(form.elements.cutterName.value || "").trim()
+        });
+        if (error?.code === "PGRST202") {
+          throw new Error("إجراء استكمال قص الترنج غير موجود. شغّل supabase/schema.sql المحدّث في SQL Editor.");
+        }
+        if (error) throw error;
+        await refreshDashboard(session);
+        window.factoryUI.toast(`تم استكمال قص الجزء، وإجمالي الترنج المحسوب ${new Intl.NumberFormat("ar-EG-u-nu-latn").format(matchedQuantity)} طقم.`);
+      } catch (error) {
+        logSupabaseRpcError("submit_factory_set_component_cutting", error);
+        reportDashboardFailure(session, "تعذر استكمال قص الجزء الثاني للترنج", error);
+        button.disabled = false;
+      }
+    });
+  });
   document.querySelectorAll("[data-repeat-cut]").forEach((button) => button.addEventListener("click", () => {
     const sourceModel = dashboardData.models.find((model) => model.id === button.dataset.repeatCut);
     if (!sourceModel) {
@@ -10092,6 +10247,8 @@ function bindCuttingActions(session) {
         submitForm.elements.customerSelection.value = "";
         submitForm.elements.brandSelection.value = "";
         submitForm.elements.customerId.value = "";
+        submitForm.elements.setComponent.value = "whole";
+        submitForm.elements.separateSetGroup.checked = false;
         submitForm.elements.fabricType.innerHTML = cuttingFabricTypeOptions(dashboardData.fabrics, "");
         submitForm.querySelector("[data-cutting-fabric-lines]").innerHTML =
           '<p class="muted">اختر مصدر القماش لإضافة الألوان والكميات.</p>';
@@ -10106,6 +10263,12 @@ function bindCuttingActions(session) {
       submitForm.elements.modelName.value = model.name || "";
       submitForm.elements.modelName.disabled = true;
       submitForm.elements.modelNumber.value = model.clientModelCode || model.modelNumber || "";
+      const separateSet = model.modelType === "set" && model.cuttingMode === "separate";
+      const componentQuantities = model.componentQuantities || {};
+      submitForm.elements.setComponent.value = separateSet
+        ? Number(componentQuantities.tshirt || 0) > 0 ? "pants" : "tshirt"
+        : "whole";
+      submitForm.elements.separateSetGroup.checked = separateSet;
       const client = dashboardData.clients.find((entry) => entry.id === model.customerId);
       if (client?.brand_name) {
         submitForm.elements.brandSelection.value = client.id;
