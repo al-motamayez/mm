@@ -5519,12 +5519,44 @@ function cuttingSubmissionFormMarkup(data) {
     const source = sourceOrder ? `order:${sourceOrder.id}` : `catalog:${catalogModel?.id || ""}`;
     return `<option value="${source}">${escapeHtml(model.name || "موديل بدون اسم")} · ${escapeHtml(code)}</option>`;
   }).join("");
+  const partialOrderContinuations = data.cutting
+    .filter((item) => item.modelType === "set"
+      && item.cuttingMode === "separate"
+      && !item.archivedAt
+      && !item.workflowArchivedAt
+      && canonicalFactoryOrderStatus(item.orderStatus) === "تم القص"
+      && ((Number(item.componentQuantities?.tshirt || 0) > 0) !== (Number(item.componentQuantities?.pants || 0) > 0))
+      && !["متاح للخياطة", "قيد الخياطة", "قيد التنفيذ", "مكتمل"].includes(item.sewingStageStatus))
+    .map((item) => {
+      const missing = Number(item.componentQuantities?.tshirt || 0) > 0 ? "البنطلون" : "التيشيرت";
+      return `<option value="order:${escapeHtml(item.order)}">${escapeHtml(item.model || "موديل ترنج")} · الجزء الناقص: ${missing}</option>`;
+    });
+  const pendingStoryContinuations = (data.cuttingStories || [])
+    .map((story) => {
+      const sourceOrder = data.models.find((order) => order.id === story.source_order_id);
+      const componentData = story.component_cutting_data || {};
+      const tshirtQuantity = Number(componentData.tshirt?.total_pieces || 0);
+      const pantsQuantity = Number(componentData.pants?.total_pieces || 0);
+      return { story, sourceOrder, tshirtQuantity, pantsQuantity };
+    })
+    .filter(({ story, sourceOrder, tshirtQuantity, pantsQuantity }) =>
+      story.status === "pending"
+      && !story.archived_at
+      && sourceOrder?.modelType === "set"
+      && sourceOrder.cuttingMode === "separate"
+      && (tshirtQuantity > 0) !== (pantsQuantity > 0))
+    .map(({ story, tshirtQuantity }) =>
+      `<option value="story:${escapeHtml(story.id)}">${escapeHtml(story.model_name || "موديل ترنج")} · بانتظار اعتماد الإدارة · الجزء الناقص: ${tshirtQuantity > 0 ? "البنطلون" : "التيشيرت"}</option>`
+    );
+  const continuationOptions = [...partialOrderContinuations, ...pendingStoryContinuations].join("");
   return `<form class="cutting-submit-form modal-form" id="cutting-submit-form" data-multi-fabric="true">
     <section class="form-section"><h3>بيانات القصة <span>تُحفظ كسجل مستقل قبل إنشاء الموديل</span></h3><div class="form-section-grid">
         <input type="hidden" name="customerId">
         <input type="hidden" name="sourceOrderId">
         <input type="hidden" name="catalogModelId">
         <input type="hidden" name="cuttingRequestId">
+        <input type="hidden" name="setComponent" value="whole">
+        <input type="hidden" name="separateSetGroup" value="">
         <label class="field wide"><span>تكرار قصّة موديل مسجل (اختياري)</span><select name="repeatModelId"><option value="">قصة لموديل جديد</option>${repeatModelOptions}</select></label>
         <p class="workforce-rate-preview wide" data-repeat-model-code hidden></p>
         <label class="field"><span>اسم العميل</span><select name="customerSelection"><option value="">اختر العميل</option>${clientOptions}</select></label>
@@ -5532,8 +5564,13 @@ function cuttingSubmissionFormMarkup(data) {
         <label class="field model-name-field"><span>اسم الموديل</span><input name="modelName" autocomplete="off"></label>
         <p class="workforce-rate-preview wide" data-cutting-model-code>كود الموديل بالنظام: يُنشأ عند اعتماد الموديل.</p>
         <label class="field model-number-field"><span>كود/رقم الموديل للعميل</span><input name="modelNumber" autocomplete="off"></label>
-        <label class="field"><span>جزء موديل الترنج</span><select name="setComponent"><option value="whole">قصّة مشتركة / الترنج كامل معاً</option><option value="tshirt">تيشيرت منفصل</option><option value="pants">بنطلون منفصل</option></select><small>تُربط القصتين بعلامة الجزء وبنفس كود الموديل عند الاعتماد.</small></label>
-        <label class="field"><input type="checkbox" name="separateSetGroup"><span>ربط قصة البنطلون أو التيشيرت تحت مجموعة ترنج واحدة</span></label>
+        <label class="field wide"><span>اختيار القص</span><select name="cuttingChoice" required>
+          <option value="tshirt">1 - تيشيرت فقط</option>
+          <option value="pants">2 - بنطلون فقط</option>
+          <option value="whole_shared">3 - تيشيرت + بنطلون (نفس الفرشة / معاً)</option>
+          <option value="separate_continue">4 - تيشيرت + بنطلون (قصة وخامة مختلفة)</option>
+        </select></label>
+        <label class="field wide" data-cutting-choice4 hidden><span>اختر الموديل الموجود لاستكمال الجزء الناقص</span><select name="continuationTarget"><option value="">اختر موديل ترنج مسجل بجزء ناقص</option>${continuationOptions}</select><small>سيتم دمج الجزء المكمل في القصة أو الموديل الموجود دون إنشاء قصة أو طقم جديد.</small></label>
         <label class="field"><span>مصدر القماش</span><select name="fabricType" data-cutting-fabric-type required>${cuttingFabricTypeOptions(data.fabrics, "")}</select><small>اختر خامة من المخزن أو خامة خارجية غير مسجلة.</small></label>
         <div class="field wide" data-cutting-fabric-lines></div>
         <button class="row-action wide" type="button" data-add-cutting-fabric-line>＋ إضافة لون / توب</button>
@@ -10373,14 +10410,17 @@ function bindCuttingActions(session) {
         submitForm.elements.brandSelection.value = "";
         submitForm.elements.customerId.value = "";
         submitForm.elements.setComponent.value = "whole";
-        submitForm.elements.separateSetGroup.checked = false;
+          submitForm.elements.separateSetGroup.value = "";
         submitForm.elements.fabricType.innerHTML = cuttingFabricTypeOptions(dashboardData.fabrics, "");
         submitForm.querySelector("[data-cutting-fabric-lines]").innerHTML =
           '<p class="muted">اختر مصدر القماش لإضافة الألوان والكميات.</p>';
+        submitForm.elements.cuttingChoice.value = "whole_shared";
+        submitForm.elements.continuationTarget.value = "";
         codePreview.hidden = true;
         codePreview.textContent = "";
         codeLabel.textContent = "كود الموديل بالنظام: يُنشأ عند اعتماد الموديل.";
         imagePreview.replaceChildren();
+        if (typeof updateCuttingChoice === "function") updateCuttingChoice();
         return;
       }
       submitForm.elements.sourceOrderId.value = sourceOrder?.id || "";
@@ -10393,7 +10433,13 @@ function bindCuttingActions(session) {
       submitForm.elements.setComponent.value = separateSet
         ? Number(componentQuantities.tshirt || 0) > 0 ? "pants" : "tshirt"
         : "whole";
-      submitForm.elements.separateSetGroup.checked = separateSet;
+      submitForm.elements.separateSetGroup.value = separateSet ? "true" : "";
+      if (separateSet) {
+        submitForm.elements.cuttingChoice.value = "separate_continue";
+      } else {
+        submitForm.elements.cuttingChoice.value = "whole_shared";
+      }
+      if (typeof updateCuttingChoice === "function") updateCuttingChoice();
       const client = dashboardData.clients.find((entry) => entry.id === model.customerId);
       if (client?.brand_name) {
         submitForm.elements.brandSelection.value = client.id;
@@ -10408,8 +10454,42 @@ function bindCuttingActions(session) {
       codeLabel.textContent = `كود الموديل بالنظام: ${code || "—"} (ثابت عند تكرار القص)`;
       imagePreview.innerHTML = modelImageMarkup(model.modelImageUrls || model.modelImageUrl, `صورة الموديل ${model.name || ""}`);
     });
+    const cuttingChoiceSelect = submitForm.elements.cuttingChoice;
+    const choice4Field = submitForm.querySelector("[data-cutting-choice4]");
+    const updateCuttingChoice = () => {
+      const choice = cuttingChoiceSelect.value;
+      choice4Field.hidden = choice !== "separate_continue";
+      submitForm.querySelector('[type="submit"]').hidden = choice === "separate_continue";
+      if (choice === "tshirt" || choice === "pants") {
+        submitForm.elements.setComponent.value = choice;
+      } else if (choice !== "separate_continue") {
+        submitForm.elements.setComponent.value = "whole";
+      }
+      submitForm.elements.separateSetGroup.value =
+        choice === "separate_continue" ? "true" : "";
+    };
+    cuttingChoiceSelect.addEventListener("change", updateCuttingChoice);
+    submitForm.elements.continuationTarget.addEventListener("change", () => {
+      const target = submitForm.elements.continuationTarget.value;
+      if (!target) return;
+      const [targetType, targetId] = target.split(":", 2);
+      if (targetType === "order") {
+        const button = document.querySelector(`[data-open-set-cutting="${CSS.escape(targetId)}"]`);
+        if (button) button.click();
+        else window.factoryUI.toast("تم اختيار الموديل؛ أضف الجزء المكمل من بطاقة استكمال قص الترنج.", "error");
+      } else if (targetType === "story") {
+        const button = document.querySelector(`[data-open-pending-set-cutting="${CSS.escape(targetId)}"]`);
+        if (button) button.click();
+        else window.factoryUI.toast("تم اختيار القصة المعلقة؛ أضف الجزء المكمل من بطاقة استكمال القصة المعلقة.", "error");
+      }
+    });
+    updateCuttingChoice();
     submitForm.addEventListener("submit", async (event) => {
       event.preventDefault();
+      if (submitForm.elements.cuttingChoice.value === "separate_continue") {
+        window.factoryUI.toast("اختر الموديل الموجود والجزء الناقص لبدء استكمال القصة من القائمة المخصصة.", "error");
+        return;
+      }
       if (submitForm.dataset.saving === "true") return;
       const submitButtons = [...submitForm.querySelectorAll('[type="submit"]')];
       const modelName = String(submitForm.elements.modelName.value).trim();
@@ -10455,7 +10535,7 @@ function bindCuttingActions(session) {
           requested_cutting_request_id: submitForm.elements.cuttingRequestId.value || null,
           requested_catalog_model_id: catalogModel?.id || null,
           requested_set_component: submitForm.elements.setComponent?.value || "whole",
-          requested_separate_set_group: submitForm.elements.separateSetGroup?.checked === true,
+          requested_separate_set_group: submitForm.elements.separateSetGroup?.value === "true",
           requested_fabric_lines: completeCuttingData.fabricLines.map((line) => ({
             fabric_id: line.fabricId,
             name: line.name,
